@@ -679,6 +679,221 @@ def create_schema(conn: sqlite3.Connection) -> None:
         );
         CREATE INDEX bp_widget_anim_bindings_blueprint_idx ON blueprint_widget_animation_bindings(blueprint_path, widget_name);
 
+        CREATE TABLE behavior_trees (
+            behavior_tree_path TEXT PRIMARY KEY,
+            class_path TEXT NOT NULL,
+            root_node_id TEXT NOT NULL,
+            blackboard_path TEXT NOT NULL,
+            root_decorator_count INTEGER NOT NULL,
+            root_decorator_logic TEXT NOT NULL,
+            json TEXT NOT NULL
+        );
+        CREATE INDEX behavior_trees_blackboard_idx ON behavior_trees(blackboard_path);
+
+        CREATE TABLE behavior_tree_nodes (
+            node_id TEXT PRIMARY KEY,
+            behavior_tree_path TEXT NOT NULL,
+            node_kind TEXT NOT NULL,
+            class_path TEXT NOT NULL,
+            class_name TEXT NOT NULL,
+            name TEXT NOT NULL,
+            display_name TEXT NOT NULL,
+            parent_node_id TEXT NOT NULL,
+            child_index INTEGER NOT NULL,
+            attached_to TEXT NOT NULL,
+            attachment_kind TEXT NOT NULL,
+            attachment_index INTEGER NOT NULL,
+            json TEXT NOT NULL
+        );
+        CREATE INDEX behavior_tree_nodes_tree_idx ON behavior_tree_nodes(behavior_tree_path, node_kind);
+        CREATE INDEX behavior_tree_nodes_class_idx ON behavior_tree_nodes(class_path);
+
+        CREATE TABLE behavior_tree_edges (
+            behavior_tree_path TEXT NOT NULL,
+            source_node_id TEXT NOT NULL,
+            target_node_id TEXT NOT NULL,
+            edge_kind TEXT NOT NULL,
+            child_index INTEGER NOT NULL,
+            decorator_logic TEXT NOT NULL,
+            decorator_ids_json TEXT NOT NULL,
+            PRIMARY KEY(behavior_tree_path, source_node_id, target_node_id, edge_kind, child_index)
+        );
+        CREATE INDEX behavior_tree_edges_source_idx ON behavior_tree_edges(source_node_id);
+
+        CREATE TABLE blackboards (
+            blackboard_path TEXT PRIMARY KEY,
+            class_path TEXT NOT NULL,
+            parent_blackboard_path TEXT NOT NULL,
+            json TEXT NOT NULL
+        );
+        CREATE TABLE blackboard_keys (
+            key_id TEXT PRIMARY KEY,
+            blackboard_path TEXT NOT NULL,
+            key_index INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            key_type_path TEXT NOT NULL,
+            key_type_class TEXT NOT NULL,
+            instance_synced TEXT NOT NULL,
+            raw_value TEXT NOT NULL,
+            json TEXT NOT NULL
+        );
+        CREATE INDEX blackboard_keys_bb_idx ON blackboard_keys(blackboard_path, name);
+
+        CREATE TABLE eqs_queries (
+            eqs_path TEXT PRIMARY KEY,
+            class_path TEXT NOT NULL,
+            option_count INTEGER NOT NULL,
+            json TEXT NOT NULL
+        );
+        CREATE TABLE eqs_options (
+            option_id TEXT PRIMARY KEY,
+            eqs_path TEXT NOT NULL,
+            option_index INTEGER NOT NULL,
+            class_path TEXT NOT NULL,
+            generator_id TEXT NOT NULL,
+            test_count INTEGER NOT NULL,
+            json TEXT NOT NULL
+        );
+        CREATE TABLE eqs_generators (
+            generator_id TEXT PRIMARY KEY,
+            eqs_path TEXT NOT NULL,
+            option_id TEXT NOT NULL,
+            option_index INTEGER NOT NULL,
+            class_path TEXT NOT NULL,
+            class_name TEXT NOT NULL,
+            item_type TEXT NOT NULL,
+            json TEXT NOT NULL
+        );
+        CREATE TABLE eqs_tests (
+            test_id TEXT PRIMARY KEY,
+            eqs_path TEXT NOT NULL,
+            option_id TEXT NOT NULL,
+            option_index INTEGER NOT NULL,
+            test_index INTEGER NOT NULL,
+            class_path TEXT NOT NULL,
+            class_name TEXT NOT NULL,
+            test_purpose TEXT NOT NULL,
+            filter_type TEXT NOT NULL,
+            scoring_equation TEXT NOT NULL,
+            weight_modifier TEXT NOT NULL,
+            json TEXT NOT NULL
+        );
+        CREATE INDEX eqs_tests_query_idx ON eqs_tests(eqs_path, option_index, test_index);
+
+        CREATE TABLE statetrees (
+            statetree_path TEXT PRIMARY KEY,
+            class_path TEXT NOT NULL,
+            editor_data_path TEXT NOT NULL,
+            editor_data_class TEXT NOT NULL,
+            last_compiled_editor_data_hash TEXT NOT NULL,
+            json TEXT NOT NULL
+        );
+        CREATE TABLE statetree_states (
+            state_id TEXT PRIMARY KEY,
+            statetree_path TEXT NOT NULL,
+            state_object_path TEXT NOT NULL,
+            parent_state_id TEXT NOT NULL,
+            child_index INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            description TEXT NOT NULL,
+            state_type TEXT NOT NULL,
+            selection_behavior TEXT NOT NULL,
+            enabled TEXT NOT NULL,
+            tag TEXT NOT NULL,
+            tasks_completion TEXT NOT NULL,
+            required_event TEXT NOT NULL,
+            linked_asset TEXT NOT NULL,
+            linked_subtree TEXT NOT NULL,
+            json TEXT NOT NULL
+        );
+        CREATE INDEX statetree_states_tree_idx ON statetree_states(statetree_path, parent_state_id, child_index);
+        CREATE TABLE statetree_nodes (
+            node_id TEXT PRIMARY KEY,
+            statetree_path TEXT NOT NULL,
+            state_id TEXT NOT NULL,
+            role TEXT NOT NULL,
+            node_index INTEGER NOT NULL,
+            guid TEXT NOT NULL,
+            expression_indent TEXT NOT NULL,
+            expression_operand TEXT NOT NULL,
+            instance_object_path TEXT NOT NULL,
+            instance_object_class TEXT NOT NULL,
+            raw_node TEXT NOT NULL,
+            raw_instance TEXT NOT NULL,
+            json TEXT NOT NULL
+        );
+        CREATE INDEX statetree_nodes_tree_idx ON statetree_nodes(statetree_path, state_id, role);
+        CREATE TABLE statetree_transitions (
+            transition_id TEXT PRIMARY KEY,
+            statetree_path TEXT NOT NULL,
+            source_state_id TEXT NOT NULL,
+            transition_index INTEGER NOT NULL,
+            trigger TEXT NOT NULL,
+            event_tag TEXT NOT NULL,
+            state TEXT NOT NULL,
+            priority TEXT NOT NULL,
+            fallback TEXT NOT NULL,
+            enabled TEXT NOT NULL,
+            delay_enabled TEXT NOT NULL,
+            delay TEXT NOT NULL,
+            raw_value TEXT NOT NULL,
+            json TEXT NOT NULL
+        );
+        CREATE INDEX statetree_transitions_tree_idx ON statetree_transitions(statetree_path, source_state_id);
+        CREATE TABLE statetree_bindings (
+            statetree_path TEXT NOT NULL,
+            binding_index INTEGER NOT NULL,
+            binding_struct TEXT NOT NULL,
+            source_path TEXT NOT NULL,
+            target_path TEXT NOT NULL,
+            output_binding TEXT NOT NULL,
+            raw_value TEXT NOT NULL,
+            PRIMARY KEY(statetree_path, binding_index)
+        );
+
+        CREATE TABLE ai_properties (
+            asset_path TEXT NOT NULL,
+            system TEXT NOT NULL,
+            owner_kind TEXT NOT NULL,
+            owner_id TEXT NOT NULL,
+            owner_class TEXT NOT NULL,
+            declaring_type TEXT NOT NULL,
+            property_name TEXT NOT NULL,
+            property_type TEXT NOT NULL,
+            cpp_type TEXT NOT NULL,
+            value TEXT NOT NULL,
+            object_path TEXT NOT NULL,
+            object_class TEXT NOT NULL,
+            property_flags INTEGER NOT NULL,
+            truncated INTEGER NOT NULL,
+            PRIMARY KEY(asset_path, owner_id, declaring_type, property_name)
+        );
+        CREATE INDEX ai_properties_asset_idx ON ai_properties(asset_path, owner_kind);
+        CREATE INDEX ai_properties_object_idx ON ai_properties(object_path);
+
+        CREATE TABLE ai_relations (
+            relation_id TEXT PRIMARY KEY,
+            asset_path TEXT NOT NULL,
+            system TEXT NOT NULL,
+            source_kind TEXT NOT NULL,
+            source_id TEXT NOT NULL,
+            relation TEXT NOT NULL,
+            target_kind TEXT NOT NULL,
+            target TEXT NOT NULL,
+            detail_json TEXT NOT NULL
+        );
+        CREATE INDEX ai_relations_source_idx ON ai_relations(source_id, relation);
+        CREATE INDEX ai_relations_target_idx ON ai_relations(target, relation);
+        CREATE TABLE ai_summaries (
+            asset_path TEXT PRIMARY KEY,
+            system TEXT NOT NULL,
+            asset_class TEXT NOT NULL,
+            node_count INTEGER NOT NULL,
+            relation_count INTEGER NOT NULL,
+            text TEXT NOT NULL,
+            json TEXT NOT NULL
+        );
+
         CREATE TABLE blueprint_functions (
             function_id TEXT PRIMARY KEY,
             blueprint_path TEXT NOT NULL,
@@ -1006,7 +1221,7 @@ def iter_blueprint_pin_rows(output: Path) -> Iterator[dict]:
 
 
 
-DERIVED_SCHEMA_VERSION = 2
+DERIVED_SCHEMA_VERSION = 3
 
 
 def _write_jsonl(path: Path, rows: Iterable[dict]) -> int:
@@ -1927,6 +2142,176 @@ def derive_blueprint_summaries(
     return out
 
 
+
+def _ai_relation(asset_path: str, system: str, source_kind: str, source_id: str, relation: str,
+                 target_kind: str, target: str, detail: dict | None = None) -> dict:
+    basis = "|".join((asset_path, system, source_kind, source_id, relation, target_kind, target, json.dumps(detail or {}, sort_keys=True)))
+    return {
+        "relation_id": hashlib.sha1(basis.encode("utf-8")).hexdigest(),
+        "asset_path": asset_path,
+        "system": system,
+        "source_kind": source_kind,
+        "source_id": source_id,
+        "relation": relation,
+        "target_kind": target_kind,
+        "target": target,
+        "detail": detail or {},
+    }
+
+
+def derive_ai_relations(output: Path) -> list[dict]:
+    relations: list[dict] = []
+    generated_to_bp: dict[str, str] = {}
+    asset_classes: dict[str, str] = {}
+    for bp in iter_jsonl(output / "blueprints.jsonl"):
+        gc = bp.get("generated_class", "")
+        if gc:
+            generated_to_bp[gc] = bp.get("object_path", bp.get("blueprint_path", ""))
+    for asset in iter_jsonl(output / "assets.jsonl"):
+        asset_classes[asset.get("object_path", "")] = asset.get("class_path", "")
+
+    for tree in iter_jsonl(output / "behavior_trees.jsonl"):
+        asset = tree.get("behavior_tree_path", "")
+        bb = tree.get("blackboard_path", "")
+        if bb:
+            relations.append(_ai_relation(asset, "behavior_tree", "behavior_tree", asset, "uses_blackboard", "blackboard", bb))
+        root = tree.get("root_node_id", "")
+        if root:
+            relations.append(_ai_relation(asset, "behavior_tree", "behavior_tree", asset, "has_root", "behavior_tree_node", root))
+    for edge in iter_jsonl(output / "behavior_tree_edges.jsonl"):
+        asset = edge.get("behavior_tree_path", "")
+        relations.append(_ai_relation(asset, "behavior_tree", "behavior_tree_node", edge.get("source_node_id", ""),
+                                      edge.get("edge_kind", "child"), "behavior_tree_node", edge.get("target_node_id", ""),
+                                      {"child_index": edge.get("child_index", -1), "decorator_ids": edge.get("decorator_ids", []),
+                                       "decorator_logic": edge.get("decorator_logic", "")}))
+    for node in iter_jsonl(output / "behavior_tree_nodes.jsonl"):
+        cls = node.get("class_path", "")
+        bp = generated_to_bp.get(cls)
+        if bp:
+            relations.append(_ai_relation(node.get("behavior_tree_path", ""), "behavior_tree", "behavior_tree_node", node.get("node_id", ""),
+                                          "implemented_by_blueprint", "blueprint", bp, {"class": cls}))
+    for bb in iter_jsonl(output / "blackboards.jsonl"):
+        parent = bb.get("parent_blackboard_path", "")
+        if parent:
+            relations.append(_ai_relation(bb.get("blackboard_path", ""), "blackboard", "blackboard", bb.get("blackboard_path", ""),
+                                          "inherits_blackboard", "blackboard", parent))
+    for key in iter_jsonl(output / "blackboard_keys.jsonl"):
+        relations.append(_ai_relation(key.get("blackboard_path", ""), "blackboard", "blackboard", key.get("blackboard_path", ""),
+                                      "declares_key", "blackboard_key", key.get("key_id", ""), {"name": key.get("name", ""), "type": key.get("key_type_class", "")}))
+    for opt in iter_jsonl(output / "eqs_options.jsonl"):
+        asset = opt.get("eqs_path", "")
+        relations.append(_ai_relation(asset, "eqs", "eqs_query", asset, "has_option", "eqs_option", opt.get("option_id", ""),
+                                      {"option_index": opt.get("option_index", 0)}))
+        if opt.get("generator_id"):
+            relations.append(_ai_relation(asset, "eqs", "eqs_option", opt.get("option_id", ""), "uses_generator", "eqs_generator", opt.get("generator_id", "")))
+    for test in iter_jsonl(output / "eqs_tests.jsonl"):
+        relations.append(_ai_relation(test.get("eqs_path", ""), "eqs", "eqs_option", test.get("option_id", ""), "uses_test", "eqs_test", test.get("test_id", ""),
+                                      {"test_index": test.get("test_index", 0)}))
+    for state in iter_jsonl(output / "statetree_states.jsonl"):
+        asset = state.get("statetree_path", "")
+        sid = state.get("state_id", "")
+        parent = state.get("parent_state_id", "")
+        if parent:
+            relations.append(_ai_relation(asset, "statetree", "statetree_state", parent, "has_child_state", "statetree_state", sid,
+                                          {"child_index": state.get("child_index", 0)}))
+        else:
+            relations.append(_ai_relation(asset, "statetree", "statetree", asset, "has_root_state", "statetree_state", sid,
+                                          {"child_index": state.get("child_index", 0)}))
+        if state.get("linked_asset"):
+            relations.append(_ai_relation(asset, "statetree", "statetree_state", sid, "links_statetree", "statetree", state.get("linked_asset", "")))
+    for node in iter_jsonl(output / "statetree_nodes.jsonl"):
+        asset = node.get("statetree_path", "")
+        sid = node.get("state_id", "")
+        relations.append(_ai_relation(asset, "statetree", "statetree_state" if sid else "statetree", sid or asset,
+                                      "has_" + node.get("role", "node"), "statetree_node", node.get("node_id", "")))
+        cls = node.get("instance_object_class", "")
+        bp = generated_to_bp.get(cls)
+        if bp:
+            relations.append(_ai_relation(asset, "statetree", "statetree_node", node.get("node_id", ""),
+                                          "implemented_by_blueprint", "blueprint", bp, {"class": cls}))
+    for tr in iter_jsonl(output / "statetree_transitions.jsonl"):
+        relations.append(_ai_relation(tr.get("statetree_path", ""), "statetree", "statetree_state", tr.get("source_state_id", ""),
+                                      "has_transition", "statetree_transition", tr.get("transition_id", ""),
+                                      {"trigger": tr.get("trigger", ""), "target": tr.get("state", ""), "event_tag": tr.get("event_tag", "")}))
+    for binding in iter_jsonl(output / "statetree_bindings.jsonl"):
+        relations.append(_ai_relation(binding.get("statetree_path", ""), "statetree", "statetree", binding.get("statetree_path", ""),
+                                      "property_binding", "property_path", binding.get("target_path", ""),
+                                      {"source_path": binding.get("source_path", ""), "output_binding": binding.get("output_binding", "")}))
+    # Blackboard key selectors are structs rather than direct UObject refs; normalize the selected key name when exported.
+    tree_blackboard = {row.get("behavior_tree_path", ""): row.get("blackboard_path", "") for row in iter_jsonl(output / "behavior_trees.jsonl")}
+    bb_key_lookup: dict[tuple[str, str], str] = {}
+    for key in iter_jsonl(output / "blackboard_keys.jsonl"):
+        bb_key_lookup[(key.get("blackboard_path", ""), key.get("name", ""))] = key.get("key_id", "")
+
+    for prop in iter_jsonl(output / "ai_properties.jsonl"):
+        target = prop.get("object_path", "")
+        if target:
+            cls = asset_classes.get(target, prop.get("object_class", ""))
+            if any(token in cls for token in ("BehaviorTree", "BlackboardData", "EnvQuery", "StateTree")):
+                relations.append(_ai_relation(prop.get("asset_path", ""), prop.get("system", ""), prop.get("owner_kind", "ai_object"),
+                                              prop.get("owner_id", ""), "references_ai_asset", "ai_asset", target,
+                                              {"property": prop.get("property_name", ""), "class": cls}))
+
+        if prop.get("system") == "behavior_tree":
+            value = prop.get("value", "")
+            match = re.search(r'SelectedKeyName=(?:\"([^\"]+)\"|([^,\)]+))', value)
+            if match:
+                key_name = (match.group(1) or match.group(2) or "").strip()
+                bb = tree_blackboard.get(prop.get("asset_path", ""), "")
+                key_id = bb_key_lookup.get((bb, key_name), "")
+                if key_id:
+                    relations.append(_ai_relation(prop.get("asset_path", ""), "behavior_tree", prop.get("owner_kind", "behavior_tree_node"),
+                                                  prop.get("owner_id", ""), "references_blackboard_key", "blackboard_key", key_id,
+                                                  {"key_name": key_name, "property": prop.get("property_name", "")}))
+
+    # Join Blueprint graph references/calls to AI assets so controllers/tasks can be expanded into the authored AI graph.
+    ai_asset_paths = {path for path, cls in asset_classes.items() if any(token in cls for token in ("BehaviorTree", "BlackboardData", "EnvQuery", "StateTree"))}
+    for bp_rel in iter_jsonl(output / "blueprint_relations.jsonl"):
+        target = bp_rel.get("target", "")
+        if target in ai_asset_paths:
+            bp = bp_rel.get("blueprint_path", "")
+            relations.append(_ai_relation(target, "cross_system", "blueprint", bp, "references_ai_asset", "ai_asset", target,
+                                          {"blueprint_relation": bp_rel.get("relation", ""), "source_id": bp_rel.get("source_id", "")}))
+    # stable de-dupe
+    return list({r["relation_id"]: r for r in relations}.values())
+
+
+def derive_ai_summaries(output: Path, relations: list[dict]) -> list[dict]:
+    by_asset_rel: dict[str, list[dict]] = collections.defaultdict(list)
+    for rel in relations:
+        by_asset_rel[rel.get("asset_path", "")].append(rel)
+    assets: dict[str, tuple[str, str]] = {}
+    for row in iter_jsonl(output / "behavior_trees.jsonl"):
+        assets[row.get("behavior_tree_path", "")] = ("behavior_tree", row.get("class_path", ""))
+    for row in iter_jsonl(output / "blackboards.jsonl"):
+        assets[row.get("blackboard_path", "")] = ("blackboard", row.get("class_path", ""))
+    for row in iter_jsonl(output / "eqs_queries.jsonl"):
+        assets[row.get("eqs_path", "")] = ("eqs", row.get("class_path", ""))
+    for row in iter_jsonl(output / "statetrees.jsonl"):
+        assets[row.get("statetree_path", "")] = ("statetree", row.get("class_path", ""))
+
+    node_counts = collections.Counter()
+    for row in iter_jsonl(output / "behavior_tree_nodes.jsonl"):
+        node_counts[row.get("behavior_tree_path", "")] += 1
+    for row in iter_jsonl(output / "eqs_generators.jsonl"):
+        node_counts[row.get("eqs_path", "")] += 1
+    for row in iter_jsonl(output / "eqs_tests.jsonl"):
+        node_counts[row.get("eqs_path", "")] += 1
+    for row in iter_jsonl(output / "statetree_states.jsonl"):
+        node_counts[row.get("statetree_path", "")] += 1
+    for row in iter_jsonl(output / "statetree_nodes.jsonl"):
+        node_counts[row.get("statetree_path", "")] += 1
+
+    summaries=[]
+    for asset,(system,cls) in sorted(assets.items()):
+        rels=by_asset_rel.get(asset,[])
+        lines=[f"{system}: {asset}", f"class: {cls}", f"nodes: {node_counts[asset]}", f"relations: {len(rels)}"]
+        for rel in rels[:120]:
+            lines.append(f"{rel['source_kind']} {rel['source_id']} --{rel['relation']}--> {rel['target_kind']} {rel['target']}")
+        summaries.append({"asset_path":asset,"system":system,"asset_class":cls,"node_count":node_counts[asset],
+                          "relation_count":len(rels),"text":"\n".join(lines)})
+    return summaries
+
 def derive_output(output: Path) -> dict[str, int]:
     output = output.resolve()
     rigvm_links = derive_rigvm_editor_links(output)
@@ -1935,6 +2320,8 @@ def derive_output(output: Path) -> dict[str, int]:
     relations = derive_blueprint_relations(output, rigvm_links, functions, events)
     graph_context = derive_graph_context(output, rigvm_links, functions, events)
     summaries = derive_blueprint_summaries(output, relations, functions, events)
+    ai_relations = derive_ai_relations(output)
+    ai_summaries = derive_ai_summaries(output, ai_relations)
     counts = {
         "rigvm_editor_links": _write_jsonl(output / "rigvm_editor_links.jsonl", rigvm_links),
         "blueprint_functions": _write_jsonl(output / "blueprint_functions.jsonl", functions),
@@ -1942,6 +2329,8 @@ def derive_output(output: Path) -> dict[str, int]:
         "blueprint_relations": _write_jsonl(output / "blueprint_relations.jsonl", relations),
         "blueprint_graph_context": _write_jsonl(output / "blueprint_graph_context.jsonl", graph_context),
         "blueprint_summaries": _write_jsonl(output / "blueprint_summaries.jsonl", summaries),
+        "ai_relations": _write_jsonl(output / "ai_relations.jsonl", ai_relations),
+        "ai_summaries": _write_jsonl(output / "ai_summaries.jsonl", ai_summaries),
     }
     manifest_path = output / "manifest.json"
     if manifest_path.is_file():
@@ -2348,6 +2737,98 @@ def build_database(output: Path) -> Path:
                 ),
             )
 
+        for row in iter_jsonl(output / "behavior_trees.jsonl"):
+            conn.execute(
+                "INSERT OR REPLACE INTO behavior_trees VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (row.get("behavior_tree_path", ""), row.get("class_path", ""), row.get("root_node_id", ""),
+                 row.get("blackboard_path", ""), int(row.get("root_decorator_count", 0)), row.get("root_decorator_logic", ""),
+                 json.dumps(row, ensure_ascii=False, separators=(",", ":"))),
+            )
+        for row in iter_jsonl(output / "behavior_tree_nodes.jsonl"):
+            conn.execute(
+                "INSERT OR REPLACE INTO behavior_tree_nodes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (row.get("node_id", ""), row.get("behavior_tree_path", ""), row.get("node_kind", ""), row.get("class_path", ""),
+                 row.get("class_name", ""), row.get("name", ""), row.get("display_name", ""), row.get("parent_node_id", ""),
+                 int(row.get("child_index", -1)), row.get("attached_to", ""), row.get("attachment_kind", ""),
+                 int(row.get("attachment_index", -1)), json.dumps(row, ensure_ascii=False, separators=(",", ":"))),
+            )
+        for row in iter_jsonl(output / "behavior_tree_edges.jsonl"):
+            conn.execute(
+                "INSERT OR REPLACE INTO behavior_tree_edges VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (row.get("behavior_tree_path", ""), row.get("source_node_id", ""), row.get("target_node_id", ""),
+                 row.get("edge_kind", ""), int(row.get("child_index", -1)), row.get("decorator_logic", ""),
+                 json.dumps(row.get("decorator_ids", []), ensure_ascii=False, separators=(",", ":"))),
+            )
+        for row in iter_jsonl(output / "blackboards.jsonl"):
+            conn.execute("INSERT OR REPLACE INTO blackboards VALUES (?, ?, ?, ?)",
+                         (row.get("blackboard_path", ""), row.get("class_path", ""), row.get("parent_blackboard_path", ""),
+                          json.dumps(row, ensure_ascii=False, separators=(",", ":"))))
+        for row in iter_jsonl(output / "blackboard_keys.jsonl"):
+            conn.execute("INSERT OR REPLACE INTO blackboard_keys VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                         (row.get("key_id", ""), row.get("blackboard_path", ""), int(row.get("key_index", 0)), row.get("name", ""),
+                          row.get("key_type_path", ""), row.get("key_type_class", ""), row.get("instance_synced", ""), row.get("raw_value", ""),
+                          json.dumps(row, ensure_ascii=False, separators=(",", ":"))))
+        for row in iter_jsonl(output / "eqs_queries.jsonl"):
+            conn.execute("INSERT OR REPLACE INTO eqs_queries VALUES (?, ?, ?, ?)",
+                         (row.get("eqs_path", ""), row.get("class_path", ""), int(row.get("option_count", 0)),
+                          json.dumps(row, ensure_ascii=False, separators=(",", ":"))))
+        for row in iter_jsonl(output / "eqs_options.jsonl"):
+            conn.execute("INSERT OR REPLACE INTO eqs_options VALUES (?, ?, ?, ?, ?, ?, ?)",
+                         (row.get("option_id", ""), row.get("eqs_path", ""), int(row.get("option_index", 0)), row.get("class_path", ""),
+                          row.get("generator_id", ""), int(row.get("test_count", 0)), json.dumps(row, ensure_ascii=False, separators=(",", ":"))))
+        for row in iter_jsonl(output / "eqs_generators.jsonl"):
+            conn.execute("INSERT OR REPLACE INTO eqs_generators VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                         (row.get("generator_id", ""), row.get("eqs_path", ""), row.get("option_id", ""), int(row.get("option_index", 0)),
+                          row.get("class_path", ""), row.get("class_name", ""), row.get("item_type", ""),
+                          json.dumps(row, ensure_ascii=False, separators=(",", ":"))))
+        for row in iter_jsonl(output / "eqs_tests.jsonl"):
+            conn.execute("INSERT OR REPLACE INTO eqs_tests VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                         (row.get("test_id", ""), row.get("eqs_path", ""), row.get("option_id", ""), int(row.get("option_index", 0)),
+                          int(row.get("test_index", 0)), row.get("class_path", ""), row.get("class_name", ""), row.get("test_purpose", ""),
+                          row.get("filter_type", ""), row.get("scoring_equation", ""), row.get("weight_modifier", ""),
+                          json.dumps(row, ensure_ascii=False, separators=(",", ":"))))
+        for row in iter_jsonl(output / "statetrees.jsonl"):
+            conn.execute("INSERT OR REPLACE INTO statetrees VALUES (?, ?, ?, ?, ?, ?)",
+                         (row.get("statetree_path", ""), row.get("class_path", ""), row.get("editor_data_path", ""), row.get("editor_data_class", ""),
+                          row.get("last_compiled_editor_data_hash", ""), json.dumps(row, ensure_ascii=False, separators=(",", ":"))))
+        for row in iter_jsonl(output / "statetree_states.jsonl"):
+            conn.execute("INSERT OR REPLACE INTO statetree_states VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                         (row.get("state_id", ""), row.get("statetree_path", ""), row.get("state_object_path", ""), row.get("parent_state_id", ""),
+                          int(row.get("child_index", 0)), row.get("name", ""), row.get("description", ""), row.get("state_type", ""),
+                          row.get("selection_behavior", ""), row.get("enabled", ""), row.get("tag", ""), row.get("tasks_completion", ""),
+                          row.get("required_event", ""), row.get("linked_asset", ""), row.get("linked_subtree", ""),
+                          json.dumps(row, ensure_ascii=False, separators=(",", ":"))))
+        for row in iter_jsonl(output / "statetree_nodes.jsonl"):
+            conn.execute("INSERT OR REPLACE INTO statetree_nodes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                         (row.get("node_id", ""), row.get("statetree_path", ""), row.get("state_id", ""), row.get("role", ""), int(row.get("node_index", 0)),
+                          row.get("guid", ""), row.get("expression_indent", ""), row.get("expression_operand", ""), row.get("instance_object_path", ""),
+                          row.get("instance_object_class", ""), row.get("raw_node", ""), row.get("raw_instance", ""),
+                          json.dumps(row, ensure_ascii=False, separators=(",", ":"))))
+        for row in iter_jsonl(output / "statetree_transitions.jsonl"):
+            conn.execute("INSERT OR REPLACE INTO statetree_transitions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                         (row.get("transition_id", ""), row.get("statetree_path", ""), row.get("source_state_id", ""), int(row.get("transition_index", 0)),
+                          row.get("trigger", ""), row.get("event_tag", ""), row.get("state", ""), row.get("priority", ""), row.get("fallback", ""),
+                          row.get("enabled", ""), row.get("delay_enabled", ""), row.get("delay", ""), row.get("raw_value", ""),
+                          json.dumps(row, ensure_ascii=False, separators=(",", ":"))))
+        for row in iter_jsonl(output / "statetree_bindings.jsonl"):
+            conn.execute("INSERT OR REPLACE INTO statetree_bindings VALUES (?, ?, ?, ?, ?, ?, ?)",
+                         (row.get("statetree_path", ""), int(row.get("binding_index", 0)), row.get("binding_struct", ""), row.get("source_path", ""),
+                          row.get("target_path", ""), row.get("output_binding", ""), row.get("raw_value", "")))
+        for row in iter_jsonl(output / "ai_properties.jsonl"):
+            conn.execute("INSERT OR REPLACE INTO ai_properties VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                         (row.get("asset_path", ""), row.get("system", ""), row.get("owner_kind", ""), row.get("owner_id", ""), row.get("owner_class", ""),
+                          row.get("declaring_type", ""), row.get("property_name", ""), row.get("property_type", ""), row.get("cpp_type", ""), row.get("value", ""),
+                          row.get("object_path", ""), row.get("object_class", ""), int(row.get("property_flags", 0)), 1 if row.get("truncated", False) else 0))
+        for row in iter_jsonl(output / "ai_relations.jsonl"):
+            conn.execute("INSERT OR REPLACE INTO ai_relations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                         (row.get("relation_id", ""), row.get("asset_path", ""), row.get("system", ""), row.get("source_kind", ""), row.get("source_id", ""),
+                          row.get("relation", ""), row.get("target_kind", ""), row.get("target", ""),
+                          json.dumps(row.get("detail", {}), ensure_ascii=False, separators=(",", ":"))))
+        for row in iter_jsonl(output / "ai_summaries.jsonl"):
+            conn.execute("INSERT OR REPLACE INTO ai_summaries VALUES (?, ?, ?, ?, ?, ?, ?)",
+                         (row.get("asset_path", ""), row.get("system", ""), row.get("asset_class", ""), int(row.get("node_count", 0)),
+                          int(row.get("relation_count", 0)), row.get("text", ""), json.dumps(row, ensure_ascii=False, separators=(",", ":"))))
+
         for row in iter_jsonl(output / "blueprint_functions.jsonl"):
             conn.execute(
                 "INSERT OR REPLACE INTO blueprint_functions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -2572,6 +3053,23 @@ DEFAULT_BUNDLE_FILES = (
     "source_chunks.jsonl",
     "assets.jsonl",
     "asset_dependencies.jsonl",
+    "behavior_trees.jsonl",
+    "behavior_tree_nodes.jsonl",
+    "behavior_tree_edges.jsonl",
+    "blackboards.jsonl",
+    "blackboard_keys.jsonl",
+    "eqs_queries.jsonl",
+    "eqs_options.jsonl",
+    "eqs_generators.jsonl",
+    "eqs_tests.jsonl",
+    "statetrees.jsonl",
+    "statetree_states.jsonl",
+    "statetree_nodes.jsonl",
+    "statetree_transitions.jsonl",
+    "statetree_bindings.jsonl",
+    "ai_properties.jsonl",
+    "ai_relations.jsonl",
+    "ai_summaries.jsonl",
     "blueprints.jsonl",
     "blueprint_graphs.jsonl",
     "blueprint_nodes.jsonl",
@@ -2761,7 +3259,71 @@ def query(args: argparse.Namespace) -> int:
     limit = args.limit
 
     try:
-        print("[blueprint summaries]")
+        print("[AI summaries]")
+        rows = conn.execute(
+            """
+            SELECT asset_path, system, asset_class, substr(text,1,1200) AS text
+            FROM ai_summaries
+            WHERE asset_path LIKE ? OR system LIKE ? OR asset_class LIKE ? OR text LIKE ?
+            LIMIT ?
+            """, (f"%{term}%", f"%{term}%", f"%{term}%", f"%{term}%", limit))
+        _print_rows(rows, ("asset_path", "system", "asset_class", "text"))
+
+        print("\n[AI relations]")
+        rows = conn.execute(
+            """
+            SELECT asset_path, system, source_kind, relation, target_kind, target
+            FROM ai_relations
+            WHERE asset_path LIKE ? OR source_id LIKE ? OR relation LIKE ? OR target LIKE ? OR detail_json LIKE ?
+            LIMIT ?
+            """, (f"%{term}%", f"%{term}%", f"%{term}%", f"%{term}%", f"%{term}%", limit))
+        _print_rows(rows, ("asset_path", "system", "source_kind", "relation", "target_kind", "target"))
+
+        print("\n[Behavior Tree nodes]")
+        rows = conn.execute(
+            """SELECT behavior_tree_path, node_kind, class_name, display_name, attached_to
+               FROM behavior_tree_nodes
+               WHERE behavior_tree_path LIKE ? OR node_kind LIKE ? OR class_path LIKE ? OR display_name LIKE ? OR name LIKE ?
+               LIMIT ?""", (f"%{term}%",)*5 + (limit,))
+        _print_rows(rows, ("behavior_tree_path", "node_kind", "class_name", "display_name", "attached_to"))
+
+        print("\n[Blackboard keys]")
+        rows = conn.execute(
+            """SELECT blackboard_path, name, key_type_class, instance_synced
+               FROM blackboard_keys WHERE blackboard_path LIKE ? OR name LIKE ? OR key_type_class LIKE ? OR raw_value LIKE ? LIMIT ?""",
+            (f"%{term}%", f"%{term}%", f"%{term}%", f"%{term}%", limit))
+        _print_rows(rows, ("blackboard_path", "name", "key_type_class", "instance_synced"))
+
+        print("\n[EQS generators/tests]")
+        rows = conn.execute(
+            """SELECT eqs_path, 'generator' AS kind, class_name AS name, item_type AS detail FROM eqs_generators
+               WHERE eqs_path LIKE ? OR class_path LIKE ? OR class_name LIKE ? OR item_type LIKE ?
+               UNION ALL
+               SELECT eqs_path, 'test', class_name, test_purpose || ' ' || filter_type || ' ' || scoring_equation FROM eqs_tests
+               WHERE eqs_path LIKE ? OR class_path LIKE ? OR class_name LIKE ? OR test_purpose LIKE ?
+               LIMIT ?""",
+            (f"%{term}%", f"%{term}%", f"%{term}%", f"%{term}%", f"%{term}%", f"%{term}%", f"%{term}%", f"%{term}%", limit))
+        _print_rows(rows, ("eqs_path", "kind", "name", "detail"))
+
+        print("\n[StateTree states/nodes]")
+        rows = conn.execute(
+            """SELECT statetree_path, 'state' AS kind, name, state_type AS detail FROM statetree_states
+               WHERE statetree_path LIKE ? OR name LIKE ? OR description LIKE ? OR state_type LIKE ? OR tag LIKE ?
+               UNION ALL
+               SELECT statetree_path, role, instance_object_class, substr(raw_node,1,300) FROM statetree_nodes
+               WHERE statetree_path LIKE ? OR role LIKE ? OR instance_object_class LIKE ? OR raw_node LIKE ? OR raw_instance LIKE ?
+               LIMIT ?""",
+            (f"%{term}%",)*10 + (limit,))
+        _print_rows(rows, ("statetree_path", "kind", "name", "detail"))
+
+        print("\n[AI object properties]")
+        rows = conn.execute(
+            """SELECT asset_path, system, owner_kind, property_name, object_path, substr(value,1,300) AS value
+               FROM ai_properties WHERE asset_path LIKE ? OR owner_class LIKE ? OR property_name LIKE ? OR value LIKE ? OR object_path LIKE ? LIMIT ?""",
+            (f"%{term}%", f"%{term}%", f"%{term}%", f"%{term}%", f"%{term}%", limit))
+        _print_rows(rows, ("asset_path", "system", "owner_kind", "property_name", "object_path", "value"))
+
+        print("\n[blueprint summaries]")
         rows = conn.execute(
             """
             SELECT blueprint_path, parent_class, substr(text, 1, 800) AS text

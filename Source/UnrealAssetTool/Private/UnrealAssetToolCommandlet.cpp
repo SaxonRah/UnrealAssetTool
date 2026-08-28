@@ -67,7 +67,7 @@
 
 namespace UnrealAssetTool
 {
-    static constexpr int32 SchemaVersion = 8;
+    static constexpr int32 SchemaVersion = 9;
     static constexpr int32 SourceChunkLines = 200;
 
     class FJsonlWriter
@@ -143,6 +143,21 @@ namespace UnrealAssetTool
         int64 BlueprintWidgetBindings = 0;
         int64 BlueprintWidgetAnimations = 0;
         int64 BlueprintWidgetAnimationBindings = 0;
+        int64 BehaviorTrees = 0;
+        int64 BehaviorTreeNodes = 0;
+        int64 BehaviorTreeEdges = 0;
+        int64 Blackboards = 0;
+        int64 BlackboardKeys = 0;
+        int64 EQSQueries = 0;
+        int64 EQSOptions = 0;
+        int64 EQSGenerators = 0;
+        int64 EQSTests = 0;
+        int64 StateTrees = 0;
+        int64 StateTreeStates = 0;
+        int64 StateTreeNodes = 0;
+        int64 StateTreeTransitions = 0;
+        int64 StateTreeBindings = 0;
+        int64 AIProperties = 0;
     };
 
     static FString NormalizeAbsolutePath(const FString& InPath)
@@ -4447,6 +4462,759 @@ namespace UnrealAssetTool
         return true;
     }
 
+
+    static TArray<UObject*> GetReflectedObjectArray(UObject* Object, const FName PropertyName)
+    {
+        TArray<UObject*> Result;
+        if (!Object)
+        {
+            return Result;
+        }
+
+        FArrayProperty* ArrayProperty = CastField<FArrayProperty>(
+            Object->GetClass()->FindPropertyByName(PropertyName));
+        FObjectPropertyBase* InnerObject = ArrayProperty
+            ? CastField<FObjectPropertyBase>(ArrayProperty->Inner)
+            : nullptr;
+        if (!ArrayProperty || !InnerObject)
+        {
+            return Result;
+        }
+
+        const void* ArrayValue = ArrayProperty->ContainerPtrToValuePtr<void>(Object);
+        FScriptArrayHelper Helper(ArrayProperty, ArrayValue);
+        Result.Reserve(Helper.Num());
+        for (int32 Index = 0; Index < Helper.Num(); ++Index)
+        {
+            UObject* Value = InnerObject->GetObjectPropertyValue(Helper.GetRawPtr(Index));
+            if (Value)
+            {
+                Result.Add(Value);
+            }
+        }
+        return Result;
+    }
+
+    static TArray<UObject*> GetStructObjectArrayField(
+        UStruct* Struct,
+        const void* StructValue,
+        const FName ArrayFieldName)
+    {
+        TArray<UObject*> Result;
+        if (!Struct || !StructValue)
+        {
+            return Result;
+        }
+
+        FArrayProperty* ArrayProperty = CastField<FArrayProperty>(
+            Struct->FindPropertyByName(ArrayFieldName));
+        FObjectPropertyBase* InnerObject = ArrayProperty
+            ? CastField<FObjectPropertyBase>(ArrayProperty->Inner)
+            : nullptr;
+        if (!ArrayProperty || !InnerObject)
+        {
+            return Result;
+        }
+
+        const void* ArrayValue = ArrayProperty->ContainerPtrToValuePtr<void>(StructValue);
+        FScriptArrayHelper Helper(ArrayProperty, ArrayValue);
+        Result.Reserve(Helper.Num());
+        for (int32 Index = 0; Index < Helper.Num(); ++Index)
+        {
+            UObject* Value = InnerObject->GetObjectPropertyValue(Helper.GetRawPtr(Index));
+            if (Value)
+            {
+                Result.Add(Value);
+            }
+        }
+        return Result;
+    }
+
+    static FString ExportStructFieldTextByName(
+        UStruct* Struct,
+        const void* StructValue,
+        const FName FieldName,
+        UObject* Owner,
+        int32 MaxChars = 16384)
+    {
+        if (!Struct || !StructValue)
+        {
+            return TEXT("");
+        }
+        FProperty* Field = Struct->FindPropertyByName(FieldName);
+        if (!Field)
+        {
+            return TEXT("");
+        }
+        const void* FieldValue = Field->ContainerPtrToValuePtr<void>(StructValue);
+        FString Value;
+        Field->ExportTextItem_Direct(Value, FieldValue, nullptr, Owner, PPF_None, nullptr);
+        if (MaxChars > 0 && Value.Len() > MaxChars)
+        {
+            Value = Value.Left(MaxChars);
+        }
+        return Value;
+    }
+
+    static bool ScanAIObjectProperties(
+        UObject* Object,
+        const FString& AssetPath,
+        const FString& System,
+        const FString& OwnerKind,
+        const FString& OwnerId,
+        FJsonlWriter& Writer,
+        FScanCounts& Counts)
+    {
+        if (!Object)
+        {
+            return true;
+        }
+
+        static constexpr int32 MaxChars = 32768;
+        for (UClass* Class = Object->GetClass();
+             Class && Class != UObject::StaticClass();
+             Class = Class->GetSuperClass())
+        {
+            for (TFieldIterator<FProperty> It(Class, EFieldIterationFlags::None); It; ++It)
+            {
+                FProperty* Property = *It;
+                if (!IsCapturableProperty(Property))
+                {
+                    continue;
+                }
+                const void* ValuePtr = Property->ContainerPtrToValuePtr<void>(Object);
+                if (!ValuePtr)
+                {
+                    continue;
+                }
+
+                FString Value;
+                Property->ExportTextItem_Direct(Value, ValuePtr, nullptr, Object, PPF_None, nullptr);
+                bool bTruncated = false;
+                if (Value.Len() > MaxChars)
+                {
+                    Value = Value.Left(MaxChars);
+                    bTruncated = true;
+                }
+
+                UObject* ObjectValue = nullptr;
+                if (const FObjectPropertyBase* ObjectProperty = CastField<FObjectPropertyBase>(Property))
+                {
+                    ObjectValue = ObjectProperty->GetObjectPropertyValue(ValuePtr);
+                }
+
+                const TSharedRef<FJsonObject> Json = MakeShared<FJsonObject>();
+                Json->SetStringField(TEXT("asset_path"), AssetPath);
+                Json->SetStringField(TEXT("system"), System);
+                Json->SetStringField(TEXT("owner_kind"), OwnerKind);
+                Json->SetStringField(TEXT("owner_id"), OwnerId);
+                Json->SetStringField(TEXT("owner_class"), Object->GetClass()->GetPathName());
+                Json->SetStringField(TEXT("declaring_type"), Class->GetPathName());
+                Json->SetStringField(TEXT("property_name"), Property->GetName());
+                Json->SetStringField(TEXT("property_type"), Property->GetClass()->GetName());
+                Json->SetStringField(TEXT("cpp_type"), Property->GetCPPType());
+                Json->SetStringField(TEXT("value"), Value);
+                Json->SetStringField(TEXT("object_path"), ObjectValue ? ObjectValue->GetPathName() : TEXT(""));
+                Json->SetStringField(TEXT("object_class"), ObjectValue ? ObjectValue->GetClass()->GetPathName() : TEXT(""));
+                Json->SetNumberField(TEXT("property_flags"), static_cast<double>(Property->GetPropertyFlags()));
+                Json->SetBoolField(TEXT("truncated"), bTruncated);
+                if (!Writer.Write(Json))
+                {
+                    return false;
+                }
+                ++Counts.AIProperties;
+            }
+        }
+        return true;
+    }
+
+    static FString BehaviorTreeNodeKind(UObject* Node)
+    {
+        if (!Node)
+        {
+            return TEXT("unknown");
+        }
+        const UClass* Class = Node->GetClass();
+        if (ClassIsOrDerivedFromName(Class, TEXT("BTCompositeNode"))) return TEXT("composite");
+        if (ClassIsOrDerivedFromName(Class, TEXT("BTTaskNode"))) return TEXT("task");
+        if (ClassIsOrDerivedFromName(Class, TEXT("BTDecorator"))) return TEXT("decorator");
+        if (ClassIsOrDerivedFromName(Class, TEXT("BTService"))) return TEXT("service");
+        if (ClassIsOrDerivedFromName(Class, TEXT("BTAuxiliaryNode"))) return TEXT("auxiliary");
+        return TEXT("node");
+    }
+
+    static bool WriteBehaviorTreeAttachmentNode(
+        UObject* Node,
+        const FString& AssetPath,
+        const FString& AttachedTo,
+        const FString& AttachmentKind,
+        int32 AttachmentIndex,
+        FJsonlWriter& NodesWriter,
+        FJsonlWriter& PropertiesWriter,
+        FScanCounts& Counts,
+        TSet<FString>& SeenNodes)
+    {
+        if (!Node)
+        {
+            return true;
+        }
+        const FString NodeId = Node->GetPathName();
+        if (!SeenNodes.Contains(NodeId))
+        {
+            SeenNodes.Add(NodeId);
+            const TSharedRef<FJsonObject> Json = MakeShared<FJsonObject>();
+            Json->SetStringField(TEXT("node_id"), NodeId);
+            Json->SetStringField(TEXT("behavior_tree_path"), AssetPath);
+            Json->SetStringField(TEXT("node_kind"), BehaviorTreeNodeKind(Node));
+            Json->SetStringField(TEXT("class_path"), Node->GetClass()->GetPathName());
+            Json->SetStringField(TEXT("class_name"), Node->GetClass()->GetName());
+            Json->SetStringField(TEXT("name"), Node->GetName());
+            Json->SetStringField(TEXT("display_name"), ExportReflectedPropertyText(Node, TEXT("NodeName")));
+            Json->SetStringField(TEXT("attached_to"), AttachedTo);
+            Json->SetStringField(TEXT("attachment_kind"), AttachmentKind);
+            Json->SetNumberField(TEXT("attachment_index"), AttachmentIndex);
+            if (!NodesWriter.Write(Json)) return false;
+            ++Counts.BehaviorTreeNodes;
+            if (!ScanAIObjectProperties(Node, AssetPath, TEXT("behavior_tree"), BehaviorTreeNodeKind(Node), NodeId, PropertiesWriter, Counts)) return false;
+        }
+        return true;
+    }
+
+    static bool ScanBehaviorTreeNodeRecursive(
+        UObject* Node,
+        const FString& AssetPath,
+        const FString& ParentNodeId,
+        int32 ChildIndex,
+        FJsonlWriter& NodesWriter,
+        FJsonlWriter& EdgesWriter,
+        FJsonlWriter& PropertiesWriter,
+        FScanCounts& Counts,
+        TSet<FString>& SeenNodes)
+    {
+        if (!Node)
+        {
+            return true;
+        }
+
+        const FString NodeId = Node->GetPathName();
+        if (!SeenNodes.Contains(NodeId))
+        {
+            SeenNodes.Add(NodeId);
+            const TSharedRef<FJsonObject> Json = MakeShared<FJsonObject>();
+            Json->SetStringField(TEXT("node_id"), NodeId);
+            Json->SetStringField(TEXT("behavior_tree_path"), AssetPath);
+            Json->SetStringField(TEXT("node_kind"), BehaviorTreeNodeKind(Node));
+            Json->SetStringField(TEXT("class_path"), Node->GetClass()->GetPathName());
+            Json->SetStringField(TEXT("class_name"), Node->GetClass()->GetName());
+            Json->SetStringField(TEXT("name"), Node->GetName());
+            Json->SetStringField(TEXT("display_name"), ExportReflectedPropertyText(Node, TEXT("NodeName")));
+            Json->SetStringField(TEXT("parent_node_id"), ParentNodeId);
+            Json->SetNumberField(TEXT("child_index"), ChildIndex);
+            if (!NodesWriter.Write(Json)) return false;
+            ++Counts.BehaviorTreeNodes;
+            if (!ScanAIObjectProperties(Node, AssetPath, TEXT("behavior_tree"), BehaviorTreeNodeKind(Node), NodeId, PropertiesWriter, Counts)) return false;
+        }
+
+        if (!ParentNodeId.IsEmpty())
+        {
+            const TSharedRef<FJsonObject> Edge = MakeShared<FJsonObject>();
+            Edge->SetStringField(TEXT("behavior_tree_path"), AssetPath);
+            Edge->SetStringField(TEXT("source_node_id"), ParentNodeId);
+            Edge->SetStringField(TEXT("target_node_id"), NodeId);
+            Edge->SetStringField(TEXT("edge_kind"), TEXT("child"));
+            Edge->SetNumberField(TEXT("child_index"), ChildIndex);
+            Edge->SetStringField(TEXT("decorator_logic"), TEXT(""));
+            Edge->SetArrayField(TEXT("decorator_ids"), TArray<TSharedPtr<FJsonValue>>());
+            if (!EdgesWriter.Write(Edge)) return false;
+            ++Counts.BehaviorTreeEdges;
+        }
+
+        if (BehaviorTreeNodeKind(Node) != TEXT("composite"))
+        {
+            return true;
+        }
+
+        const TArray<UObject*> Services = GetReflectedObjectArray(Node, TEXT("Services"));
+        for (int32 ServiceIndex = 0; ServiceIndex < Services.Num(); ++ServiceIndex)
+        {
+            UObject* Service = Services[ServiceIndex];
+            if (!WriteBehaviorTreeAttachmentNode(Service, AssetPath, NodeId, TEXT("service"), ServiceIndex, NodesWriter, PropertiesWriter, Counts, SeenNodes)) return false;
+            const TSharedRef<FJsonObject> Edge = MakeShared<FJsonObject>();
+            Edge->SetStringField(TEXT("behavior_tree_path"), AssetPath);
+            Edge->SetStringField(TEXT("source_node_id"), NodeId);
+            Edge->SetStringField(TEXT("target_node_id"), Service->GetPathName());
+            Edge->SetStringField(TEXT("edge_kind"), TEXT("service"));
+            Edge->SetNumberField(TEXT("child_index"), ServiceIndex);
+            Edge->SetStringField(TEXT("decorator_logic"), TEXT(""));
+            Edge->SetArrayField(TEXT("decorator_ids"), TArray<TSharedPtr<FJsonValue>>());
+            if (!EdgesWriter.Write(Edge)) return false;
+            ++Counts.BehaviorTreeEdges;
+        }
+
+        FArrayProperty* ChildrenProperty = CastField<FArrayProperty>(Node->GetClass()->FindPropertyByName(TEXT("Children")));
+        FStructProperty* ChildStructProperty = ChildrenProperty ? CastField<FStructProperty>(ChildrenProperty->Inner) : nullptr;
+        if (!ChildrenProperty || !ChildStructProperty || !ChildStructProperty->Struct)
+        {
+            return true;
+        }
+
+        const void* ChildrenValue = ChildrenProperty->ContainerPtrToValuePtr<void>(Node);
+        FScriptArrayHelper ChildrenHelper(ChildrenProperty, ChildrenValue);
+        for (int32 Index = 0; Index < ChildrenHelper.Num(); ++Index)
+        {
+            const void* ChildValue = ChildrenHelper.GetRawPtr(Index);
+            UStruct* ChildStruct = ChildStructProperty->Struct;
+            UObject* Child = GetStructObjectField(ChildStruct, ChildValue, TEXT("ChildComposite"));
+            if (!Child) Child = GetStructObjectField(ChildStruct, ChildValue, TEXT("ChildTask"));
+            if (!Child) continue;
+
+            TArray<UObject*> Decorators = GetStructObjectArrayField(ChildStruct, ChildValue, TEXT("Decorators"));
+            TArray<TSharedPtr<FJsonValue>> DecoratorIds;
+            for (int32 DecoratorIndex = 0; DecoratorIndex < Decorators.Num(); ++DecoratorIndex)
+            {
+                UObject* Decorator = Decorators[DecoratorIndex];
+                if (!WriteBehaviorTreeAttachmentNode(Decorator, AssetPath, Child->GetPathName(), TEXT("decorator"), DecoratorIndex, NodesWriter, PropertiesWriter, Counts, SeenNodes)) return false;
+                DecoratorIds.Add(MakeShared<FJsonValueString>(Decorator->GetPathName()));
+            }
+
+            const TSharedRef<FJsonObject> Edge = MakeShared<FJsonObject>();
+            Edge->SetStringField(TEXT("behavior_tree_path"), AssetPath);
+            Edge->SetStringField(TEXT("source_node_id"), NodeId);
+            Edge->SetStringField(TEXT("target_node_id"), Child->GetPathName());
+            Edge->SetStringField(TEXT("edge_kind"), TEXT("child"));
+            Edge->SetNumberField(TEXT("child_index"), Index);
+            Edge->SetStringField(TEXT("decorator_logic"), ExportStructFieldTextByName(ChildStruct, ChildValue, TEXT("DecoratorOps"), Node));
+            Edge->SetArrayField(TEXT("decorator_ids"), DecoratorIds);
+            if (!EdgesWriter.Write(Edge)) return false;
+            ++Counts.BehaviorTreeEdges;
+
+            if (!ScanBehaviorTreeNodeRecursive(Child, AssetPath, TEXT(""), Index, NodesWriter, EdgesWriter, PropertiesWriter, Counts, SeenNodes)) return false;
+        }
+        return true;
+    }
+
+    static bool ScanBehaviorTreeAsset(
+        UObject* Tree,
+        const FString& AssetPath,
+        FJsonlWriter& TreesWriter,
+        FJsonlWriter& NodesWriter,
+        FJsonlWriter& EdgesWriter,
+        FJsonlWriter& PropertiesWriter,
+        FScanCounts& Counts)
+    {
+        if (!Tree) return true;
+        UObject* RootNode = GetReflectedObjectProperty(Tree, TEXT("RootNode"));
+        UObject* Blackboard = GetReflectedObjectProperty(Tree, TEXT("BlackboardAsset"));
+        const TSharedRef<FJsonObject> Json = MakeShared<FJsonObject>();
+        Json->SetStringField(TEXT("behavior_tree_path"), AssetPath);
+        Json->SetStringField(TEXT("class_path"), Tree->GetClass()->GetPathName());
+        Json->SetStringField(TEXT("root_node_id"), RootNode ? RootNode->GetPathName() : TEXT(""));
+        Json->SetStringField(TEXT("blackboard_path"), Blackboard ? Blackboard->GetPathName() : TEXT(""));
+        Json->SetNumberField(TEXT("root_decorator_count"), GetReflectedObjectArray(Tree, TEXT("RootDecorators")).Num());
+        Json->SetStringField(TEXT("root_decorator_logic"), ExportReflectedPropertyText(Tree, TEXT("RootDecoratorOps")));
+        if (!TreesWriter.Write(Json)) return false;
+        ++Counts.BehaviorTrees;
+        if (!ScanAIObjectProperties(Tree, AssetPath, TEXT("behavior_tree"), TEXT("tree"), AssetPath, PropertiesWriter, Counts)) return false;
+
+        TSet<FString> SeenNodes;
+        if (RootNode && !ScanBehaviorTreeNodeRecursive(RootNode, AssetPath, TEXT(""), 0, NodesWriter, EdgesWriter, PropertiesWriter, Counts, SeenNodes)) return false;
+
+        TArray<UObject*> RootDecorators = GetReflectedObjectArray(Tree, TEXT("RootDecorators"));
+        for (int32 Index = 0; Index < RootDecorators.Num(); ++Index)
+        {
+            UObject* Decorator = RootDecorators[Index];
+            if (!WriteBehaviorTreeAttachmentNode(Decorator, AssetPath, RootNode ? RootNode->GetPathName() : AssetPath, TEXT("root_decorator"), Index, NodesWriter, PropertiesWriter, Counts, SeenNodes)) return false;
+        }
+        return true;
+    }
+
+    static bool ScanBlackboardAsset(
+        UObject* Blackboard,
+        const FString& AssetPath,
+        FJsonlWriter& BlackboardsWriter,
+        FJsonlWriter& KeysWriter,
+        FJsonlWriter& PropertiesWriter,
+        FScanCounts& Counts)
+    {
+        if (!Blackboard) return true;
+        UObject* Parent = GetReflectedObjectProperty(Blackboard, TEXT("Parent"));
+        const TSharedRef<FJsonObject> Json = MakeShared<FJsonObject>();
+        Json->SetStringField(TEXT("blackboard_path"), AssetPath);
+        Json->SetStringField(TEXT("class_path"), Blackboard->GetClass()->GetPathName());
+        Json->SetStringField(TEXT("parent_blackboard_path"), Parent ? Parent->GetPathName() : TEXT(""));
+        if (!BlackboardsWriter.Write(Json)) return false;
+        ++Counts.Blackboards;
+        if (!ScanAIObjectProperties(Blackboard, AssetPath, TEXT("blackboard"), TEXT("blackboard"), AssetPath, PropertiesWriter, Counts)) return false;
+
+        FArrayProperty* KeysProperty = CastField<FArrayProperty>(Blackboard->GetClass()->FindPropertyByName(TEXT("Keys")));
+        FStructProperty* KeyStructProperty = KeysProperty ? CastField<FStructProperty>(KeysProperty->Inner) : nullptr;
+        if (!KeysProperty || !KeyStructProperty || !KeyStructProperty->Struct) return true;
+        const void* KeysValue = KeysProperty->ContainerPtrToValuePtr<void>(Blackboard);
+        FScriptArrayHelper Helper(KeysProperty, KeysValue);
+        for (int32 Index = 0; Index < Helper.Num(); ++Index)
+        {
+            const void* KeyValue = Helper.GetRawPtr(Index);
+            UStruct* KeyStruct = KeyStructProperty->Struct;
+            const FString KeyName = ExportStructFieldTextByName(KeyStruct, KeyValue, TEXT("EntryName"), Blackboard);
+            UObject* KeyType = GetStructObjectField(KeyStruct, KeyValue, TEXT("KeyType"));
+            const FString KeyId = FString::Printf(TEXT("%s#key:%d:%s"), *AssetPath, Index, *KeyName);
+            const TSharedRef<FJsonObject> KeyJson = MakeShared<FJsonObject>();
+            KeyJson->SetStringField(TEXT("key_id"), KeyId);
+            KeyJson->SetStringField(TEXT("blackboard_path"), AssetPath);
+            KeyJson->SetNumberField(TEXT("key_index"), Index);
+            KeyJson->SetStringField(TEXT("name"), KeyName);
+            KeyJson->SetStringField(TEXT("category"), ExportStructFieldTextByName(KeyStruct, KeyValue, TEXT("EntryCategory"), Blackboard));
+            KeyJson->SetStringField(TEXT("description"), ExportStructFieldTextByName(KeyStruct, KeyValue, TEXT("EntryDescription"), Blackboard));
+            KeyJson->SetStringField(TEXT("key_type_path"), KeyType ? KeyType->GetPathName() : TEXT(""));
+            KeyJson->SetStringField(TEXT("key_type_class"), KeyType ? KeyType->GetClass()->GetPathName() : TEXT(""));
+            KeyJson->SetStringField(TEXT("instance_synced"), ExportStructFieldTextByName(KeyStruct, KeyValue, TEXT("bInstanceSynced"), Blackboard));
+            FString RawKeyValue;
+            KeyStructProperty->ExportTextItem_Direct(RawKeyValue, KeyValue, nullptr, Blackboard, PPF_None, nullptr);
+            if (RawKeyValue.Len() > 32768) RawKeyValue = RawKeyValue.Left(32768);
+            KeyJson->SetStringField(TEXT("raw_value"), RawKeyValue);
+            if (!KeysWriter.Write(KeyJson)) return false;
+            ++Counts.BlackboardKeys;
+            if (KeyType && !ScanAIObjectProperties(KeyType, AssetPath, TEXT("blackboard"), TEXT("key_type"), KeyId, PropertiesWriter, Counts)) return false;
+        }
+        return true;
+    }
+
+    static bool ScanEQSAsset(
+        UObject* Query,
+        const FString& AssetPath,
+        FJsonlWriter& QueriesWriter,
+        FJsonlWriter& OptionsWriter,
+        FJsonlWriter& GeneratorsWriter,
+        FJsonlWriter& TestsWriter,
+        FJsonlWriter& PropertiesWriter,
+        FScanCounts& Counts)
+    {
+        if (!Query) return true;
+        TArray<UObject*> Options = GetReflectedObjectArray(Query, TEXT("Options"));
+        if (Options.IsEmpty())
+        {
+            TArray<UObject*> Owned;
+            GetObjectsWithOuter(Query, Owned, EGetObjectsFlags::IncludeNestedObjects);
+            for (UObject* OwnedObject : Owned)
+            {
+                if (OwnedObject && ClassIsOrDerivedFromName(OwnedObject->GetClass(), TEXT("EnvQueryOption")))
+                {
+                    Options.Add(OwnedObject);
+                }
+            }
+            Options.Sort([](const UObject& A, const UObject& B) { return A.GetPathName() < B.GetPathName(); });
+        }
+        const TSharedRef<FJsonObject> QueryJson = MakeShared<FJsonObject>();
+        QueryJson->SetStringField(TEXT("eqs_path"), AssetPath);
+        QueryJson->SetStringField(TEXT("class_path"), Query->GetClass()->GetPathName());
+        QueryJson->SetNumberField(TEXT("option_count"), Options.Num());
+        if (!QueriesWriter.Write(QueryJson)) return false;
+        ++Counts.EQSQueries;
+        if (!ScanAIObjectProperties(Query, AssetPath, TEXT("eqs"), TEXT("query"), AssetPath, PropertiesWriter, Counts)) return false;
+
+        for (int32 OptionIndex = 0; OptionIndex < Options.Num(); ++OptionIndex)
+        {
+            UObject* Option = Options[OptionIndex];
+            UObject* Generator = GetReflectedObjectProperty(Option, TEXT("Generator"));
+            TArray<UObject*> Tests = GetReflectedObjectArray(Option, TEXT("Tests"));
+            const FString OptionId = Option ? Option->GetPathName() : FString::Printf(TEXT("%s#option:%d"), *AssetPath, OptionIndex);
+            const TSharedRef<FJsonObject> OptionJson = MakeShared<FJsonObject>();
+            OptionJson->SetStringField(TEXT("option_id"), OptionId);
+            OptionJson->SetStringField(TEXT("eqs_path"), AssetPath);
+            OptionJson->SetNumberField(TEXT("option_index"), OptionIndex);
+            OptionJson->SetStringField(TEXT("class_path"), Option ? Option->GetClass()->GetPathName() : TEXT(""));
+            OptionJson->SetStringField(TEXT("generator_id"), Generator ? Generator->GetPathName() : TEXT(""));
+            OptionJson->SetNumberField(TEXT("test_count"), Tests.Num());
+            if (!OptionsWriter.Write(OptionJson)) return false;
+            ++Counts.EQSOptions;
+            if (Option && !ScanAIObjectProperties(Option, AssetPath, TEXT("eqs"), TEXT("option"), OptionId, PropertiesWriter, Counts)) return false;
+
+            if (Generator)
+            {
+                const TSharedRef<FJsonObject> GeneratorJson = MakeShared<FJsonObject>();
+                GeneratorJson->SetStringField(TEXT("generator_id"), Generator->GetPathName());
+                GeneratorJson->SetStringField(TEXT("eqs_path"), AssetPath);
+                GeneratorJson->SetStringField(TEXT("option_id"), OptionId);
+                GeneratorJson->SetNumberField(TEXT("option_index"), OptionIndex);
+                GeneratorJson->SetStringField(TEXT("class_path"), Generator->GetClass()->GetPathName());
+                GeneratorJson->SetStringField(TEXT("class_name"), Generator->GetClass()->GetName());
+                GeneratorJson->SetStringField(TEXT("item_type"), ExportReflectedPropertyText(Generator, TEXT("ItemType")));
+                if (!GeneratorsWriter.Write(GeneratorJson)) return false;
+                ++Counts.EQSGenerators;
+                if (!ScanAIObjectProperties(Generator, AssetPath, TEXT("eqs"), TEXT("generator"), Generator->GetPathName(), PropertiesWriter, Counts)) return false;
+            }
+
+            for (int32 TestIndex = 0; TestIndex < Tests.Num(); ++TestIndex)
+            {
+                UObject* Test = Tests[TestIndex];
+                const TSharedRef<FJsonObject> TestJson = MakeShared<FJsonObject>();
+                TestJson->SetStringField(TEXT("test_id"), Test->GetPathName());
+                TestJson->SetStringField(TEXT("eqs_path"), AssetPath);
+                TestJson->SetStringField(TEXT("option_id"), OptionId);
+                TestJson->SetNumberField(TEXT("option_index"), OptionIndex);
+                TestJson->SetNumberField(TEXT("test_index"), TestIndex);
+                TestJson->SetStringField(TEXT("class_path"), Test->GetClass()->GetPathName());
+                TestJson->SetStringField(TEXT("class_name"), Test->GetClass()->GetName());
+                TestJson->SetStringField(TEXT("test_purpose"), ExportReflectedPropertyText(Test, TEXT("TestPurpose")));
+                TestJson->SetStringField(TEXT("filter_type"), ExportReflectedPropertyText(Test, TEXT("FilterType")));
+                TestJson->SetStringField(TEXT("scoring_equation"), ExportReflectedPropertyText(Test, TEXT("ScoringEquation")));
+                FString ScoringFactor = ExportReflectedPropertyText(Test, TEXT("ScoringFactor"));
+                if (ScoringFactor.IsEmpty()) ScoringFactor = ExportReflectedPropertyText(Test, TEXT("WeightModifier"));
+                TestJson->SetStringField(TEXT("weight_modifier"), ScoringFactor);
+                if (!TestsWriter.Write(TestJson)) return false;
+                ++Counts.EQSTests;
+                if (!ScanAIObjectProperties(Test, AssetPath, TEXT("eqs"), TEXT("test"), Test->GetPathName(), PropertiesWriter, Counts)) return false;
+            }
+        }
+        return true;
+    }
+
+    static bool WriteStateTreeEditorNodeStruct(
+        UStruct* NodeStruct,
+        const void* NodeValue,
+        UObject* Owner,
+        const FString& AssetPath,
+        const FString& StateId,
+        const FString& Role,
+        int32 NodeIndex,
+        FJsonlWriter& NodesWriter,
+        FJsonlWriter& PropertiesWriter,
+        FScanCounts& Counts)
+    {
+        if (!NodeStruct || !NodeValue) return true;
+        const FString Guid = ExportStructFieldTextByName(NodeStruct, NodeValue, TEXT("ID"), Owner);
+        UObject* InstanceObject = GetStructObjectField(NodeStruct, NodeValue, TEXT("InstanceObject"));
+        const FString RawNode = ExportStructFieldTextByName(NodeStruct, NodeValue, TEXT("Node"), Owner, 32768);
+        const FString RawInstance = ExportStructFieldTextByName(NodeStruct, NodeValue, TEXT("Instance"), Owner, 32768);
+        const FString NodeId = !Guid.IsEmpty()
+            ? FString::Printf(TEXT("%s#node:%s"), *AssetPath, *Guid)
+            : FString::Printf(TEXT("%s#%s:%s:%d"), *AssetPath, *Role, *StateId, NodeIndex);
+        const TSharedRef<FJsonObject> Json = MakeShared<FJsonObject>();
+        Json->SetStringField(TEXT("node_id"), NodeId);
+        Json->SetStringField(TEXT("statetree_path"), AssetPath);
+        Json->SetStringField(TEXT("state_id"), StateId);
+        Json->SetStringField(TEXT("role"), Role);
+        Json->SetNumberField(TEXT("node_index"), NodeIndex);
+        Json->SetStringField(TEXT("guid"), Guid);
+        Json->SetStringField(TEXT("expression_indent"), ExportStructFieldTextByName(NodeStruct, NodeValue, TEXT("ExpressionIndent"), Owner));
+        Json->SetStringField(TEXT("expression_operand"), ExportStructFieldTextByName(NodeStruct, NodeValue, TEXT("ExpressionOperand"), Owner));
+        Json->SetStringField(TEXT("instance_object_path"), InstanceObject ? InstanceObject->GetPathName() : TEXT(""));
+        Json->SetStringField(TEXT("instance_object_class"), InstanceObject ? InstanceObject->GetClass()->GetPathName() : TEXT(""));
+        Json->SetStringField(TEXT("raw_node"), RawNode);
+        Json->SetStringField(TEXT("raw_instance"), RawInstance);
+        if (!NodesWriter.Write(Json)) return false;
+        ++Counts.StateTreeNodes;
+        if (InstanceObject && !ScanAIObjectProperties(InstanceObject, AssetPath, TEXT("statetree"), Role, NodeId, PropertiesWriter, Counts)) return false;
+        return true;
+    }
+
+    static bool ScanStateTreeEditorNodeArray(
+        UObject* Owner,
+        const FString& PropertyName,
+        const FString& AssetPath,
+        const FString& StateId,
+        const FString& Role,
+        FJsonlWriter& NodesWriter,
+        FJsonlWriter& PropertiesWriter,
+        FScanCounts& Counts)
+    {
+        if (!Owner) return true;
+        FArrayProperty* ArrayProperty = CastField<FArrayProperty>(Owner->GetClass()->FindPropertyByName(FName(*PropertyName)));
+        FStructProperty* InnerStruct = ArrayProperty ? CastField<FStructProperty>(ArrayProperty->Inner) : nullptr;
+        if (!ArrayProperty || !InnerStruct || !InnerStruct->Struct) return true;
+        const void* ArrayValue = ArrayProperty->ContainerPtrToValuePtr<void>(Owner);
+        FScriptArrayHelper Helper(ArrayProperty, ArrayValue);
+        for (int32 Index = 0; Index < Helper.Num(); ++Index)
+        {
+            if (!WriteStateTreeEditorNodeStruct(InnerStruct->Struct, Helper.GetRawPtr(Index), Owner, AssetPath, StateId, Role, Index, NodesWriter, PropertiesWriter, Counts)) return false;
+        }
+        return true;
+    }
+
+    static bool ScanStateTreeStateRecursive(
+        UObject* State,
+        const FString& AssetPath,
+        const FString& ParentStateId,
+        int32 ChildIndex,
+        FJsonlWriter& StatesWriter,
+        FJsonlWriter& NodesWriter,
+        FJsonlWriter& TransitionsWriter,
+        FJsonlWriter& PropertiesWriter,
+        FScanCounts& Counts)
+    {
+        if (!State) return true;
+        FString StateId = ExportReflectedPropertyText(State, TEXT("ID"));
+        if (StateId.IsEmpty()) StateId = State->GetPathName();
+        const TSharedRef<FJsonObject> Json = MakeShared<FJsonObject>();
+        Json->SetStringField(TEXT("state_id"), StateId);
+        Json->SetStringField(TEXT("statetree_path"), AssetPath);
+        Json->SetStringField(TEXT("state_object_path"), State->GetPathName());
+        Json->SetStringField(TEXT("parent_state_id"), ParentStateId);
+        Json->SetNumberField(TEXT("child_index"), ChildIndex);
+        Json->SetStringField(TEXT("name"), ExportReflectedPropertyText(State, TEXT("Name")));
+        Json->SetStringField(TEXT("description"), ExportReflectedPropertyText(State, TEXT("Description")));
+        Json->SetStringField(TEXT("state_type"), ExportReflectedPropertyText(State, TEXT("Type")));
+        Json->SetStringField(TEXT("selection_behavior"), ExportReflectedPropertyText(State, TEXT("SelectionBehavior")));
+        Json->SetStringField(TEXT("enabled"), ExportReflectedPropertyText(State, TEXT("bEnabled")));
+        Json->SetStringField(TEXT("tag"), ExportReflectedPropertyText(State, TEXT("Tag")));
+        Json->SetStringField(TEXT("tasks_completion"), ExportReflectedPropertyText(State, TEXT("TasksCompletion")));
+        Json->SetStringField(TEXT("required_event"), ExportReflectedPropertyText(State, TEXT("RequiredEventToEnter")));
+        UObject* LinkedAsset = GetReflectedObjectProperty(State, TEXT("LinkedAsset"));
+        Json->SetStringField(TEXT("linked_asset"), LinkedAsset ? LinkedAsset->GetPathName() : TEXT(""));
+        Json->SetStringField(TEXT("linked_subtree"), ExportReflectedPropertyText(State, TEXT("LinkedSubtree")));
+        if (!StatesWriter.Write(Json)) return false;
+        ++Counts.StateTreeStates;
+        if (!ScanAIObjectProperties(State, AssetPath, TEXT("statetree"), TEXT("state"), StateId, PropertiesWriter, Counts)) return false;
+
+        if (!ScanStateTreeEditorNodeArray(State, TEXT("EnterConditions"), AssetPath, StateId, TEXT("enter_condition"), NodesWriter, PropertiesWriter, Counts)) return false;
+        if (!ScanStateTreeEditorNodeArray(State, TEXT("Tasks"), AssetPath, StateId, TEXT("task"), NodesWriter, PropertiesWriter, Counts)) return false;
+        if (!ScanStateTreeEditorNodeArray(State, TEXT("Considerations"), AssetPath, StateId, TEXT("consideration"), NodesWriter, PropertiesWriter, Counts)) return false;
+
+        FStructProperty* SingleTask = CastField<FStructProperty>(State->GetClass()->FindPropertyByName(TEXT("SingleTask")));
+        if (SingleTask && SingleTask->Struct)
+        {
+            const void* Value = SingleTask->ContainerPtrToValuePtr<void>(State);
+            const FString Raw = ExportStructFieldTextByName(SingleTask->Struct, Value, TEXT("ID"), State);
+            if (!Raw.IsEmpty() && !WriteStateTreeEditorNodeStruct(SingleTask->Struct, Value, State, AssetPath, StateId, TEXT("single_task"), 0, NodesWriter, PropertiesWriter, Counts)) return false;
+        }
+
+        FArrayProperty* TransitionsProperty = CastField<FArrayProperty>(State->GetClass()->FindPropertyByName(TEXT("Transitions")));
+        FStructProperty* TransitionStruct = TransitionsProperty ? CastField<FStructProperty>(TransitionsProperty->Inner) : nullptr;
+        if (TransitionsProperty && TransitionStruct && TransitionStruct->Struct)
+        {
+            const void* ArrayValue = TransitionsProperty->ContainerPtrToValuePtr<void>(State);
+            FScriptArrayHelper Helper(TransitionsProperty, ArrayValue);
+            for (int32 Index = 0; Index < Helper.Num(); ++Index)
+            {
+                const void* Value = Helper.GetRawPtr(Index);
+                UStruct* Struct = TransitionStruct->Struct;
+                FString TransitionId = ExportStructFieldTextByName(Struct, Value, TEXT("ID"), State);
+                if (TransitionId.IsEmpty()) TransitionId = FString::Printf(TEXT("%s#transition:%d"), *StateId, Index);
+                const TSharedRef<FJsonObject> TransitionJson = MakeShared<FJsonObject>();
+                TransitionJson->SetStringField(TEXT("transition_id"), TransitionId);
+                TransitionJson->SetStringField(TEXT("statetree_path"), AssetPath);
+                TransitionJson->SetStringField(TEXT("source_state_id"), StateId);
+                TransitionJson->SetNumberField(TEXT("transition_index"), Index);
+                TransitionJson->SetStringField(TEXT("trigger"), ExportStructFieldTextByName(Struct, Value, TEXT("Trigger"), State));
+                TransitionJson->SetStringField(TEXT("event_tag"), ExportStructFieldTextByName(Struct, Value, TEXT("EventTag"), State));
+                TransitionJson->SetStringField(TEXT("state"), ExportStructFieldTextByName(Struct, Value, TEXT("State"), State));
+                TransitionJson->SetStringField(TEXT("priority"), ExportStructFieldTextByName(Struct, Value, TEXT("Priority"), State));
+                TransitionJson->SetStringField(TEXT("fallback"), ExportStructFieldTextByName(Struct, Value, TEXT("Fallback"), State));
+                TransitionJson->SetStringField(TEXT("enabled"), ExportStructFieldTextByName(Struct, Value, TEXT("bTransitionEnabled"), State));
+                TransitionJson->SetStringField(TEXT("delay_enabled"), ExportStructFieldTextByName(Struct, Value, TEXT("bDelayTransition"), State));
+                TransitionJson->SetStringField(TEXT("delay"), ExportStructFieldTextByName(Struct, Value, TEXT("DelayDuration"), State));
+                FString RawTransition;
+                TransitionStruct->ExportTextItem_Direct(RawTransition, Value, nullptr, State, PPF_None, nullptr);
+                if (RawTransition.Len() > 32768) RawTransition = RawTransition.Left(32768);
+                TransitionJson->SetStringField(TEXT("raw_value"), RawTransition);
+                if (!TransitionsWriter.Write(TransitionJson)) return false;
+                ++Counts.StateTreeTransitions;
+
+                FArrayProperty* ConditionsProperty = CastField<FArrayProperty>(Struct->FindPropertyByName(TEXT("Conditions")));
+                FStructProperty* ConditionStruct = ConditionsProperty ? CastField<FStructProperty>(ConditionsProperty->Inner) : nullptr;
+                if (ConditionsProperty && ConditionStruct && ConditionStruct->Struct)
+                {
+                    const void* ConditionsValue = ConditionsProperty->ContainerPtrToValuePtr<void>(Value);
+                    FScriptArrayHelper ConditionsHelper(ConditionsProperty, ConditionsValue);
+                    for (int32 ConditionIndex = 0; ConditionIndex < ConditionsHelper.Num(); ++ConditionIndex)
+                    {
+                        if (!WriteStateTreeEditorNodeStruct(ConditionStruct->Struct, ConditionsHelper.GetRawPtr(ConditionIndex), State, AssetPath, StateId, TEXT("transition_condition"), ConditionIndex, NodesWriter, PropertiesWriter, Counts)) return false;
+                    }
+                }
+            }
+        }
+
+        TArray<UObject*> Children = GetReflectedObjectArray(State, TEXT("Children"));
+        for (int32 Index = 0; Index < Children.Num(); ++Index)
+        {
+            if (!ScanStateTreeStateRecursive(Children[Index], AssetPath, StateId, Index, StatesWriter, NodesWriter, TransitionsWriter, PropertiesWriter, Counts)) return false;
+        }
+        return true;
+    }
+
+    static bool ScanStateTreeBindings(
+        UObject* EditorData,
+        const FString& AssetPath,
+        FJsonlWriter& BindingsWriter,
+        FScanCounts& Counts)
+    {
+        if (!EditorData) return true;
+        FStructProperty* EditorBindings = CastField<FStructProperty>(EditorData->GetClass()->FindPropertyByName(TEXT("EditorBindings")));
+        if (!EditorBindings || !EditorBindings->Struct) return true;
+        const void* BindingsValue = EditorBindings->ContainerPtrToValuePtr<void>(EditorData);
+        FArrayProperty* PropertyBindings = CastField<FArrayProperty>(EditorBindings->Struct->FindPropertyByName(TEXT("PropertyBindings")));
+        FStructProperty* BindingStruct = PropertyBindings ? CastField<FStructProperty>(PropertyBindings->Inner) : nullptr;
+        if (!PropertyBindings || !BindingStruct || !BindingStruct->Struct) return true;
+        const void* ArrayValue = PropertyBindings->ContainerPtrToValuePtr<void>(BindingsValue);
+        FScriptArrayHelper Helper(PropertyBindings, ArrayValue);
+        for (int32 Index = 0; Index < Helper.Num(); ++Index)
+        {
+            const void* Value = Helper.GetRawPtr(Index);
+            const TSharedRef<FJsonObject> Json = MakeShared<FJsonObject>();
+            Json->SetStringField(TEXT("statetree_path"), AssetPath);
+            Json->SetNumberField(TEXT("binding_index"), Index);
+            Json->SetStringField(TEXT("binding_struct"), BindingStruct->Struct->GetPathName());
+            Json->SetStringField(TEXT("source_path"), ExportStructFieldTextByName(BindingStruct->Struct, Value, TEXT("SourcePath"), EditorData));
+            Json->SetStringField(TEXT("target_path"), ExportStructFieldTextByName(BindingStruct->Struct, Value, TEXT("TargetPath"), EditorData));
+            Json->SetStringField(TEXT("output_binding"), ExportStructFieldTextByName(BindingStruct->Struct, Value, TEXT("bIsOutputBinding"), EditorData));
+            FString Raw;
+            BindingStruct->ExportTextItem_Direct(Raw, Value, nullptr, EditorData, PPF_None, nullptr);
+            if (Raw.Len() > 32768) Raw = Raw.Left(32768);
+            Json->SetStringField(TEXT("raw_value"), Raw);
+            if (!BindingsWriter.Write(Json)) return false;
+            ++Counts.StateTreeBindings;
+        }
+        return true;
+    }
+
+    static bool ScanStateTreeAsset(
+        UObject* Tree,
+        const FString& AssetPath,
+        FJsonlWriter& TreesWriter,
+        FJsonlWriter& StatesWriter,
+        FJsonlWriter& NodesWriter,
+        FJsonlWriter& TransitionsWriter,
+        FJsonlWriter& BindingsWriter,
+        FJsonlWriter& PropertiesWriter,
+        FScanCounts& Counts)
+    {
+        if (!Tree) return true;
+        UObject* EditorData = GetReflectedObjectProperty(Tree, TEXT("EditorData"));
+        if (!EditorData)
+        {
+            TArray<UObject*> Owned;
+            GetObjectsWithOuter(Tree, Owned, EGetObjectsFlags::IncludeNestedObjects);
+            for (UObject* OwnedObject : Owned)
+            {
+                if (OwnedObject && ClassIsOrDerivedFromName(OwnedObject->GetClass(), TEXT("StateTreeEditorData")))
+                {
+                    EditorData = OwnedObject;
+                    break;
+                }
+            }
+        }
+        const TSharedRef<FJsonObject> Json = MakeShared<FJsonObject>();
+        Json->SetStringField(TEXT("statetree_path"), AssetPath);
+        Json->SetStringField(TEXT("class_path"), Tree->GetClass()->GetPathName());
+        Json->SetStringField(TEXT("editor_data_path"), EditorData ? EditorData->GetPathName() : TEXT(""));
+        Json->SetStringField(TEXT("editor_data_class"), EditorData ? EditorData->GetClass()->GetPathName() : TEXT(""));
+        Json->SetStringField(TEXT("last_compiled_editor_data_hash"), ExportReflectedPropertyText(Tree, TEXT("LastCompiledEditorDataHash")));
+        if (!TreesWriter.Write(Json)) return false;
+        ++Counts.StateTrees;
+        if (!ScanAIObjectProperties(Tree, AssetPath, TEXT("statetree"), TEXT("tree"), AssetPath, PropertiesWriter, Counts)) return false;
+        if (!EditorData) return true;
+        if (!ScanAIObjectProperties(EditorData, AssetPath, TEXT("statetree"), TEXT("editor_data"), EditorData->GetPathName(), PropertiesWriter, Counts)) return false;
+        if (!ScanStateTreeEditorNodeArray(EditorData, TEXT("Evaluators"), AssetPath, TEXT(""), TEXT("evaluator"), NodesWriter, PropertiesWriter, Counts)) return false;
+        if (!ScanStateTreeEditorNodeArray(EditorData, TEXT("GlobalTasks"), AssetPath, TEXT(""), TEXT("global_task"), NodesWriter, PropertiesWriter, Counts)) return false;
+        if (!ScanStateTreeBindings(EditorData, AssetPath, BindingsWriter, Counts)) return false;
+        TArray<UObject*> SubTrees = GetReflectedObjectArray(EditorData, TEXT("SubTrees"));
+        for (int32 Index = 0; Index < SubTrees.Num(); ++Index)
+        {
+            if (!ScanStateTreeStateRecursive(SubTrees[Index], AssetPath, TEXT(""), Index, StatesWriter, NodesWriter, TransitionsWriter, PropertiesWriter, Counts)) return false;
+        }
+        return true;
+    }
+
     static bool ScanAssets(
         const FString& ProjectDir,
         const FString& ToolPluginDir,
@@ -4479,6 +5247,21 @@ namespace UnrealAssetTool
         FJsonlWriter& RigVMPropertiesWriter,
         FJsonlWriter& RigVMReferencesWriter,
         FJsonlWriter& EdgesWriter,
+        FJsonlWriter& BehaviorTreesWriter,
+        FJsonlWriter& BehaviorTreeNodesWriter,
+        FJsonlWriter& BehaviorTreeEdgesWriter,
+        FJsonlWriter& BlackboardsWriter,
+        FJsonlWriter& BlackboardKeysWriter,
+        FJsonlWriter& EQSQueriesWriter,
+        FJsonlWriter& EQSOptionsWriter,
+        FJsonlWriter& EQSGeneratorsWriter,
+        FJsonlWriter& EQSTestsWriter,
+        FJsonlWriter& StateTreesWriter,
+        FJsonlWriter& StateTreeStatesWriter,
+        FJsonlWriter& StateTreeNodesWriter,
+        FJsonlWriter& StateTreeTransitionsWriter,
+        FJsonlWriter& StateTreeBindingsWriter,
+        FJsonlWriter& AIPropertiesWriter,
         bool bIncludeRawRigVMProperties,
         FScanCounts& Counts)
     {
@@ -4557,7 +5340,34 @@ namespace UnrealAssetTool
             }
             ++Counts.Assets;
 
-            if (Asset.AssetClassPath.ToString().Contains(TEXT("Blueprint"), ESearchCase::CaseSensitive))
+            const FString AssetClassPath = Asset.AssetClassPath.ToString();
+            if (AssetClassPath == TEXT("/Script/AIModule.BehaviorTree") ||
+                AssetClassPath == TEXT("/Script/AIModule.BlackboardData") ||
+                AssetClassPath == TEXT("/Script/AIModule.EnvQuery") ||
+                AssetClassPath == TEXT("/Script/StateTreeModule.StateTree"))
+            {
+                if (UObject* AIAsset = Asset.GetAsset())
+                {
+                    if (AssetClassPath == TEXT("/Script/AIModule.BehaviorTree"))
+                    {
+                        if (!ScanBehaviorTreeAsset(AIAsset, ObjectPath, BehaviorTreesWriter, BehaviorTreeNodesWriter, BehaviorTreeEdgesWriter, AIPropertiesWriter, Counts)) return false;
+                    }
+                    else if (AssetClassPath == TEXT("/Script/AIModule.BlackboardData"))
+                    {
+                        if (!ScanBlackboardAsset(AIAsset, ObjectPath, BlackboardsWriter, BlackboardKeysWriter, AIPropertiesWriter, Counts)) return false;
+                    }
+                    else if (AssetClassPath == TEXT("/Script/AIModule.EnvQuery"))
+                    {
+                        if (!ScanEQSAsset(AIAsset, ObjectPath, EQSQueriesWriter, EQSOptionsWriter, EQSGeneratorsWriter, EQSTestsWriter, AIPropertiesWriter, Counts)) return false;
+                    }
+                    else if (AssetClassPath == TEXT("/Script/StateTreeModule.StateTree"))
+                    {
+                        if (!ScanStateTreeAsset(AIAsset, ObjectPath, StateTreesWriter, StateTreeStatesWriter, StateTreeNodesWriter, StateTreeTransitionsWriter, StateTreeBindingsWriter, AIPropertiesWriter, Counts)) return false;
+                    }
+                }
+            }
+
+            if (AssetClassPath.Contains(TEXT("Blueprint"), ESearchCase::CaseSensitive))
             {
                 if (UBlueprint* Blueprint = Cast<UBlueprint>(Asset.GetAsset()))
                 {
@@ -4680,6 +5490,21 @@ int32 UUnrealAssetToolCommandlet::Main(const FString& Params)
     FJsonlWriter RigVMPropertiesWriter(FPaths::Combine(OutputDir, TEXT("rigvm_properties.jsonl")));
     FJsonlWriter RigVMReferencesWriter(FPaths::Combine(OutputDir, TEXT("rigvm_references.jsonl")));
     FJsonlWriter EdgesWriter(FPaths::Combine(OutputDir, TEXT("blueprint_edges.jsonl")));
+    FJsonlWriter BehaviorTreesWriter(FPaths::Combine(OutputDir, TEXT("behavior_trees.jsonl")));
+    FJsonlWriter BehaviorTreeNodesWriter(FPaths::Combine(OutputDir, TEXT("behavior_tree_nodes.jsonl")));
+    FJsonlWriter BehaviorTreeEdgesWriter(FPaths::Combine(OutputDir, TEXT("behavior_tree_edges.jsonl")));
+    FJsonlWriter BlackboardsWriter(FPaths::Combine(OutputDir, TEXT("blackboards.jsonl")));
+    FJsonlWriter BlackboardKeysWriter(FPaths::Combine(OutputDir, TEXT("blackboard_keys.jsonl")));
+    FJsonlWriter EQSQueriesWriter(FPaths::Combine(OutputDir, TEXT("eqs_queries.jsonl")));
+    FJsonlWriter EQSOptionsWriter(FPaths::Combine(OutputDir, TEXT("eqs_options.jsonl")));
+    FJsonlWriter EQSGeneratorsWriter(FPaths::Combine(OutputDir, TEXT("eqs_generators.jsonl")));
+    FJsonlWriter EQSTestsWriter(FPaths::Combine(OutputDir, TEXT("eqs_tests.jsonl")));
+    FJsonlWriter StateTreesWriter(FPaths::Combine(OutputDir, TEXT("statetrees.jsonl")));
+    FJsonlWriter StateTreeStatesWriter(FPaths::Combine(OutputDir, TEXT("statetree_states.jsonl")));
+    FJsonlWriter StateTreeNodesWriter(FPaths::Combine(OutputDir, TEXT("statetree_nodes.jsonl")));
+    FJsonlWriter StateTreeTransitionsWriter(FPaths::Combine(OutputDir, TEXT("statetree_transitions.jsonl")));
+    FJsonlWriter StateTreeBindingsWriter(FPaths::Combine(OutputDir, TEXT("statetree_bindings.jsonl")));
+    FJsonlWriter AIPropertiesWriter(FPaths::Combine(OutputDir, TEXT("ai_properties.jsonl")));
 
     if (!FilesWriter.IsValid() || !SourceWriter.IsValid() || !AssetsWriter.IsValid() ||
         !DependenciesWriter.IsValid() || !BlueprintsWriter.IsValid() || !GraphsWriter.IsValid() ||
@@ -4691,7 +5516,12 @@ int32 UUnrealAssetToolCommandlet::Main(const FString& Params)
         !WidgetAnimationsWriter.IsValid() || !WidgetAnimationBindingsWriter.IsValid() ||
         !RigVMObjectsWriter.IsValid() || !RigVMPinsWriter.IsValid() || !RigVMLinksWriter.IsValid() ||
         !RigVMPropertiesWriter.IsValid() || !RigVMReferencesWriter.IsValid() ||
-        !EdgesWriter.IsValid())
+        !EdgesWriter.IsValid() || !BehaviorTreesWriter.IsValid() || !BehaviorTreeNodesWriter.IsValid() ||
+        !BehaviorTreeEdgesWriter.IsValid() || !BlackboardsWriter.IsValid() || !BlackboardKeysWriter.IsValid() ||
+        !EQSQueriesWriter.IsValid() || !EQSOptionsWriter.IsValid() || !EQSGeneratorsWriter.IsValid() ||
+        !EQSTestsWriter.IsValid() || !StateTreesWriter.IsValid() || !StateTreeStatesWriter.IsValid() ||
+        !StateTreeNodesWriter.IsValid() || !StateTreeTransitionsWriter.IsValid() || !StateTreeBindingsWriter.IsValid() ||
+        !AIPropertiesWriter.IsValid())
     {
         UE_LOG(LogTemp, Error, TEXT("UnrealAssetTool: could not create one or more output files under %s"), *OutputDir);
         return 2;
@@ -4736,6 +5566,21 @@ int32 UUnrealAssetToolCommandlet::Main(const FString& Params)
             RigVMPropertiesWriter,
             RigVMReferencesWriter,
             EdgesWriter,
+            BehaviorTreesWriter,
+            BehaviorTreeNodesWriter,
+            BehaviorTreeEdgesWriter,
+            BlackboardsWriter,
+            BlackboardKeysWriter,
+            EQSQueriesWriter,
+            EQSOptionsWriter,
+            EQSGeneratorsWriter,
+            EQSTestsWriter,
+            StateTreesWriter,
+            StateTreeStatesWriter,
+            StateTreeNodesWriter,
+            StateTreeTransitionsWriter,
+            StateTreeBindingsWriter,
+            AIPropertiesWriter,
             bIncludeRawRigVMProperties,
             Counts))
     {
@@ -4790,6 +5635,21 @@ int32 UUnrealAssetToolCommandlet::Main(const FString& Params)
     CountsJson->SetNumberField(TEXT("blueprint_widget_bindings"), static_cast<double>(Counts.BlueprintWidgetBindings));
     CountsJson->SetNumberField(TEXT("blueprint_widget_animations"), static_cast<double>(Counts.BlueprintWidgetAnimations));
     CountsJson->SetNumberField(TEXT("blueprint_widget_animation_bindings"), static_cast<double>(Counts.BlueprintWidgetAnimationBindings));
+    CountsJson->SetNumberField(TEXT("behavior_trees"), static_cast<double>(Counts.BehaviorTrees));
+    CountsJson->SetNumberField(TEXT("behavior_tree_nodes"), static_cast<double>(Counts.BehaviorTreeNodes));
+    CountsJson->SetNumberField(TEXT("behavior_tree_edges"), static_cast<double>(Counts.BehaviorTreeEdges));
+    CountsJson->SetNumberField(TEXT("blackboards"), static_cast<double>(Counts.Blackboards));
+    CountsJson->SetNumberField(TEXT("blackboard_keys"), static_cast<double>(Counts.BlackboardKeys));
+    CountsJson->SetNumberField(TEXT("eqs_queries"), static_cast<double>(Counts.EQSQueries));
+    CountsJson->SetNumberField(TEXT("eqs_options"), static_cast<double>(Counts.EQSOptions));
+    CountsJson->SetNumberField(TEXT("eqs_generators"), static_cast<double>(Counts.EQSGenerators));
+    CountsJson->SetNumberField(TEXT("eqs_tests"), static_cast<double>(Counts.EQSTests));
+    CountsJson->SetNumberField(TEXT("statetrees"), static_cast<double>(Counts.StateTrees));
+    CountsJson->SetNumberField(TEXT("statetree_states"), static_cast<double>(Counts.StateTreeStates));
+    CountsJson->SetNumberField(TEXT("statetree_nodes"), static_cast<double>(Counts.StateTreeNodes));
+    CountsJson->SetNumberField(TEXT("statetree_transitions"), static_cast<double>(Counts.StateTreeTransitions));
+    CountsJson->SetNumberField(TEXT("statetree_bindings"), static_cast<double>(Counts.StateTreeBindings));
+    CountsJson->SetNumberField(TEXT("ai_properties"), static_cast<double>(Counts.AIProperties));
     Manifest->SetObjectField(TEXT("counts"), CountsJson);
 
     if (!SaveJsonObject(FPaths::Combine(OutputDir, TEXT("manifest.json")), Manifest))
@@ -4800,6 +5660,8 @@ int32 UUnrealAssetToolCommandlet::Main(const FString& Params)
 
     UE_LOG(LogTemp, Display, TEXT("UnrealAssetTool: indexed %lld files, %lld assets, %lld blueprints, %lld blueprint nodes."),
         Counts.Files, Counts.Assets, Counts.Blueprints, Counts.BlueprintNodes);
+    UE_LOG(LogTemp, Display, TEXT("UnrealAssetTool: AI assets: %lld behavior trees, %lld blackboards, %lld EQS queries, %lld StateTrees."),
+        Counts.BehaviorTrees, Counts.Blackboards, Counts.EQSQueries, Counts.StateTrees);
     UE_LOG(LogTemp, Display, TEXT("UnrealAssetTool: output: %s"), *OutputDir);
     return 0;
 }

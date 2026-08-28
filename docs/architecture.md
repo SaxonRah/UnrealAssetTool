@@ -27,7 +27,7 @@ UnrealAssetTool separates **extraction**, **storage**, and **interpretation**.
 
 The commandlet is the authoritative extractor. SQLite and future AI summaries are derived indexes.
 
-Schema v8 further separates **scanner-only authored state** from **reproducible reconstruction**. Unreal extracts values that require deserialized editor objects (CDO/component/widget overrides and Timeline curve keys). Python derives function/event models, relations, graph context, summaries, and editor-ControlRig→RigVM joins from canonical JSONL so those algorithms can evolve without rescanning a project.
+Schema v9 further separates **scanner-only authored state** from **reproducible reconstruction**. Unreal extracts values that require deserialized editor objects (CDO/component/widget overrides and Timeline curve keys). Python derives function/event models, relations, graph context, summaries, and editor-ControlRig→RigVM joins from canonical JSONL so those algorithms can evolve without rescanning a project.
 
 ## Why JSONL is canonical
 
@@ -162,6 +162,12 @@ Raw source chunks are the safe MVP because no source parser is required inside U
 
 Clang tooling is a better long-term parser than regex because Unreal C++ has macros, generated headers, conditional compilation, and platform-specific definitions.
 
+## AI gameplay extraction
+
+Schema v9 treats AI authoring assets as connected executable structure rather than flat UObject metadata. Behavior Tree hierarchy/decorator/service topology, Blackboard schemas, EQS option-generator-test pipelines, and StateTree editor hierarchy/transitions/bindings are canonical scanner facts. Python derives cross-system edges and compact per-asset context so a query can expand from an AI controller/Blueprint task into the Behavior Tree, Blackboard, EQS query, or StateTree that actually drives it.
+
+The extractor intentionally uses reflected fields on loaded AI assets. This avoids introducing hard linker dependencies on AIModule or StateTreeEditorModule while still reading the UE 5.8 editor/runtime structures that Unreal itself deserializes.
+
 ## Asset-specific extractors
 
 Generic UObject reflection can discover many properties, but semantic serializers should exist for asset classes where relationships matter more than a flat property dump.
@@ -230,4 +236,4 @@ That makes the Unreal project itself a browsable knowledge source for an AI agen
 
 ## Derived visual-program views
 
-The commandlet owns engine-truth extraction. Python may build deterministic retrieval views over those facts without changing their meaning. In schema v8 this includes canonical function/event definitions, semantic relations, bounded graph-context text, Blueprint summaries, and a graph-first Control Rig editor-node to RigVM-model join. Derived views must retain ambiguity/status instead of silently guessing and must be regenerable from JSONL without launching Unreal.
+The commandlet owns engine-truth extraction. Python may build deterministic retrieval views over those facts without changing their meaning. In schema v9 this includes canonical function/event definitions, semantic relations, bounded graph-context text, Blueprint summaries, and a graph-first Control Rig editor-node to RigVM-model join. Derived views must retain ambiguity/status instead of silently guessing and must be regenerable from JSONL without launching Unreal.

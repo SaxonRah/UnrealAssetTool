@@ -19,7 +19,7 @@ Given a `.uproject`, UnrealAssetTool should answer questions such as:
 
 The output is deliberately **loss-minimizing and sharded**. Raw structural facts are stored first; higher-level summaries can be derived later and regenerated without rescanning Unreal assets.
 
-Schema 8 keeps that boundary explicit: scanner-only facts (designer defaults, Timeline curve keys, widget instance overrides) are canonical JSONL, while function/event normalization, semantic relations, graph-context text, summaries, and Control Rig/RigVM joins are deterministic Python-derived views.
+Schema 9 keeps that boundary explicit: scanner-only facts (designer defaults, Timeline curve keys, widget instance overrides) are canonical JSONL, while function/event normalization, semantic relations, graph-context text, summaries, and Control Rig/RigVM joins are deterministic Python-derived views.
 
 ## Why it runs inside Unreal
 
@@ -36,7 +36,7 @@ The primary scanner is therefore an **Editor Commandlet**. Unreal itself supplie
 
 A small Python launcher invokes the commandlet and converts the JSONL records into `uat.db` for fast retrieval.
 
-## Current milestone (0.4.0)
+## Current milestone (0.5.0)
 
 The first vertical slice indexes:
 
@@ -88,6 +88,18 @@ For Blueprint-family assets the scanner loads the real asset and records:
 - deterministic derived Blueprint relations, per-graph AI context, per-Blueprint summaries, and graph-first Control Rig editor-node to RigVM-model joins that can be regenerated without running Unreal;
 
 This is enough to reconstruct a large portion of Blueprint control/data flow without screenshots or documentation.
+
+### AI gameplay graphs
+
+Schema 9 adds first-class extraction for Unreal AI authoring systems:
+
+- Behavior Trees: root/composite/task/decorator/service nodes, child ordering, decorator logic, service/decorator attachments, Blackboard association, and reflected per-node settings;
+- Blackboards: parent inheritance, key ordering/names/types, instance-sync settings, and key-type configuration;
+- EQS: query options, generators, tests, scoring/filter configuration, and reflected generator/test settings;
+- StateTree: editor-data roots, hierarchical states, evaluators, global/state tasks, conditions/considerations, transitions, property bindings, linked StateTree assets, and reflected instance-object settings;
+- deterministic `ai_relations.jsonl` and `ai_summaries.jsonl` views tying those assets to each other and to Blueprint-backed AI nodes.
+
+The AI scanners are reflection-first and do not add hard AIModule or StateTreeEditorModule link dependencies to UnrealAssetTool.
 
 ## Repository layout
 
@@ -187,6 +199,23 @@ E:\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Cmd.exe MyProject.uproject -run=Unr
   source_chunks.jsonl
   assets.jsonl
   asset_dependencies.jsonl
+  behavior_trees.jsonl
+  behavior_tree_nodes.jsonl
+  behavior_tree_edges.jsonl
+  blackboards.jsonl
+  blackboard_keys.jsonl
+  eqs_queries.jsonl
+  eqs_options.jsonl
+  eqs_generators.jsonl
+  eqs_tests.jsonl
+  statetrees.jsonl
+  statetree_states.jsonl
+  statetree_nodes.jsonl
+  statetree_transitions.jsonl
+  statetree_bindings.jsonl
+  ai_properties.jsonl
+  ai_relations.jsonl
+  ai_summaries.jsonl
   blueprints.jsonl
   blueprint_graphs.jsonl
   blueprint_nodes.jsonl

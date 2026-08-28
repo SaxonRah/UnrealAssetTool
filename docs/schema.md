@@ -1,4 +1,4 @@
-# UnrealAssetTool schema v8
+# UnrealAssetTool schema v9
 
 The scan format is line-oriented so individual records can be streamed, indexed, diffed, embedded, or retrieved without parsing a monolithic project document.
 
@@ -341,7 +341,7 @@ Graph scanning also de-duplicates emitted node, pin, and edge identities within 
 The Python derivation layer has `derived_schema_version = 1` and emits `rigvm_editor_links.jsonl`, `blueprint_relations.jsonl`, `blueprint_graph_context.jsonl`, and `blueprint_summaries.jsonl`. These are reproducible indexes over canonical scan data and can be regenerated with `uatool.py derive`. The raw Unreal schema version and derived schema version are recorded separately in `manifest.json`.
 
 
-## Schema v8 Blueprint reconstruction streams
+## Schema v9 Blueprint reconstruction streams
 
 ### `blueprint_state_values.jsonl`
 
@@ -372,7 +372,7 @@ reflected properties.
 Normalized `FWidgetAnimationBinding` records: animation identity, widget name,
 slot-widget name, animation GUID, root-widget flag, and dynamic binding data.
 
-## Schema v8 derived reconstruction streams
+## Schema v9 derived reconstruction streams
 
 These files are reproducible with `python scripts/uatool.py derive <output>` and
 do not require reopening Unreal.
@@ -392,7 +392,7 @@ facts from serialized node properties and expose output parameters.
 
 ### `rigvm_editor_links.jsonl`
 
-Schema v8 uses graph-first Control Rig matching: the entire editor graph is
+Schema v9 uses graph-first Control Rig matching: the entire editor graph is
 matched to a RigVM graph scope using exact hierarchy segments, model node names,
 positions, and graph shape before individual nodes are joined.  This avoids
 ambiguities from repeated Entry/Return/Sequence nodes in nested Control Rig
@@ -417,3 +417,54 @@ Canonical node/pin/edge tables remain authoritative.
 Per-Blueprint summaries additionally count functions, events, defaults,
 component/state overrides, Timelines/tracks/keys, widgets/properties/bindings,
 and widget animations/bindings.
+
+
+## AI gameplay systems (schema v9)
+
+### `behavior_trees.jsonl`
+
+One record per `UBehaviorTree`, including the root node, associated Blackboard, root decorator count, and root decorator logic.
+
+### `behavior_tree_nodes.jsonl`
+
+One record per composite, task, decorator, service, or auxiliary node. Records retain concrete class identity, display name, tree ownership, child position, and attachment metadata. Blueprint-generated node classes are joined to their originating Blueprint in the derived AI relation layer.
+
+### `behavior_tree_edges.jsonl`
+
+Ordered Behavior Tree topology. Child edges preserve child index, decorator IDs, and the serialized `FBTDecoratorLogic` expression. Service edges preserve service attachment to composites.
+
+### `blackboards.jsonl` / `blackboard_keys.jsonl`
+
+Blackboard inheritance and ordered key definitions. Each key records its key-type object/class and instance-sync flag. Key-type UObject settings are stored in `ai_properties.jsonl`.
+
+### `eqs_queries.jsonl`, `eqs_options.jsonl`, `eqs_generators.jsonl`, `eqs_tests.jsonl`
+
+Canonical Environment Query structure: query -> ordered option -> generator + ordered tests. Generator/test concrete classes and key scoring/filter fields are promoted; the full non-transient reflected settings remain available in `ai_properties.jsonl`.
+
+### `statetrees.jsonl`
+
+One record per `UStateTree`, including the reflected editor-data object and compile hash.
+
+### `statetree_states.jsonl`
+
+Hierarchical editor states with stable state ID, parent/child ordering, display name, state type, selection behavior, enabled/tag/task-completion information, required-event data, and linked StateTree/subtree information.
+
+### `statetree_nodes.jsonl`
+
+Editor nodes for evaluators, global tasks, state tasks, enter conditions, considerations, and transition conditions. `FStateTreeEditorNode` identity/expression fields are normalized; native instanced-struct payloads are retained as bounded raw text and Blueprint/object-backed node instances include their concrete class.
+
+### `statetree_transitions.jsonl`
+
+One record per editor transition with source state, order, trigger, target state-link text, event/priority/fallback/delay settings, and bounded raw transition text.
+
+### `statetree_bindings.jsonl`
+
+One record per editor property binding, preserving source/target property paths and output-binding direction.
+
+### `ai_properties.jsonl`
+
+Shared reflected-property stream for Behavior Tree nodes, Blackboard key-type objects, EQS options/generators/tests, and StateTree editor/state/instance objects. It records owner/system identity, property type/text, direct UObject targets, flags, and truncation state.
+
+### Derived `ai_relations.jsonl` and `ai_summaries.jsonl`
+
+`uatool derive`, `pack`, and `bundle` generate reproducible AI-oriented joins including Behavior Tree -> Blackboard, ordered BT child/service edges, Blackboard inheritance/keys, EQS option/generator/test edges, StateTree hierarchy/node/transition/binding relationships, linked StateTrees, AI UObject references, and Blueprint implementations of Blueprint-backed AI nodes. `ai_summaries.jsonl` renders those facts into bounded per-asset retrieval context.
