@@ -292,18 +292,108 @@ def create_schema(conn: sqlite3.Connection) -> None:
             graph_name TEXT NOT NULL,
             node_class TEXT NOT NULL,
             property_name TEXT NOT NULL,
+            property_path TEXT NOT NULL,
             owner_class TEXT NOT NULL,
+            declaring_type TEXT NOT NULL,
+            depth INTEGER NOT NULL,
             property_type TEXT NOT NULL,
             cpp_type TEXT NOT NULL,
             value TEXT NOT NULL,
             object_path TEXT NOT NULL,
+            object_class TEXT NOT NULL,
             property_flags INTEGER NOT NULL,
             truncated INTEGER NOT NULL,
-            PRIMARY KEY(node_id, owner_class, property_name)
+            PRIMARY KEY(node_id, declaring_type, property_path)
         );
         CREATE INDEX bp_node_props_node_idx ON blueprint_node_properties(node_id);
         CREATE INDEX bp_node_props_name_idx ON blueprint_node_properties(property_name);
+        CREATE INDEX bp_node_props_path_idx ON blueprint_node_properties(property_path);
         CREATE INDEX bp_node_props_object_idx ON blueprint_node_properties(object_path);
+
+        CREATE TABLE blueprint_node_references (
+            node_id TEXT NOT NULL,
+            blueprint_path TEXT NOT NULL,
+            graph_name TEXT NOT NULL,
+            node_class TEXT NOT NULL,
+            property_path TEXT NOT NULL,
+            target_object_path TEXT NOT NULL,
+            target_class TEXT NOT NULL,
+            node_owned INTEGER NOT NULL,
+            PRIMARY KEY(node_id, property_path, target_object_path)
+        );
+        CREATE INDEX bp_node_refs_target_idx ON blueprint_node_references(target_object_path);
+        CREATE INDEX bp_node_refs_node_idx ON blueprint_node_references(node_id);
+
+        CREATE TABLE blueprint_bindings (
+            node_id TEXT NOT NULL,
+            blueprint_path TEXT NOT NULL,
+            graph_name TEXT NOT NULL,
+            node_class TEXT NOT NULL,
+            binding_object TEXT NOT NULL,
+            binding_key TEXT NOT NULL,
+            target_property TEXT NOT NULL,
+            access_path TEXT NOT NULL,
+            property_path_json TEXT NOT NULL,
+            compiled_context TEXT NOT NULL,
+            pin_type TEXT NOT NULL,
+            promoted_pin_type TEXT NOT NULL,
+            raw_value TEXT NOT NULL,
+            PRIMARY KEY(node_id, binding_key)
+        );
+        CREATE INDEX bp_bindings_node_idx ON blueprint_bindings(node_id);
+        CREATE INDEX bp_bindings_access_idx ON blueprint_bindings(access_path);
+        CREATE INDEX bp_bindings_target_idx ON blueprint_bindings(target_property);
+
+        CREATE TABLE rigvm_objects (
+            object_id TEXT PRIMARY KEY,
+            blueprint_path TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            class_path TEXT NOT NULL,
+            name TEXT NOT NULL,
+            outer_object_id TEXT NOT NULL,
+            outer_class TEXT NOT NULL,
+            operation TEXT NOT NULL,
+            json TEXT NOT NULL
+        );
+        CREATE INDEX rigvm_objects_blueprint_idx ON rigvm_objects(blueprint_path, kind);
+        CREATE INDEX rigvm_objects_class_idx ON rigvm_objects(class_path);
+        CREATE INDEX rigvm_objects_operation_idx ON rigvm_objects(operation);
+
+        CREATE TABLE rigvm_properties (
+            object_id TEXT NOT NULL,
+            blueprint_path TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            class_path TEXT NOT NULL,
+            declaring_type TEXT NOT NULL,
+            property_name TEXT NOT NULL,
+            property_path TEXT NOT NULL,
+            property_type TEXT NOT NULL,
+            cpp_type TEXT NOT NULL,
+            value TEXT NOT NULL,
+            object_path TEXT NOT NULL,
+            object_class TEXT NOT NULL,
+            property_flags INTEGER NOT NULL,
+            truncated INTEGER NOT NULL,
+            PRIMARY KEY(object_id, declaring_type, property_path)
+        );
+        CREATE INDEX rigvm_props_object_idx ON rigvm_properties(object_id);
+        CREATE INDEX rigvm_props_name_idx ON rigvm_properties(property_name);
+        CREATE INDEX rigvm_props_value_idx ON rigvm_properties(value);
+
+        CREATE TABLE rigvm_references (
+            source_object_id TEXT NOT NULL,
+            blueprint_path TEXT NOT NULL,
+            source_kind TEXT NOT NULL,
+            source_class TEXT NOT NULL,
+            property_path TEXT NOT NULL,
+            target_object_id TEXT NOT NULL,
+            target_kind TEXT NOT NULL,
+            target_class TEXT NOT NULL,
+            PRIMARY KEY(source_object_id, property_path, target_object_id)
+        );
+        CREATE INDEX rigvm_refs_source_idx ON rigvm_references(source_object_id);
+        CREATE INDEX rigvm_refs_target_idx ON rigvm_references(target_object_id);
+        CREATE INDEX rigvm_refs_blueprint_idx ON rigvm_references(blueprint_path);
 
         CREATE TABLE blueprint_edges (
             blueprint_path TEXT NOT NULL,
@@ -441,21 +531,115 @@ def build_database(output: Path) -> Path:
             )
 
         for row in iter_jsonl(output / "blueprint_node_properties.jsonl"):
+            property_name = row.get("property_name", "")
+            property_path = row.get("property_path", property_name)
+            owner_class = row.get("owner_class", "")
             conn.execute(
-                "INSERT OR REPLACE INTO blueprint_node_properties VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT OR REPLACE INTO blueprint_node_properties VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     row.get("node_id", ""),
                     row.get("blueprint_path", ""),
                     row.get("graph_name", ""),
                     row.get("node_class", ""),
-                    row.get("property_name", ""),
-                    row.get("owner_class", ""),
+                    property_name,
+                    property_path,
+                    owner_class,
+                    row.get("declaring_type", owner_class),
+                    int(row.get("depth", 0)),
                     row.get("property_type", ""),
                     row.get("cpp_type", ""),
                     row.get("value", ""),
                     row.get("object_path", ""),
+                    row.get("object_class", ""),
                     int(row.get("property_flags", 0)),
                     1 if row.get("truncated", False) else 0,
+                ),
+            )
+
+        for row in iter_jsonl(output / "blueprint_node_references.jsonl"):
+            conn.execute(
+                "INSERT OR IGNORE INTO blueprint_node_references VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    row.get("node_id", ""),
+                    row.get("blueprint_path", ""),
+                    row.get("graph_name", ""),
+                    row.get("node_class", ""),
+                    row.get("property_path", ""),
+                    row.get("target_object_path", ""),
+                    row.get("target_class", ""),
+                    1 if row.get("node_owned", False) else 0,
+                ),
+            )
+
+        for row in iter_jsonl(output / "blueprint_bindings.jsonl"):
+            conn.execute(
+                "INSERT OR REPLACE INTO blueprint_bindings VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    row.get("node_id", ""),
+                    row.get("blueprint_path", ""),
+                    row.get("graph_name", ""),
+                    row.get("node_class", ""),
+                    row.get("binding_object", ""),
+                    row.get("binding_key", ""),
+                    row.get("target_property", ""),
+                    row.get("access_path", ""),
+                    json.dumps(row.get("property_path", []), ensure_ascii=False, separators=(",", ":")),
+                    row.get("compiled_context", ""),
+                    row.get("pin_type", ""),
+                    row.get("promoted_pin_type", ""),
+                    row.get("raw_value", ""),
+                ),
+            )
+
+        for row in iter_jsonl(output / "rigvm_objects.jsonl"):
+            conn.execute(
+                "INSERT OR REPLACE INTO rigvm_objects VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    row.get("object_id", ""),
+                    row.get("blueprint_path", ""),
+                    row.get("kind", ""),
+                    row.get("class_path", ""),
+                    row.get("name", ""),
+                    row.get("outer_object_id", ""),
+                    row.get("outer_class", ""),
+                    row.get("operation", ""),
+                    json.dumps(row, ensure_ascii=False, separators=(",", ":")),
+                ),
+            )
+
+        for row in iter_jsonl(output / "rigvm_properties.jsonl"):
+            conn.execute(
+                "INSERT OR REPLACE INTO rigvm_properties VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    row.get("object_id", ""),
+                    row.get("blueprint_path", ""),
+                    row.get("kind", ""),
+                    row.get("class_path", ""),
+                    row.get("declaring_type", ""),
+                    row.get("property_name", ""),
+                    row.get("property_path", row.get("property_name", "")),
+                    row.get("property_type", ""),
+                    row.get("cpp_type", ""),
+                    row.get("value", ""),
+                    row.get("object_path", ""),
+                    row.get("object_class", ""),
+                    int(row.get("property_flags", 0)),
+                    1 if row.get("truncated", False) else 0,
+                ),
+            )
+
+        for row in iter_jsonl(output / "rigvm_references.jsonl"):
+            conn.execute(
+                "INSERT OR IGNORE INTO rigvm_references VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    row.get("source_object_id", ""),
+                    row.get("blueprint_path", ""),
+                    row.get("source_kind", ""),
+                    row.get("source_class", ""),
+                    row.get("property_path", ""),
+                    row.get("target_object_id", ""),
+                    row.get("target_kind", ""),
+                    row.get("target_class", ""),
                 ),
             )
 
@@ -565,11 +749,99 @@ def query(args: argparse.Namespace) -> int:
         print("\n[blueprint node properties]")
         rows = conn.execute(
             """
-            SELECT blueprint_path, graph_name, property_name, cpp_type, object_path,
+            SELECT blueprint_path, graph_name, property_path, cpp_type, object_path,
                    substr(value, 1, 240) AS value
             FROM blueprint_node_properties
-            WHERE property_name LIKE ? OR cpp_type LIKE ? OR value LIKE ?
-               OR object_path LIKE ? OR owner_class LIKE ? OR node_class LIKE ?
+            WHERE property_name LIKE ? OR property_path LIKE ? OR cpp_type LIKE ?
+               OR value LIKE ? OR object_path LIKE ? OR object_class LIKE ?
+               OR declaring_type LIKE ? OR node_class LIKE ?
+            LIMIT ?
+            """,
+            (
+                f"%{term}%", f"%{term}%", f"%{term}%", f"%{term}%",
+                f"%{term}%", f"%{term}%", f"%{term}%", f"%{term}%", limit,
+            ),
+        )
+        _print_rows(
+            rows,
+            ("blueprint_path", "graph_name", "property_path", "cpp_type", "object_path", "value"),
+        )
+
+        print("\n[blueprint node references]")
+        rows = conn.execute(
+            """
+            SELECT blueprint_path, graph_name, property_path, target_object_path, target_class
+            FROM blueprint_node_references
+            WHERE property_path LIKE ? OR target_object_path LIKE ? OR target_class LIKE ?
+            LIMIT ?
+            """,
+            (f"%{term}%", f"%{term}%", f"%{term}%", limit),
+        )
+        _print_rows(
+            rows,
+            ("blueprint_path", "graph_name", "property_path", "target_object_path", "target_class"),
+        )
+
+        print("\n[blueprint bindings]")
+        rows = conn.execute(
+            """
+            SELECT blueprint_path, graph_name, target_property, access_path, binding_key
+            FROM blueprint_bindings
+            WHERE binding_key LIKE ? OR target_property LIKE ? OR access_path LIKE ?
+               OR compiled_context LIKE ? OR pin_type LIKE ? OR promoted_pin_type LIKE ?
+               OR raw_value LIKE ? OR node_class LIKE ?
+            LIMIT ?
+            """,
+            (
+                f"%{term}%", f"%{term}%", f"%{term}%", f"%{term}%",
+                f"%{term}%", f"%{term}%", f"%{term}%", f"%{term}%", limit,
+            ),
+        )
+        _print_rows(
+            rows,
+            ("blueprint_path", "graph_name", "target_property", "access_path", "binding_key"),
+        )
+
+        print("\n[rigvm objects]")
+        rows = conn.execute(
+            """
+            SELECT blueprint_path, kind, operation, name, class_path
+            FROM rigvm_objects
+            WHERE name LIKE ? OR class_path LIKE ? OR operation LIKE ? OR outer_object_id LIKE ?
+            LIMIT ?
+            """,
+            (f"%{term}%", f"%{term}%", f"%{term}%", f"%{term}%", limit),
+        )
+        _print_rows(rows, ("blueprint_path", "kind", "operation", "name", "class_path"))
+
+        print("\n[rigvm properties]")
+        rows = conn.execute(
+            """
+            SELECT blueprint_path, kind, property_path, cpp_type, object_path,
+                   substr(value, 1, 240) AS value
+            FROM rigvm_properties
+            WHERE property_name LIKE ? OR property_path LIKE ? OR cpp_type LIKE ?
+               OR value LIKE ? OR object_path LIKE ? OR object_class LIKE ?
+               OR declaring_type LIKE ? OR class_path LIKE ?
+            LIMIT ?
+            """,
+            (
+                f"%{term}%", f"%{term}%", f"%{term}%", f"%{term}%",
+                f"%{term}%", f"%{term}%", f"%{term}%", f"%{term}%", limit,
+            ),
+        )
+        _print_rows(
+            rows,
+            ("blueprint_path", "kind", "property_path", "cpp_type", "object_path", "value"),
+        )
+
+        print("\n[rigvm references]")
+        rows = conn.execute(
+            """
+            SELECT blueprint_path, source_kind, property_path, target_kind, target_object_id
+            FROM rigvm_references
+            WHERE source_object_id LIKE ? OR source_class LIKE ? OR property_path LIKE ?
+               OR target_object_id LIKE ? OR target_class LIKE ? OR target_kind LIKE ?
             LIMIT ?
             """,
             (
@@ -579,7 +851,7 @@ def query(args: argparse.Namespace) -> int:
         )
         _print_rows(
             rows,
-            ("blueprint_path", "graph_name", "property_name", "cpp_type", "object_path", "value"),
+            ("blueprint_path", "source_kind", "property_path", "target_kind", "target_object_id"),
         )
 
         print("\n[assets]")

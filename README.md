@@ -34,7 +34,7 @@ The primary scanner is therefore an **Editor Commandlet**. Unreal itself supplie
 
 A small Python launcher invokes the commandlet and converts the JSONL records into `uat.db` for fast retrieval.
 
-## Current MVP (0.1.7)
+## Current MVP (0.1.9)
 
 The first vertical slice indexes:
 
@@ -66,6 +66,10 @@ For Blueprint-family assets the scanner loads the real asset and records:
 - normalized semantic operation/symbol/owner fields for core K2 node types;
 - structured semantic metadata for variable accesses, calls, events, casts, macros, branches, function boundaries, switches, selects, sequences, reroutes, self references, and actor spawning;
 - Animation Blueprint graph kinds, state machines, states, transitions, conduits, aliases, cached poses, linked layers/input poses, slots, sequence players, and graph/state/transition result nodes;
+- reflected non-transient node properties, including nested runtime-node structs flattened into addressable paths such as `Node.Sequence` and `Node.BlendSpace`;
+- node-owned AnimGraph binding subobjects plus normalized `PropertyBindings` records, so runtime/thread-safe binding paths are directly queryable;
+- normalized node-level UObject reference edges from reflected properties to assets/classes;
+- RigVM/Control Rig model objects discovered from the Blueprint's owned UObject hierarchy, including graphs, nodes, pins, links, reflected properties, and object-reference topology;
 - every pin, direction, type, defaults, and flags;
 - every pin-to-pin graph edge.
 
@@ -170,6 +174,11 @@ E:\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Cmd.exe MyProject.uproject -run=Unr
   blueprints.jsonl
   blueprint_nodes.jsonl
   blueprint_node_properties.jsonl
+  blueprint_node_references.jsonl
+  blueprint_bindings.jsonl
+  rigvm_objects.jsonl
+  rigvm_properties.jsonl
+  rigvm_references.jsonl
   blueprint_edges.jsonl
   uat.db
 ```
@@ -186,6 +195,34 @@ Quick search:
 python scripts\uatool.py query .uatool "Desired Aim Rotation"
 ```
 
+## Nested Blueprint property/reference indexing
+
+For visual graph nodes, important facts are often stored inside runtime structs rather than exposed as pins. UnrealAssetTool therefore flattens reflected structs into stable property paths. Examples include:
+
+```text
+Node.Sequence
+Node.BlendSpace
+Node.BlendProfile
+Node.ControlRigAssetReference.BlueprintRigClass
+Binding.*
+```
+
+Object-valued reflected fields are also emitted to `blueprint_node_references.jsonl`, giving retrieval a direct node-to-object relationship instead of forcing it to parse an exported struct string. Arrays of simple values are expanded with bounded indexed paths; arrays of structs remain available through their loss-minimizing exported value to avoid unbounded output growth.
+
+Property Access, Chooser/Proxy evaluation, BlendSpace players, sequence evaluators, Pose Drivers, Motion Matching blend profiles, and Control Rig graph model-node paths are promoted into node semantic fields when the reflected facts are available.
+
+## AnimGraph bindings and RigVM model extraction
+
+`blueprint_bindings.jsonl` normalizes the entries stored in AnimGraph node binding objects instead of leaving the entire `PropertyBindings` map as one reflection string. Records retain the target property, access path, path segments, compiled context, pin types, and the raw reflected value. This makes bindings such as `BlendTime -> Get_MMBlendTime` directly searchable.
+
+Control Rig editor nodes are only one presentation of a deeper RigVM model. UATool therefore also walks Blueprint-owned objects and records objects whose class hierarchy derives from `RigVMGraph`, `RigVMNode`, `RigVMPin`, or `RigVMLink`. The result is split into:
+
+- `rigvm_objects.jsonl`: object identity, kind, class, outer, and factual node operation classification;
+- `rigvm_properties.jsonl`: reflected RigVM graph/node/pin/link properties;
+- `rigvm_references.jsonl`: normalized object and object-array references such as graph-to-node, node-to-pin, pin-to-subpin/link, and references to external assets/classes when Unreal stores them as UObject properties.
+
+RigVM node operations distinguish function entry/return/reference, variables, units, dispatch, reroutes, enums, comments, parameters, library/template nodes, and related model-node classes by the actual Unreal class hierarchy. UATool does not infer a unit's behavior from its display name; deeper unit/function semantics can be promoted later from these model properties. This reflection-first path deliberately avoids depending on non-exported convenience methods of Unreal `MinimalAPI` editor classes.
+
 ## Design rule: facts first, interpretation second
 
 The scanner should avoid asking an LLM to infer facts that Unreal can state exactly. For example, Blueprint graph edges are stored as graph edges, not only as generated prose. Later passes may produce natural-language summaries such as:
@@ -201,6 +238,8 @@ Event Blueprint Update Animation
 But that summary is derived data. The underlying nodes, pins, defaults, classes, and links remain available so another model or newer summarizer can verify it.
 
 ## Next implementation phases
+
+Blueprint and visual-graph understanding remains the near-term priority because it is the project truth least recoverable from ordinary source text. The next passes should deepen RigVM/Control Rig unit and pin semantics, normalize additional visual systems (Behavior Trees, StateTree, PCG, materials, Niagara, Sequencer), and validate the schema against Blueprint-heavy Epic sample projects before spending substantial effort on native C++ parsing.
 
 ### 0.2 — project semantics
 

@@ -1,4 +1,4 @@
-# UnrealAssetTool schema v3
+# UnrealAssetTool schema v5
 
 The scan format is line-oriented so individual records can be streamed, indexed, diffed, embedded, or retrieved without parsing a monolithic project document.
 
@@ -16,7 +16,7 @@ Important fields:
 - `project_dir`
 - `include_generated`
 - `include_engine`
-- `counts`
+- `counts` (including Blueprint semantic/property/reference/binding counts and RigVM object/property/reference counts for schema v5)
 
 ## `files.jsonl`
 
@@ -160,15 +160,121 @@ Important fields:
 - `graph_name`
 - `node_class`
 - `property_name`
-- `owner_class`: the class that declared the property;
+- `property_path`: flattened address from the graph node, for example `Node.Sequence` or `Binding.PropertyBindings`;
+- `owner_class`: retained compatibility field for the declaring Unreal type;
+- `declaring_type`: class or script-struct that declared the property;
+- `depth`: zero for a direct node property, greater than zero for nested struct/binding fields;
 - `property_type`: Unreal reflection property class;
 - `cpp_type`
 - `value`: Unreal's text export of the property value;
-- `object_path`: direct UObject reference when the property is an object property;
+- `object_path`: direct UObject reference when the property value resolves to an object;
+- `object_class`: concrete class of `object_path`;
 - `property_flags`
 - `truncated`: true only when an individual exported value exceeded the safety cap.
 
-This is intentionally a raw-facts layer. For example, plugin-specific nodes such as Property Access, Motion Matching, Chooser, or Control Rig can expose their serialized settings here before UATool has a hand-written semantic decoder for that node type.
+Nested structs are recursively flattened to a bounded depth. Arrays of simple scalar/name/object values are expanded with paths such as `Path[0]`; arrays of structs remain represented by their exported parent value to avoid unbounded growth. Node-owned binding objects are selectively traversed so AnimGraph property bindings become visible without recursively walking arbitrary graphs or assets.
+
+This remains a raw-facts layer. Dedicated semantic fields are promoted only when the reflected fact is unambiguous.
+
+## `blueprint_node_references.jsonl`
+
+Normalized object-reference edges discovered while reflecting graph-node properties.
+
+```json
+{
+  "node_id": "...",
+  "blueprint_path": "/Game/Characters/ABP_Player.ABP_Player",
+  "graph_name": "AnimGraph",
+  "node_class": "/Script/AnimGraph.AnimGraphNode_BlendSpacePlayer",
+  "property_path": "Node.BlendSpace",
+  "target_object_path": "/Game/Animation/BS_Locomotion.BS_Locomotion",
+  "target_class": "/Script/Engine.BlendSpace",
+  "node_owned": false
+}
+```
+
+`node_owned` distinguishes editor subobjects such as an AnimGraph binding object from external assets/classes referenced by the node.
+
+## `blueprint_bindings.jsonl`
+
+One record per normalized entry in a node-owned AnimGraph binding object's `PropertyBindings` map.
+
+Important fields:
+
+- `node_id`
+- `blueprint_path`
+- `graph_name`
+- `node_class`
+- `binding_object`
+- `binding_key`
+- `target_property`
+- `access_path`
+- `property_path[]`
+- `compiled_context`
+- `pin_type`
+- `promoted_pin_type`
+- `raw_value`
+
+This stream preserves both normalized fields and the raw reflected map-value text. It is intended for facts such as an AnimGraph runtime property being driven by a Property Access/function path.
+
+## `rigvm_objects.jsonl`
+
+One record per Blueprint-owned UObject whose class derives from `RigVMGraph`, `RigVMNode`, `RigVMPin`, or `RigVMLink`.
+
+Important fields:
+
+- `object_id`: full UObject path;
+- `blueprint_path`
+- `kind`: `graph`, `node`, `pin`, or `link`;
+- `class_path`
+- `name`
+- `outer_object_id`
+- `outer_class`
+- `operation`: factual class-based operation for RigVM nodes.
+
+Recognized node operations include `rigvm_function_entry`, `rigvm_function_return`, `rigvm_function_reference`, `rigvm_variable`, `rigvm_unit`, `rigvm_dispatch`, `rigvm_invoke_entry`, `rigvm_reroute`, `rigvm_enum`, `rigvm_comment`, `rigvm_parameter`, `rigvm_library`, and `rigvm_template`. Unknown RigVM node subclasses remain `rigvm_node` rather than having behavior inferred from names.
+
+## `rigvm_properties.jsonl`
+
+Reflected non-transient properties for each object in `rigvm_objects.jsonl`.
+
+Important fields:
+
+- `object_id`
+- `blueprint_path`
+- `kind`
+- `class_path`
+- `declaring_type`
+- `property_name`
+- `property_path`
+- `property_type`
+- `cpp_type`
+- `value`
+- `object_path`
+- `object_class`
+- `property_flags`
+- `truncated`
+
+This is a loss-minimizing raw layer intended to expose actual RigVM model data such as node pins, pin types/defaults/directions, function headers, variable metadata, and unit/dispatch configuration when those fields are reflected by Unreal.
+
+## `rigvm_references.jsonl`
+
+Normalized UObject relationships found in reflected RigVM properties. Direct object properties and arrays of object properties are emitted independently from the text representation.
+
+```json
+{
+  "source_object_id": "/Game/Rigs/CR_Example.CR_Example:Model",
+  "blueprint_path": "/Game/Rigs/CR_Example.CR_Example",
+  "source_kind": "graph",
+  "source_class": "/Script/RigVMDeveloper.RigVMGraph",
+  "property_path": "Nodes[0]",
+  "target_object_id": "/Game/Rigs/CR_Example.CR_Example:Model.RigUnit_BeginExecution",
+  "target_kind": "node",
+  "target_class": "/Script/RigVMDeveloper.RigVMUnitNode"
+}
+```
+
+Targets may also be non-RigVM assets/classes; in that case `target_kind` is empty while the exact target class/path remain recorded.
 
 ## `blueprint_edges.jsonl`
 

@@ -60,10 +60,11 @@
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
 #include "UObject/UnrealType.h"
+#include "UObject/UObjectGlobals.h"
 
 namespace UnrealAssetTool
 {
-    static constexpr int32 SchemaVersion = 3;
+    static constexpr int32 SchemaVersion = 5;
     static constexpr int32 SourceChunkLines = 200;
 
     class FJsonlWriter
@@ -116,6 +117,11 @@ namespace UnrealAssetTool
         int64 BlueprintNodes = 0;
         int64 BlueprintSemanticNodes = 0;
         int64 BlueprintNodeProperties = 0;
+        int64 BlueprintNodeReferences = 0;
+        int64 BlueprintBindings = 0;
+        int64 RigVMObjects = 0;
+        int64 RigVMProperties = 0;
+        int64 RigVMReferences = 0;
         int64 BlueprintEdges = 0;
         int64 BlueprintVariables = 0;
         int64 BlueprintComponents = 0;
@@ -321,6 +327,330 @@ namespace UnrealAssetTool
         return TEXT("");
     }
 
+    static FString ExportReflectedPropertyText(UObject* Object, const FName PropertyName)
+    {
+        if (!Object)
+        {
+            return TEXT("");
+        }
+
+        FProperty* Property = Object->GetClass()->FindPropertyByName(PropertyName);
+        if (!Property)
+        {
+            return TEXT("");
+        }
+
+        FString Value;
+        Property->ExportText_InContainer(
+            0,
+            Value,
+            Object,
+            nullptr,
+            Object,
+            PPF_None,
+            nullptr);
+        return Value;
+    }
+
+    static UObject* GetReflectedObjectProperty(UObject* Object, const FName PropertyName)
+    {
+        if (!Object)
+        {
+            return nullptr;
+        }
+
+        FObjectPropertyBase* Property = CastField<FObjectPropertyBase>(
+            Object->GetClass()->FindPropertyByName(PropertyName));
+        return Property ? Property->GetObjectPropertyValue_InContainer(Object) : nullptr;
+    }
+
+    static UObject* GetReflectedStructObjectProperty(
+        UObject* Object,
+        const FName StructPropertyName,
+        const FName ChildPropertyName)
+    {
+        if (!Object)
+        {
+            return nullptr;
+        }
+
+        FStructProperty* StructProperty = CastField<FStructProperty>(
+            Object->GetClass()->FindPropertyByName(StructPropertyName));
+        if (!StructProperty || !StructProperty->Struct)
+        {
+            return nullptr;
+        }
+
+        FObjectPropertyBase* ChildProperty = CastField<FObjectPropertyBase>(
+            StructProperty->Struct->FindPropertyByName(ChildPropertyName));
+        if (!ChildProperty)
+        {
+            return nullptr;
+        }
+
+        const void* StructValue = StructProperty->ContainerPtrToValuePtr<void>(Object);
+        const void* ChildValue = ChildProperty->ContainerPtrToValuePtr<void>(StructValue);
+        return ChildProperty->GetObjectPropertyValue(ChildValue);
+    }
+
+    static UObject* GetReflectedNestedObjectProperty(
+        UObject* Object,
+        const TArray<FName>& PropertyPath)
+    {
+        if (!Object || PropertyPath.IsEmpty())
+        {
+            return nullptr;
+        }
+
+        const UStruct* CurrentStruct = Object->GetClass();
+        const void* CurrentContainer = Object;
+
+        for (int32 Index = 0; Index < PropertyPath.Num(); ++Index)
+        {
+            if (!CurrentStruct || !CurrentContainer)
+            {
+                return nullptr;
+            }
+
+            FProperty* Property = CurrentStruct->FindPropertyByName(PropertyPath[Index]);
+            if (!Property)
+            {
+                return nullptr;
+            }
+
+            const void* ValuePtr = Property->ContainerPtrToValuePtr<void>(CurrentContainer);
+            const bool bLast = Index == PropertyPath.Num() - 1;
+            if (bLast)
+            {
+                if (const FObjectPropertyBase* ObjectProperty = CastField<FObjectPropertyBase>(Property))
+                {
+                    return ObjectProperty->GetObjectPropertyValue(ValuePtr);
+                }
+                return nullptr;
+            }
+
+            const FStructProperty* StructProperty = CastField<FStructProperty>(Property);
+            if (!StructProperty || !StructProperty->Struct)
+            {
+                return nullptr;
+            }
+
+            CurrentStruct = StructProperty->Struct;
+            CurrentContainer = ValuePtr;
+        }
+
+        return nullptr;
+    }
+
+    static TArray<FString> GetReflectedStructArrayFieldTexts(
+        UObject* Object,
+        const FName StructPropertyName,
+        const FName ArrayPropertyName,
+        const FName ElementFieldName)
+    {
+        TArray<FString> Result;
+        if (!Object)
+        {
+            return Result;
+        }
+
+        FStructProperty* StructProperty = CastField<FStructProperty>(
+            Object->GetClass()->FindPropertyByName(StructPropertyName));
+        if (!StructProperty || !StructProperty->Struct)
+        {
+            return Result;
+        }
+
+        FArrayProperty* ArrayProperty = CastField<FArrayProperty>(
+            StructProperty->Struct->FindPropertyByName(ArrayPropertyName));
+        FStructProperty* InnerStructProperty = ArrayProperty
+            ? CastField<FStructProperty>(ArrayProperty->Inner)
+            : nullptr;
+        if (!ArrayProperty || !InnerStructProperty || !InnerStructProperty->Struct)
+        {
+            return Result;
+        }
+
+        FProperty* ElementField = InnerStructProperty->Struct->FindPropertyByName(ElementFieldName);
+        if (!ElementField)
+        {
+            return Result;
+        }
+
+        const void* StructValue = StructProperty->ContainerPtrToValuePtr<void>(Object);
+        const void* ArrayValue = ArrayProperty->ContainerPtrToValuePtr<void>(StructValue);
+        FScriptArrayHelper Helper(ArrayProperty, ArrayValue);
+        Result.Reserve(Helper.Num());
+
+        for (int32 Index = 0; Index < Helper.Num(); ++Index)
+        {
+            const void* ElementValue = Helper.GetRawPtr(Index);
+            const void* FieldValue = ElementField->ContainerPtrToValuePtr<void>(ElementValue);
+            FString FieldText;
+            ElementField->ExportTextItem_Direct(
+                FieldText,
+                FieldValue,
+                nullptr,
+                Object,
+                PPF_None,
+                nullptr);
+            Result.Add(MoveTemp(FieldText));
+        }
+        return Result;
+    }
+
+    static TArray<FString> GetReflectedArrayElementTexts(UObject* Object, const FName PropertyName)
+    {
+        TArray<FString> Result;
+        if (!Object)
+        {
+            return Result;
+        }
+
+        FArrayProperty* ArrayProperty = CastField<FArrayProperty>(
+            Object->GetClass()->FindPropertyByName(PropertyName));
+        if (!ArrayProperty || !ArrayProperty->Inner)
+        {
+            return Result;
+        }
+
+        const void* ArrayValue = ArrayProperty->ContainerPtrToValuePtr<void>(Object);
+        FScriptArrayHelper Helper(ArrayProperty, ArrayValue);
+        Result.Reserve(Helper.Num());
+
+        for (int32 Index = 0; Index < Helper.Num(); ++Index)
+        {
+            FString ElementText;
+            ArrayProperty->Inner->ExportTextItem_Direct(
+                ElementText,
+                Helper.GetRawPtr(Index),
+                nullptr,
+                Object,
+                PPF_None,
+                nullptr);
+            Result.Add(MoveTemp(ElementText));
+        }
+        return Result;
+    }
+
+    static void ApplyReflectedSemanticEnrichment(
+        UBlueprint* Blueprint,
+        UEdGraphNode* Node,
+        const TSharedRef<FJsonObject>& Semantic,
+        FString& OutOperation,
+        FString& OutSymbol,
+        FString& OutOwner)
+    {
+        if (!Node)
+        {
+            return;
+        }
+
+        const auto SetAssetReference = [&OutSymbol, &OutOwner, &Semantic](
+            const TCHAR* FieldName,
+            UObject* Asset)
+        {
+            if (!Asset)
+            {
+                return;
+            }
+            const FString AssetPath = Asset->GetPathName();
+            OutSymbol = Asset->GetName();
+            OutOwner = AssetPath;
+            Semantic->SetStringField(FieldName, AssetPath);
+            Semantic->SetStringField(
+                FString::Printf(TEXT("%s_class"), FieldName),
+                Asset->GetClass()->GetPathName());
+        };
+
+        if (OutOperation == TEXT("property_access"))
+        {
+            const FString TextPath = ExportReflectedPropertyText(Node, TEXT("TextPath"));
+            if (!TextPath.IsEmpty())
+            {
+                OutSymbol = TextPath;
+                Semantic->SetStringField(TEXT("access_path"), TextPath);
+            }
+
+            const TArray<FString> Segments = GetReflectedArrayElementTexts(Node, TEXT("Path"));
+            TArray<TSharedPtr<FJsonValue>> SegmentJson;
+            SegmentJson.Reserve(Segments.Num());
+            for (const FString& Segment : Segments)
+            {
+                SegmentJson.Add(MakeShared<FJsonValueString>(Segment));
+            }
+            Semantic->SetArrayField(TEXT("path_segments"), SegmentJson);
+        }
+        else if (OutOperation == TEXT("evaluate_chooser"))
+        {
+            SetAssetReference(TEXT("chooser_asset"), GetReflectedObjectProperty(Node, TEXT("Chooser")));
+        }
+        else if (OutOperation == TEXT("evaluate_proxy"))
+        {
+            SetAssetReference(TEXT("proxy_asset"), GetReflectedObjectProperty(Node, TEXT("Proxy")));
+        }
+        else if (OutOperation == TEXT("anim_blend_space_player"))
+        {
+            SetAssetReference(
+                TEXT("blend_space"),
+                GetReflectedStructObjectProperty(Node, TEXT("Node"), TEXT("BlendSpace")));
+        }
+        else if (OutOperation == TEXT("anim_sequence_evaluator"))
+        {
+            SetAssetReference(
+                TEXT("animation_asset"),
+                GetReflectedStructObjectProperty(Node, TEXT("Node"), TEXT("Sequence")));
+        }
+        else if (OutOperation == TEXT("anim_pose_driver"))
+        {
+            SetAssetReference(
+                TEXT("pose_asset"),
+                GetReflectedStructObjectProperty(Node, TEXT("Node"), TEXT("PoseAsset")));
+
+            const TArray<FString> SourceBones = GetReflectedStructArrayFieldTexts(
+                Node, TEXT("Node"), TEXT("SourceBones"), TEXT("BoneName"));
+            TArray<TSharedPtr<FJsonValue>> SourceBoneJson;
+            SourceBoneJson.Reserve(SourceBones.Num());
+            for (const FString& BoneName : SourceBones)
+            {
+                SourceBoneJson.Add(MakeShared<FJsonValueString>(BoneName));
+            }
+            Semantic->SetArrayField(TEXT("source_bones"), SourceBoneJson);
+            if (OutSymbol.IsEmpty() && SourceBones.Num() == 1)
+            {
+                OutSymbol = SourceBones[0];
+            }
+        }
+        else if (OutOperation == TEXT("anim_control_rig"))
+        {
+            UObject* RigClass = GetReflectedNestedObjectProperty(
+                Node,
+                TArray<FName>{ FName(TEXT("Node")), FName(TEXT("ControlRigAssetReference")), FName(TEXT("BlueprintRigClass")) });
+            if (!RigClass)
+            {
+                RigClass = GetReflectedNestedObjectProperty(
+                    Node,
+                    TArray<FName>{ FName(TEXT("Node")), FName(TEXT("DefaultControlRigAssetReference")), FName(TEXT("BlueprintRigClass")) });
+            }
+            SetAssetReference(TEXT("control_rig_class"), RigClass);
+        }
+        else if (OutOperation == TEXT("anim_motion_matching"))
+        {
+            if (UObject* BlendProfile = GetReflectedStructObjectProperty(Node, TEXT("Node"), TEXT("BlendProfile")))
+            {
+                Semantic->SetStringField(TEXT("blend_profile"), BlendProfile->GetPathName());
+            }
+        }
+        else if (OutOperation == TEXT("control_rig_node"))
+        {
+            OutSymbol = ExportReflectedPropertyText(Node, TEXT("ModelNodePath"));
+            OutOwner = Node->GetGraph() ? Node->GetGraph()->GetPathName() :
+                (Blueprint ? Blueprint->GetPathName() : TEXT(""));
+            Semantic->SetStringField(TEXT("model_node_path"), OutSymbol);
+            Semantic->SetStringField(TEXT("semantic_depth"), TEXT("model_node_reference"));
+        }
+    }
+
     static void ApplyClassSemanticFallback(
         UEdGraphNode* Node,
         const TSharedRef<FJsonObject>& Semantic,
@@ -423,7 +753,8 @@ namespace UnrealAssetTool
             { TEXT("K2Node_LatentGameplayTaskCall"), TEXT("gameplay_task_call") },
             { TEXT("K2Node_InputDebugKey"), TEXT("input_debug_key") },
             { TEXT("K2Node_EvaluateLiveLinkFrameWithSpecificRole"), TEXT("evaluate_live_link_frame") },
-            { TEXT("K2Node_EvaluateProxy2"), TEXT("evaluate_proxy") }
+            { TEXT("K2Node_EvaluateProxy2"), TEXT("evaluate_proxy") },
+            { TEXT("ControlRigGraphNode"), TEXT("control_rig_node") }
         };
 
         const FString ClassName = Node->GetClass()->GetName();
@@ -451,12 +782,300 @@ namespace UnrealAssetTool
         }
     }
 
+    struct FNodePropertyScanContext
+    {
+        UEdGraphNode* Node = nullptr;
+        FString NodeId;
+        FString BlueprintPath;
+        FString GraphName;
+        FJsonlWriter* PropertiesWriter = nullptr;
+        FJsonlWriter* ReferencesWriter = nullptr;
+        FScanCounts* Counts = nullptr;
+        TSet<const UObject*> VisitedObjects;
+    };
+
+    static bool IsCapturableProperty(const FProperty* Property)
+    {
+        return Property &&
+            !Property->HasAnyPropertyFlags(
+                CPF_Transient | CPF_DuplicateTransient | CPF_NonPIEDuplicateTransient);
+    }
+
+    static bool WriteNodePropertyRecord(
+        FNodePropertyScanContext& Context,
+        FProperty* Property,
+        const void* ValuePtr,
+        const FString& PropertyPath,
+        const FString& DeclaringType,
+        int32 Depth)
+    {
+        if (!Property || !ValuePtr || !Context.PropertiesWriter || !Context.ReferencesWriter || !Context.Counts)
+        {
+            return true;
+        }
+
+        static constexpr int32 MaxExportedPropertyChars = 65536;
+
+        FString Value;
+        Property->ExportTextItem_Direct(
+            Value,
+            ValuePtr,
+            nullptr,
+            Context.Node,
+            PPF_None,
+            nullptr);
+
+        bool bTruncated = false;
+        if (Value.Len() > MaxExportedPropertyChars)
+        {
+            Value = Value.Left(MaxExportedPropertyChars);
+            bTruncated = true;
+        }
+
+        FString ObjectPath;
+        FString ObjectClass;
+        UObject* ObjectValue = nullptr;
+        if (const FObjectPropertyBase* ObjectProperty = CastField<FObjectPropertyBase>(Property))
+        {
+            ObjectValue = ObjectProperty->GetObjectPropertyValue(ValuePtr);
+            if (ObjectValue)
+            {
+                ObjectPath = ObjectValue->GetPathName();
+                ObjectClass = ObjectValue->GetClass()->GetPathName();
+            }
+        }
+
+        const TSharedRef<FJsonObject> PropertyJson = MakeShared<FJsonObject>();
+        PropertyJson->SetStringField(TEXT("node_id"), Context.NodeId);
+        PropertyJson->SetStringField(TEXT("blueprint_path"), Context.BlueprintPath);
+        PropertyJson->SetStringField(TEXT("graph_name"), Context.GraphName);
+        PropertyJson->SetStringField(TEXT("node_class"), Context.Node->GetClass()->GetPathName());
+        PropertyJson->SetStringField(TEXT("property_name"), Property->GetName());
+        PropertyJson->SetStringField(TEXT("property_path"), PropertyPath);
+        PropertyJson->SetStringField(TEXT("owner_class"), DeclaringType);
+        PropertyJson->SetStringField(TEXT("declaring_type"), DeclaringType);
+        PropertyJson->SetNumberField(TEXT("depth"), Depth);
+        PropertyJson->SetStringField(TEXT("property_type"), Property->GetClass()->GetName());
+        PropertyJson->SetStringField(TEXT("cpp_type"), Property->GetCPPType());
+        PropertyJson->SetStringField(TEXT("value"), Value);
+        PropertyJson->SetStringField(TEXT("object_path"), ObjectPath);
+        PropertyJson->SetStringField(TEXT("object_class"), ObjectClass);
+        PropertyJson->SetNumberField(TEXT("property_flags"), static_cast<double>(Property->GetPropertyFlags()));
+        PropertyJson->SetBoolField(TEXT("truncated"), bTruncated);
+
+        if (!Context.PropertiesWriter->Write(PropertyJson))
+        {
+            return false;
+        }
+        ++Context.Counts->BlueprintNodeProperties;
+
+        if (ObjectValue)
+        {
+            const TSharedRef<FJsonObject> ReferenceJson = MakeShared<FJsonObject>();
+            ReferenceJson->SetStringField(TEXT("node_id"), Context.NodeId);
+            ReferenceJson->SetStringField(TEXT("blueprint_path"), Context.BlueprintPath);
+            ReferenceJson->SetStringField(TEXT("graph_name"), Context.GraphName);
+            ReferenceJson->SetStringField(TEXT("node_class"), Context.Node->GetClass()->GetPathName());
+            ReferenceJson->SetStringField(TEXT("property_path"), PropertyPath);
+            ReferenceJson->SetStringField(TEXT("target_object_path"), ObjectPath);
+            ReferenceJson->SetStringField(TEXT("target_class"), ObjectClass);
+            ReferenceJson->SetBoolField(TEXT("node_owned"), ObjectValue->GetOuter() == Context.Node);
+
+            if (!Context.ReferencesWriter->Write(ReferenceJson))
+            {
+                return false;
+            }
+            ++Context.Counts->BlueprintNodeReferences;
+        }
+
+        return true;
+    }
+
+    static bool ScanReflectedPropertyValue(
+        FNodePropertyScanContext& Context,
+        FProperty* Property,
+        const void* ContainerPtr,
+        const FString& PropertyPath,
+        const FString& DeclaringType,
+        int32 Depth);
+
+    static bool ScanOwnedBindingObject(
+        FNodePropertyScanContext& Context,
+        UObject* ObjectValue,
+        const FString& Prefix,
+        int32 Depth)
+    {
+        if (!ObjectValue || Context.VisitedObjects.Contains(ObjectValue))
+        {
+            return true;
+        }
+
+        // Binding objects are editor-owned subobjects that contain the actual
+        // property-access bindings for many AnimGraph pins. Do not recursively
+        // walk arbitrary node-owned graphs/assets, which would explode the scan
+        // and create cycles.
+        if (!ObjectValue->GetClass()->GetName().Contains(TEXT("Binding")))
+        {
+            return true;
+        }
+
+        Context.VisitedObjects.Add(ObjectValue);
+
+        for (UClass* Class = ObjectValue->GetClass();
+             Class && Class != UObject::StaticClass();
+             Class = Class->GetSuperClass())
+        {
+            for (TFieldIterator<FProperty> It(Class, EFieldIterationFlags::None); It; ++It)
+            {
+                FProperty* Property = *It;
+                if (!IsCapturableProperty(Property))
+                {
+                    continue;
+                }
+
+                const FString ChildPath = FString::Printf(
+                    TEXT("%s.%s"),
+                    *Prefix,
+                    *Property->GetName());
+                if (!ScanReflectedPropertyValue(
+                        Context,
+                        Property,
+                        ObjectValue,
+                        ChildPath,
+                        Class->GetPathName(),
+                        Depth))
+                {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    static bool ScanReflectedPropertyValue(
+        FNodePropertyScanContext& Context,
+        FProperty* Property,
+        const void* ContainerPtr,
+        const FString& PropertyPath,
+        const FString& DeclaringType,
+        int32 Depth)
+    {
+        if (!IsCapturableProperty(Property) || !ContainerPtr)
+        {
+            return true;
+        }
+
+        static constexpr int32 MaxNestedDepth = 4;
+        static constexpr int32 MaxSimpleArrayElements = 64;
+
+        const void* ValuePtr = Property->ContainerPtrToValuePtr<void>(ContainerPtr);
+        if (!ValuePtr)
+        {
+            return true;
+        }
+
+        if (!WriteNodePropertyRecord(
+                Context,
+                Property,
+                ValuePtr,
+                PropertyPath,
+                DeclaringType,
+                Depth))
+        {
+            return false;
+        }
+
+        if (Depth >= MaxNestedDepth)
+        {
+            return true;
+        }
+
+        if (FStructProperty* StructProperty = CastField<FStructProperty>(Property))
+        {
+            if (!StructProperty->Struct)
+            {
+                return true;
+            }
+
+            for (TFieldIterator<FProperty> It(StructProperty->Struct, EFieldIterationFlags::Default); It; ++It)
+            {
+                FProperty* ChildProperty = *It;
+                if (!IsCapturableProperty(ChildProperty))
+                {
+                    continue;
+                }
+
+                const FString ChildPath = FString::Printf(
+                    TEXT("%s.%s"),
+                    *PropertyPath,
+                    *ChildProperty->GetName());
+                if (!ScanReflectedPropertyValue(
+                        Context,
+                        ChildProperty,
+                        ValuePtr,
+                        ChildPath,
+                        StructProperty->Struct->GetPathName(),
+                        Depth + 1))
+                {
+                    return false;
+                }
+            }
+        }
+        else if (FArrayProperty* ArrayProperty = CastField<FArrayProperty>(Property))
+        {
+            FProperty* Inner = ArrayProperty->Inner;
+            if (!Inner ||
+                CastField<FStructProperty>(Inner) ||
+                CastField<FArrayProperty>(Inner) ||
+                CastField<FSetProperty>(Inner) ||
+                CastField<FMapProperty>(Inner))
+            {
+                return true;
+            }
+
+            FScriptArrayHelper Helper(ArrayProperty, ValuePtr);
+            const int32 NumToWrite = FMath::Min(Helper.Num(), MaxSimpleArrayElements);
+            for (int32 Index = 0; Index < NumToWrite; ++Index)
+            {
+                const void* ElementValue = Helper.GetRawPtr(Index);
+                const FString ElementPath = FString::Printf(
+                    TEXT("%s[%d]"),
+                    *PropertyPath,
+                    Index);
+                if (!WriteNodePropertyRecord(
+                        Context,
+                        Inner,
+                        ElementValue,
+                        ElementPath,
+                        DeclaringType,
+                        Depth + 1))
+                {
+                    return false;
+                }
+            }
+        }
+        else if (const FObjectPropertyBase* ObjectProperty = CastField<FObjectPropertyBase>(Property))
+        {
+            UObject* ObjectValue = ObjectProperty->GetObjectPropertyValue(ValuePtr);
+            if (ObjectValue && ObjectValue->GetOuter() == Context.Node)
+            {
+                if (!ScanOwnedBindingObject(Context, ObjectValue, PropertyPath, Depth + 1))
+                {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
     static bool ScanNodeProperties(
         UEdGraphNode* Node,
         const FString& NodeId,
         const FString& BlueprintPath,
         const FString& GraphName,
         FJsonlWriter& PropertiesWriter,
+        FJsonlWriter& ReferencesWriter,
         FScanCounts& Counts)
     {
         if (!Node)
@@ -464,7 +1083,15 @@ namespace UnrealAssetTool
             return true;
         }
 
-        static constexpr int32 MaxExportedPropertyChars = 65536;
+        FNodePropertyScanContext Context;
+        Context.Node = Node;
+        Context.NodeId = NodeId;
+        Context.BlueprintPath = BlueprintPath;
+        Context.GraphName = GraphName;
+        Context.PropertiesWriter = &PropertiesWriter;
+        Context.ReferencesWriter = &ReferencesWriter;
+        Context.Counts = &Counts;
+        Context.VisitedObjects.Add(Node);
 
         for (UClass* Class = Node->GetClass();
              Class && Class != UEdGraphNode::StaticClass() && Class != UK2Node::StaticClass();
@@ -473,64 +1100,23 @@ namespace UnrealAssetTool
             for (TFieldIterator<FProperty> It(Class, EFieldIterationFlags::None); It; ++It)
             {
                 FProperty* Property = *It;
-                if (!Property ||
-                    Property->HasAnyPropertyFlags(
-                        CPF_Transient | CPF_DuplicateTransient | CPF_NonPIEDuplicateTransient))
+                if (!IsCapturableProperty(Property))
                 {
                     continue;
                 }
 
-                FString Value;
-                if (!Property->ExportText_InContainer(
-                        0,
-                        Value,
+                if (!ScanReflectedPropertyValue(
+                        Context,
+                        Property,
                         Node,
-                        nullptr,
-                        Node,
-                        PPF_None,
-                        nullptr))
-                {
-                    continue;
-                }
-
-                bool bTruncated = false;
-                if (Value.Len() > MaxExportedPropertyChars)
-                {
-                    Value = Value.Left(MaxExportedPropertyChars);
-                    bTruncated = true;
-                }
-
-                FString ObjectPath;
-                if (const FObjectPropertyBase* ObjectProperty = CastField<FObjectPropertyBase>(Property))
-                {
-                    if (UObject* ObjectValue = ObjectProperty->GetObjectPropertyValue_InContainer(Node))
-                    {
-                        ObjectPath = ObjectValue->GetPathName();
-                    }
-                }
-
-                const TSharedRef<FJsonObject> PropertyJson = MakeShared<FJsonObject>();
-                PropertyJson->SetStringField(TEXT("node_id"), NodeId);
-                PropertyJson->SetStringField(TEXT("blueprint_path"), BlueprintPath);
-                PropertyJson->SetStringField(TEXT("graph_name"), GraphName);
-                PropertyJson->SetStringField(TEXT("node_class"), Node->GetClass()->GetPathName());
-                PropertyJson->SetStringField(TEXT("property_name"), Property->GetName());
-                PropertyJson->SetStringField(TEXT("owner_class"), Class->GetPathName());
-                PropertyJson->SetStringField(TEXT("property_type"), Property->GetClass()->GetName());
-                PropertyJson->SetStringField(TEXT("cpp_type"), Property->GetCPPType());
-                PropertyJson->SetStringField(TEXT("value"), Value);
-                PropertyJson->SetStringField(TEXT("object_path"), ObjectPath);
-                PropertyJson->SetNumberField(TEXT("property_flags"), static_cast<double>(Property->GetPropertyFlags()));
-                PropertyJson->SetBoolField(TEXT("truncated"), bTruncated);
-
-                if (!PropertiesWriter.Write(PropertyJson))
+                        Property->GetName(),
+                        Class->GetPathName(),
+                        0))
                 {
                     return false;
                 }
-                ++Counts.BlueprintNodeProperties;
             }
         }
-
         return true;
     }
 
@@ -710,6 +1296,7 @@ namespace UnrealAssetTool
             if (UAnimationAsset* AnimationAsset = SequencePlayer->GetAnimationAsset())
             {
                 OutSymbol = AnimationAsset->GetName();
+                OutOwner = AnimationAsset->GetPathName();
                 Semantic->SetStringField(TEXT("animation_asset"), AnimationAsset->GetPathName());
                 Semantic->SetStringField(TEXT("animation_asset_class"),
                     AnimationAsset->GetClass()->GetPathName());
@@ -964,6 +1551,7 @@ namespace UnrealAssetTool
         }
 
         ApplyClassSemanticFallback(Node, Semantic, OutOperation, OutSymbol, OutOwner);
+        ApplyReflectedSemanticEnrichment(Blueprint, Node, Semantic, OutOperation, OutSymbol, OutOwner);
 
         Semantic->SetStringField(TEXT("operation"), OutOperation);
         Semantic->SetStringField(TEXT("symbol"), OutSymbol);
@@ -1073,12 +1661,477 @@ namespace UnrealAssetTool
         return true;
     }
 
+
+    static FString ExportStructFieldText(
+        FStructProperty* StructProperty,
+        void* StructValue,
+        UObject* Owner,
+        const FName FieldName)
+    {
+        if (!StructProperty || !StructProperty->Struct || !StructValue)
+        {
+            return TEXT("");
+        }
+
+        FProperty* Field = StructProperty->Struct->FindPropertyByName(FieldName);
+        if (!Field)
+        {
+            return TEXT("");
+        }
+
+        const void* FieldValue = Field->ContainerPtrToValuePtr<void>(StructValue);
+        FString Result;
+        Field->ExportTextItem_Direct(
+            Result,
+            FieldValue,
+            nullptr,
+            Owner,
+            PPF_None,
+            nullptr);
+        return Result;
+    }
+
+    static TArray<FString> ExportStructArrayFieldTexts(
+        FStructProperty* StructProperty,
+        void* StructValue,
+        UObject* Owner,
+        const FName FieldName)
+    {
+        TArray<FString> Result;
+        if (!StructProperty || !StructProperty->Struct || !StructValue)
+        {
+            return Result;
+        }
+
+        FArrayProperty* ArrayProperty = CastField<FArrayProperty>(
+            StructProperty->Struct->FindPropertyByName(FieldName));
+        if (!ArrayProperty || !ArrayProperty->Inner)
+        {
+            return Result;
+        }
+
+        const void* ArrayValue = ArrayProperty->ContainerPtrToValuePtr<void>(StructValue);
+        FScriptArrayHelper Helper(ArrayProperty, ArrayValue);
+        Result.Reserve(Helper.Num());
+
+        for (int32 Index = 0; Index < Helper.Num(); ++Index)
+        {
+            FString Value;
+            ArrayProperty->Inner->ExportTextItem_Direct(
+                Value,
+                Helper.GetRawPtr(Index),
+                nullptr,
+                Owner,
+                PPF_None,
+                nullptr);
+            Result.Add(MoveTemp(Value));
+        }
+        return Result;
+    }
+
+    static bool ScanNodeBindings(
+        UEdGraphNode* Node,
+        const FString& NodeId,
+        const FString& BlueprintPath,
+        const FString& GraphName,
+        FJsonlWriter& BindingsWriter,
+        FScanCounts& Counts)
+    {
+        if (!Node)
+        {
+            return true;
+        }
+
+        UObject* BindingObject = GetReflectedObjectProperty(Node, TEXT("Binding"));
+        if (!BindingObject)
+        {
+            return true;
+        }
+
+        FMapProperty* BindingsProperty = CastField<FMapProperty>(
+            BindingObject->GetClass()->FindPropertyByName(TEXT("PropertyBindings")));
+        if (!BindingsProperty || !BindingsProperty->KeyProp || !BindingsProperty->ValueProp)
+        {
+            return true;
+        }
+
+        FStructProperty* ValueStructProperty = CastField<FStructProperty>(BindingsProperty->ValueProp);
+        if (!ValueStructProperty || !ValueStructProperty->Struct)
+        {
+            return true;
+        }
+
+        void* MapValue = BindingsProperty->ContainerPtrToValuePtr<void>(BindingObject);
+        FScriptMapHelper Helper(BindingsProperty, MapValue);
+
+        for (int32 Index = 0; Index < Helper.GetMaxIndex(); ++Index)
+        {
+            if (!Helper.IsValidIndex(Index))
+            {
+                continue;
+            }
+
+            void* KeyPtr = Helper.GetKeyPtr(Index);
+            void* ValuePtr = Helper.GetValuePtr(Index);
+
+            FString KeyText;
+            BindingsProperty->KeyProp->ExportTextItem_Direct(
+                KeyText,
+                KeyPtr,
+                nullptr,
+                BindingObject,
+                PPF_None,
+                nullptr);
+
+            FString RawValue;
+            BindingsProperty->ValueProp->ExportTextItem_Direct(
+                RawValue,
+                ValuePtr,
+                nullptr,
+                BindingObject,
+                PPF_None,
+                nullptr);
+
+            const FString PropertyName = ExportStructFieldText(
+                ValueStructProperty, ValuePtr, BindingObject, TEXT("PropertyName"));
+            const FString PathAsText = ExportStructFieldText(
+                ValueStructProperty, ValuePtr, BindingObject, TEXT("PathAsText"));
+            const FString CompiledContext = ExportStructFieldText(
+                ValueStructProperty, ValuePtr, BindingObject, TEXT("CompiledContext"));
+            const FString PinType = ExportStructFieldText(
+                ValueStructProperty, ValuePtr, BindingObject, TEXT("PinType"));
+            const FString PromotedPinType = ExportStructFieldText(
+                ValueStructProperty, ValuePtr, BindingObject, TEXT("PromotedPinType"));
+            const TArray<FString> PropertyPath = ExportStructArrayFieldTexts(
+                ValueStructProperty, ValuePtr, BindingObject, TEXT("PropertyPath"));
+
+            TArray<TSharedPtr<FJsonValue>> PathJson;
+            PathJson.Reserve(PropertyPath.Num());
+            for (const FString& Segment : PropertyPath)
+            {
+                PathJson.Add(MakeShared<FJsonValueString>(Segment));
+            }
+
+            const TSharedRef<FJsonObject> Json = MakeShared<FJsonObject>();
+            Json->SetStringField(TEXT("node_id"), NodeId);
+            Json->SetStringField(TEXT("blueprint_path"), BlueprintPath);
+            Json->SetStringField(TEXT("graph_name"), GraphName);
+            Json->SetStringField(TEXT("node_class"), Node->GetClass()->GetPathName());
+            Json->SetStringField(TEXT("binding_object"), BindingObject->GetPathName());
+            Json->SetStringField(TEXT("binding_key"), KeyText);
+            Json->SetStringField(TEXT("target_property"), PropertyName.IsEmpty() ? KeyText : PropertyName);
+            Json->SetStringField(TEXT("access_path"), PathAsText);
+            Json->SetArrayField(TEXT("property_path"), PathJson);
+            Json->SetStringField(TEXT("compiled_context"), CompiledContext);
+            Json->SetStringField(TEXT("pin_type"), PinType);
+            Json->SetStringField(TEXT("promoted_pin_type"), PromotedPinType);
+            Json->SetStringField(TEXT("raw_value"), RawValue);
+
+            if (!BindingsWriter.Write(Json))
+            {
+                return false;
+            }
+            ++Counts.BlueprintBindings;
+        }
+
+        return true;
+    }
+
+    static bool ClassIsOrDerivedFromName(const UClass* Class, const FName BaseClassName)
+    {
+        for (const UClass* Current = Class; Current; Current = Current->GetSuperClass())
+        {
+            if (Current->GetFName() == BaseClassName)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    static FString RigVMObjectKind(UObject* Object)
+    {
+        if (!Object)
+        {
+            return TEXT("");
+        }
+
+        UClass* Class = Object->GetClass();
+        if (ClassIsOrDerivedFromName(Class, TEXT("RigVMGraph"))) return TEXT("graph");
+        if (ClassIsOrDerivedFromName(Class, TEXT("RigVMNode"))) return TEXT("node");
+        if (ClassIsOrDerivedFromName(Class, TEXT("RigVMPin"))) return TEXT("pin");
+        if (ClassIsOrDerivedFromName(Class, TEXT("RigVMLink"))) return TEXT("link");
+        return TEXT("");
+    }
+
+    static FString RigVMNodeOperation(UObject* Object)
+    {
+        if (!Object || !ClassIsOrDerivedFromName(Object->GetClass(), TEXT("RigVMNode")))
+        {
+            return TEXT("");
+        }
+
+        struct FRigVMClassSemantic
+        {
+            const TCHAR* ClassName;
+            const TCHAR* Operation;
+        };
+
+        static const FRigVMClassSemantic Classes[] =
+        {
+            { TEXT("RigVMFunctionEntryNode"), TEXT("rigvm_function_entry") },
+            { TEXT("RigVMFunctionReturnNode"), TEXT("rigvm_function_return") },
+            { TEXT("RigVMFunctionReferenceNode"), TEXT("rigvm_function_reference") },
+            { TEXT("RigVMVariableNode"), TEXT("rigvm_variable") },
+            { TEXT("RigVMUnitNode"), TEXT("rigvm_unit") },
+            { TEXT("RigVMDispatchNode"), TEXT("rigvm_dispatch") },
+            { TEXT("RigVMInvokeEntryNode"), TEXT("rigvm_invoke_entry") },
+            { TEXT("RigVMRerouteNode"), TEXT("rigvm_reroute") },
+            { TEXT("RigVMEnumNode"), TEXT("rigvm_enum") },
+            { TEXT("RigVMCommentNode"), TEXT("rigvm_comment") },
+            { TEXT("RigVMParameterNode"), TEXT("rigvm_parameter") },
+            { TEXT("RigVMLibraryNode"), TEXT("rigvm_library") },
+            { TEXT("RigVMTemplateNode"), TEXT("rigvm_template") }
+        };
+
+        for (const FRigVMClassSemantic& Entry : Classes)
+        {
+            if (ClassIsOrDerivedFromName(Object->GetClass(), FName(Entry.ClassName)))
+            {
+                return Entry.Operation;
+            }
+        }
+        return TEXT("rigvm_node");
+    }
+
+    static bool WriteRigVMReference(
+        UObject* SourceObject,
+        UObject* TargetObject,
+        const FString& BlueprintPath,
+        const FString& PropertyPath,
+        FJsonlWriter& ReferencesWriter,
+        FScanCounts& Counts)
+    {
+        if (!SourceObject || !TargetObject)
+        {
+            return true;
+        }
+
+        const TSharedRef<FJsonObject> Json = MakeShared<FJsonObject>();
+        Json->SetStringField(TEXT("source_object_id"), SourceObject->GetPathName());
+        Json->SetStringField(TEXT("blueprint_path"), BlueprintPath);
+        Json->SetStringField(TEXT("source_kind"), RigVMObjectKind(SourceObject));
+        Json->SetStringField(TEXT("source_class"), SourceObject->GetClass()->GetPathName());
+        Json->SetStringField(TEXT("property_path"), PropertyPath);
+        Json->SetStringField(TEXT("target_object_id"), TargetObject->GetPathName());
+        Json->SetStringField(TEXT("target_kind"), RigVMObjectKind(TargetObject));
+        Json->SetStringField(TEXT("target_class"), TargetObject->GetClass()->GetPathName());
+
+        if (!ReferencesWriter.Write(Json))
+        {
+            return false;
+        }
+        ++Counts.RigVMReferences;
+        return true;
+    }
+
+    static bool ScanRigVMObjectProperties(
+        UObject* Object,
+        const FString& BlueprintPath,
+        FJsonlWriter& PropertiesWriter,
+        FJsonlWriter& ReferencesWriter,
+        FScanCounts& Counts)
+    {
+        if (!Object)
+        {
+            return true;
+        }
+
+        static constexpr int32 MaxExportedPropertyChars = 65536;
+        const FString Kind = RigVMObjectKind(Object);
+
+        for (UClass* Class = Object->GetClass();
+             Class && Class != UObject::StaticClass();
+             Class = Class->GetSuperClass())
+        {
+            for (TFieldIterator<FProperty> It(Class, EFieldIterationFlags::None); It; ++It)
+            {
+                FProperty* Property = *It;
+                if (!IsCapturableProperty(Property))
+                {
+                    continue;
+                }
+
+                const void* ValuePtr = Property->ContainerPtrToValuePtr<void>(Object);
+                FString Value;
+                Property->ExportTextItem_Direct(
+                    Value,
+                    ValuePtr,
+                    nullptr,
+                    Object,
+                    PPF_None,
+                    nullptr);
+
+                bool bTruncated = false;
+                if (Value.Len() > MaxExportedPropertyChars)
+                {
+                    Value = Value.Left(MaxExportedPropertyChars);
+                    bTruncated = true;
+                }
+
+                FString ObjectPath;
+                FString ObjectClass;
+                UObject* ObjectValue = nullptr;
+                if (const FObjectPropertyBase* ObjectProperty = CastField<FObjectPropertyBase>(Property))
+                {
+                    ObjectValue = ObjectProperty->GetObjectPropertyValue(ValuePtr);
+                    if (ObjectValue)
+                    {
+                        ObjectPath = ObjectValue->GetPathName();
+                        ObjectClass = ObjectValue->GetClass()->GetPathName();
+                    }
+                }
+
+                const TSharedRef<FJsonObject> PropertyJson = MakeShared<FJsonObject>();
+                PropertyJson->SetStringField(TEXT("object_id"), Object->GetPathName());
+                PropertyJson->SetStringField(TEXT("blueprint_path"), BlueprintPath);
+                PropertyJson->SetStringField(TEXT("kind"), Kind);
+                PropertyJson->SetStringField(TEXT("class_path"), Object->GetClass()->GetPathName());
+                PropertyJson->SetStringField(TEXT("declaring_type"), Class->GetPathName());
+                PropertyJson->SetStringField(TEXT("property_name"), Property->GetName());
+                PropertyJson->SetStringField(TEXT("property_path"), Property->GetName());
+                PropertyJson->SetStringField(TEXT("property_type"), Property->GetClass()->GetName());
+                PropertyJson->SetStringField(TEXT("cpp_type"), Property->GetCPPType());
+                PropertyJson->SetStringField(TEXT("value"), Value);
+                PropertyJson->SetStringField(TEXT("object_path"), ObjectPath);
+                PropertyJson->SetStringField(TEXT("object_class"), ObjectClass);
+                PropertyJson->SetNumberField(TEXT("property_flags"), static_cast<double>(Property->GetPropertyFlags()));
+                PropertyJson->SetBoolField(TEXT("truncated"), bTruncated);
+
+                if (!PropertiesWriter.Write(PropertyJson))
+                {
+                    return false;
+                }
+                ++Counts.RigVMProperties;
+
+                if (ObjectValue)
+                {
+                    if (!WriteRigVMReference(
+                            Object,
+                            ObjectValue,
+                            BlueprintPath,
+                            Property->GetName(),
+                            ReferencesWriter,
+                            Counts))
+                    {
+                        return false;
+                    }
+                }
+
+                if (FArrayProperty* ArrayProperty = CastField<FArrayProperty>(Property))
+                {
+                    FObjectPropertyBase* InnerObjectProperty = CastField<FObjectPropertyBase>(ArrayProperty->Inner);
+                    if (!InnerObjectProperty)
+                    {
+                        continue;
+                    }
+
+                    FScriptArrayHelper Helper(ArrayProperty, ValuePtr);
+                    for (int32 Index = 0; Index < Helper.Num(); ++Index)
+                    {
+                        UObject* ElementObject = InnerObjectProperty->GetObjectPropertyValue(Helper.GetRawPtr(Index));
+                        if (!ElementObject)
+                        {
+                            continue;
+                        }
+
+                        const FString ElementPath = FString::Printf(
+                            TEXT("%s[%d]"),
+                            *Property->GetName(),
+                            Index);
+                        if (!WriteRigVMReference(
+                                Object,
+                                ElementObject,
+                                BlueprintPath,
+                                ElementPath,
+                                ReferencesWriter,
+                                Counts))
+                        {
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+
+        return true;
+    }
+
+    static bool ScanRigVMObjects(
+        UBlueprint* Blueprint,
+        const FString& BlueprintPath,
+        FJsonlWriter& ObjectsWriter,
+        FJsonlWriter& PropertiesWriter,
+        FJsonlWriter& ReferencesWriter,
+        FScanCounts& Counts)
+    {
+        if (!Blueprint)
+        {
+            return true;
+        }
+
+        TArray<UObject*> OwnedObjects;
+        GetObjectsWithOuter(Blueprint, OwnedObjects, true);
+
+        for (UObject* Object : OwnedObjects)
+        {
+            const FString Kind = RigVMObjectKind(Object);
+            if (Kind.IsEmpty())
+            {
+                continue;
+            }
+
+            const TSharedRef<FJsonObject> Json = MakeShared<FJsonObject>();
+            Json->SetStringField(TEXT("object_id"), Object->GetPathName());
+            Json->SetStringField(TEXT("blueprint_path"), BlueprintPath);
+            Json->SetStringField(TEXT("kind"), Kind);
+            Json->SetStringField(TEXT("class_path"), Object->GetClass()->GetPathName());
+            Json->SetStringField(TEXT("name"), Object->GetName());
+            Json->SetStringField(TEXT("outer_object_id"), Object->GetOuter() ? Object->GetOuter()->GetPathName() : TEXT(""));
+            Json->SetStringField(TEXT("outer_class"), Object->GetOuter() ? Object->GetOuter()->GetClass()->GetPathName() : TEXT(""));
+            Json->SetStringField(TEXT("operation"), Kind == TEXT("node") ? RigVMNodeOperation(Object) : TEXT(""));
+
+            if (!ObjectsWriter.Write(Json))
+            {
+                return false;
+            }
+            ++Counts.RigVMObjects;
+
+            if (!ScanRigVMObjectProperties(
+                    Object,
+                    BlueprintPath,
+                    PropertiesWriter,
+                    ReferencesWriter,
+                    Counts))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     static bool ScanBlueprint(
         UBlueprint* Blueprint,
         const FString& ObjectPath,
         FJsonlWriter& BlueprintsWriter,
         FJsonlWriter& NodesWriter,
         FJsonlWriter& PropertiesWriter,
+        FJsonlWriter& ReferencesWriter,
+        FJsonlWriter& BindingsWriter,
+        FJsonlWriter& RigVMObjectsWriter,
+        FJsonlWriter& RigVMPropertiesWriter,
+        FJsonlWriter& RigVMReferencesWriter,
         FJsonlWriter& EdgesWriter,
         FScanCounts& Counts)
     {
@@ -1225,6 +2278,18 @@ namespace UnrealAssetTool
                         ObjectPath,
                         Graph->GetName(),
                         PropertiesWriter,
+                        ReferencesWriter,
+                        Counts))
+                {
+                    return false;
+                }
+
+                if (!ScanNodeBindings(
+                        Node,
+                        NodeId,
+                        ObjectPath,
+                        Graph->GetName(),
+                        BindingsWriter,
                         Counts))
                 {
                     return false;
@@ -1276,6 +2341,18 @@ namespace UnrealAssetTool
                 }
             }
         }
+
+        if (!ScanRigVMObjects(
+                Blueprint,
+                ObjectPath,
+                RigVMObjectsWriter,
+                RigVMPropertiesWriter,
+                RigVMReferencesWriter,
+                Counts))
+        {
+            return false;
+        }
+
         return true;
     }
 
@@ -1289,6 +2366,11 @@ namespace UnrealAssetTool
         FJsonlWriter& BlueprintsWriter,
         FJsonlWriter& NodesWriter,
         FJsonlWriter& PropertiesWriter,
+        FJsonlWriter& ReferencesWriter,
+        FJsonlWriter& BindingsWriter,
+        FJsonlWriter& RigVMObjectsWriter,
+        FJsonlWriter& RigVMPropertiesWriter,
+        FJsonlWriter& RigVMReferencesWriter,
         FJsonlWriter& EdgesWriter,
         FScanCounts& Counts)
     {
@@ -1371,7 +2453,19 @@ namespace UnrealAssetTool
             {
                 if (UBlueprint* Blueprint = Cast<UBlueprint>(Asset.GetAsset()))
                 {
-                    if (!ScanBlueprint(Blueprint, ObjectPath, BlueprintsWriter, NodesWriter, PropertiesWriter, EdgesWriter, Counts))
+                    if (!ScanBlueprint(
+                            Blueprint,
+                            ObjectPath,
+                            BlueprintsWriter,
+                            NodesWriter,
+                            PropertiesWriter,
+                            ReferencesWriter,
+                            BindingsWriter,
+                            RigVMObjectsWriter,
+                            RigVMPropertiesWriter,
+                            RigVMReferencesWriter,
+                            EdgesWriter,
+                            Counts))
                     {
                         return false;
                     }
@@ -1436,11 +2530,18 @@ int32 UUnrealAssetToolCommandlet::Main(const FString& Params)
     FJsonlWriter BlueprintsWriter(FPaths::Combine(OutputDir, TEXT("blueprints.jsonl")));
     FJsonlWriter NodesWriter(FPaths::Combine(OutputDir, TEXT("blueprint_nodes.jsonl")));
     FJsonlWriter PropertiesWriter(FPaths::Combine(OutputDir, TEXT("blueprint_node_properties.jsonl")));
+    FJsonlWriter ReferencesWriter(FPaths::Combine(OutputDir, TEXT("blueprint_node_references.jsonl")));
+    FJsonlWriter BindingsWriter(FPaths::Combine(OutputDir, TEXT("blueprint_bindings.jsonl")));
+    FJsonlWriter RigVMObjectsWriter(FPaths::Combine(OutputDir, TEXT("rigvm_objects.jsonl")));
+    FJsonlWriter RigVMPropertiesWriter(FPaths::Combine(OutputDir, TEXT("rigvm_properties.jsonl")));
+    FJsonlWriter RigVMReferencesWriter(FPaths::Combine(OutputDir, TEXT("rigvm_references.jsonl")));
     FJsonlWriter EdgesWriter(FPaths::Combine(OutputDir, TEXT("blueprint_edges.jsonl")));
 
     if (!FilesWriter.IsValid() || !SourceWriter.IsValid() || !AssetsWriter.IsValid() ||
         !DependenciesWriter.IsValid() || !BlueprintsWriter.IsValid() || !NodesWriter.IsValid() ||
-        !PropertiesWriter.IsValid() || !EdgesWriter.IsValid())
+        !PropertiesWriter.IsValid() || !ReferencesWriter.IsValid() || !BindingsWriter.IsValid() ||
+        !RigVMObjectsWriter.IsValid() || !RigVMPropertiesWriter.IsValid() || !RigVMReferencesWriter.IsValid() ||
+        !EdgesWriter.IsValid())
     {
         UE_LOG(LogTemp, Error, TEXT("UnrealAssetTool: could not create one or more output files under %s"), *OutputDir);
         return 2;
@@ -1453,7 +2554,23 @@ int32 UUnrealAssetToolCommandlet::Main(const FString& Params)
         return 3;
     }
 
-    if (!ScanAssets(ProjectDir, ToolPluginDir, bIncludeEngine, bIncludeSelf, AssetsWriter, DependenciesWriter, BlueprintsWriter, NodesWriter, PropertiesWriter, EdgesWriter, Counts))
+    if (!ScanAssets(
+            ProjectDir,
+            ToolPluginDir,
+            bIncludeEngine,
+            bIncludeSelf,
+            AssetsWriter,
+            DependenciesWriter,
+            BlueprintsWriter,
+            NodesWriter,
+            PropertiesWriter,
+            ReferencesWriter,
+            BindingsWriter,
+            RigVMObjectsWriter,
+            RigVMPropertiesWriter,
+            RigVMReferencesWriter,
+            EdgesWriter,
+            Counts))
     {
         UE_LOG(LogTemp, Error, TEXT("UnrealAssetTool: asset scan failed."));
         return 4;
@@ -1482,6 +2599,11 @@ int32 UUnrealAssetToolCommandlet::Main(const FString& Params)
     CountsJson->SetNumberField(TEXT("blueprint_nodes"), static_cast<double>(Counts.BlueprintNodes));
     CountsJson->SetNumberField(TEXT("blueprint_semantic_nodes"), static_cast<double>(Counts.BlueprintSemanticNodes));
     CountsJson->SetNumberField(TEXT("blueprint_node_properties"), static_cast<double>(Counts.BlueprintNodeProperties));
+    CountsJson->SetNumberField(TEXT("blueprint_node_references"), static_cast<double>(Counts.BlueprintNodeReferences));
+    CountsJson->SetNumberField(TEXT("blueprint_bindings"), static_cast<double>(Counts.BlueprintBindings));
+    CountsJson->SetNumberField(TEXT("rigvm_objects"), static_cast<double>(Counts.RigVMObjects));
+    CountsJson->SetNumberField(TEXT("rigvm_properties"), static_cast<double>(Counts.RigVMProperties));
+    CountsJson->SetNumberField(TEXT("rigvm_references"), static_cast<double>(Counts.RigVMReferences));
     CountsJson->SetNumberField(TEXT("blueprint_edges"), static_cast<double>(Counts.BlueprintEdges));
     CountsJson->SetNumberField(TEXT("blueprint_variables"), static_cast<double>(Counts.BlueprintVariables));
     CountsJson->SetNumberField(TEXT("blueprint_components"), static_cast<double>(Counts.BlueprintComponents));
