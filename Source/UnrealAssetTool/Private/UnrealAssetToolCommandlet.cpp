@@ -5232,22 +5232,6 @@ namespace UnrealAssetTool
     }
 
 
-    static UObject* GetReflectedObjectProperty(UObject* Object, const FName PropertyName)
-    {
-        if (!Object)
-        {
-            return nullptr;
-        }
-        FObjectPropertyBase* Property = CastField<FObjectPropertyBase>(
-            Object->GetClass()->FindPropertyByName(PropertyName));
-        if (!Property)
-        {
-            return nullptr;
-        }
-        const void* Value = Property->ContainerPtrToValuePtr<void>(Object);
-        return Value ? Property->GetObjectPropertyValue(Value) : nullptr;
-    }
-
     static FString ExportObjectPropertyByName(UObject* Object, const FName PropertyName, int32 MaxChars = 16384)
     {
         if (!Object)
@@ -5384,7 +5368,7 @@ namespace UnrealAssetTool
         }
 
         TArray<UObject*> OwnedObjects;
-        GetObjectsWithOuter(Node, OwnedObjects, true);
+        GetObjectsWithOuter(Node, OwnedObjects, EGetObjectsFlags::IncludeNestedObjects);
         for (UObject* Candidate : OwnedObjects)
         {
             if (Candidate &&
@@ -5488,7 +5472,7 @@ namespace UnrealAssetTool
         }
 
         TArray<UObject*> OwnedObjects;
-        GetObjectsWithOuter(Graph, OwnedObjects, true);
+        GetObjectsWithOuter(Graph, OwnedObjects, EGetObjectsFlags::IncludeNestedObjects);
         OwnedObjects.Sort([](const UObject& A, const UObject& B) { return A.GetPathName() < B.GetPathName(); });
 
         TArray<UObject*> Nodes;
@@ -5804,7 +5788,7 @@ namespace UnrealAssetTool
     {
         if (!MaterialAsset) return true;
         TArray<UObject*> OwnedObjects;
-        GetObjectsWithOuter(MaterialAsset, OwnedObjects, true);
+        GetObjectsWithOuter(MaterialAsset, OwnedObjects, EGetObjectsFlags::IncludeNestedObjects);
         OwnedObjects.Sort([](const UObject& A, const UObject& B) { return A.GetPathName() < B.GetPathName(); });
         TArray<UObject*> Expressions;
         TArray<UObject*> EditorDataObjects;

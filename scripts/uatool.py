@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import argparse
 import collections
+from contextlib import contextmanager
 import hashlib
 import json
+import os
 import re
 import sqlite3
 import subprocess
@@ -47,6 +49,63 @@ def require_editor(editor_arg: str) -> Path:
 
 def plugin_root() -> Path:
     return Path(__file__).resolve().parent.parent
+
+
+def plugin_descriptor() -> Path:
+    """Return the exact UnrealAssetTool plugin descriptor for this checkout."""
+    descriptor = plugin_root() / "UnrealAssetTool.uplugin"
+    if not descriptor.is_file():
+        raise FileNotFoundError(
+            "UnrealAssetTool.uplugin was not found beside this launcher:\n"
+            f"  {descriptor}"
+        )
+    return descriptor
+
+
+@contextmanager
+def prefer_invoking_plugin_checkout(project: Path):
+    """Hide same-named project-local UATool descriptors while this checkout runs.
+
+    Unreal automatically discovers every *.uplugin below <Project>/Plugins.
+    Passing -Plugin=<this checkout> adds an external plugin, but it does not
+    override an already-discovered project plugin with the same plugin name.
+
+    If the target project contains an older UnrealAssetTool checkout, temporarily
+    rename only its descriptor so UBT and Unreal can discover exactly one plugin
+    named UnrealAssetTool: the checkout that owns this launcher.
+    """
+    active = plugin_descriptor().resolve()
+    plugins_root = project.parent / "Plugins"
+    masked: list[tuple[Path, Path]] = []
+
+    if plugins_root.is_dir():
+        for descriptor in sorted(plugins_root.rglob(f"{MODULE_NAME}.uplugin")):
+            try:
+                resolved = descriptor.resolve()
+            except OSError:
+                resolved = descriptor.absolute()
+            if resolved == active:
+                continue
+
+            hidden = descriptor.with_name(
+                descriptor.name + f".uatool-hidden-{os.getpid()}"
+            )
+            if hidden.exists():
+                raise RuntimeError(
+                    "Cannot mask duplicate UnrealAssetTool plugin because the "
+                    f"temporary descriptor already exists:\n  {hidden}"
+                )
+            print(f"temporarily hiding duplicate project plugin: {descriptor}")
+            descriptor.rename(hidden)
+            masked.append((descriptor, hidden))
+
+    try:
+        yield
+    finally:
+        for descriptor, hidden in reversed(masked):
+            if hidden.exists():
+                hidden.rename(descriptor)
+                print(f"restored project plugin descriptor: {descriptor}")
 
 
 def editor_configuration(editor: Path) -> str:
@@ -177,6 +236,7 @@ def build_project(project: Path, editor: Path, build_script_arg: str | None = No
         str(build_script),
         f"-Target={target} Win64 {configuration}",
         f"-Project={project}",
+        f"-Plugin={plugin_descriptor()}",
         "-WaitMutex",
         "-NoHotReloadFromIDE",
     ]
@@ -3704,12 +3764,12 @@ def scan(args: argparse.Namespace) -> int:
         manifest_path.unlink()
 
     editor = require_editor(args.editor)
-    ensure_plugin_binary(project, editor, args.build_script, args.no_build)
 
     command = [
         str(editor),
         str(project),
         "-run=UnrealAssetTool",
+        f"-Plugin={plugin_descriptor()}",
         f"-Output={output}",
         f"-EnablePlugins={MODULE_NAME}",
         "-unattended",
@@ -3730,11 +3790,14 @@ def scan(args: argparse.Namespace) -> int:
     if args.include_raw_rigvm_properties:
         command.append("-IncludeRawRigVMProperties")
 
-    print("running:", subprocess.list2cmdline(command))
-    result = subprocess.run(command, check=False)
-    if result.returncode != 0:
-        report_editor_failure(project, result.returncode)
-        return result.returncode
+    with prefer_invoking_plugin_checkout(project):
+        ensure_plugin_binary(project, editor, args.build_script, args.no_build)
+
+        print("running:", subprocess.list2cmdline(command))
+        result = subprocess.run(command, check=False)
+        if result.returncode != 0:
+            report_editor_failure(project, result.returncode)
+            return result.returncode
 
     if not manifest_path.is_file():
         print(
@@ -3766,7 +3829,8 @@ def build(args: argparse.Namespace) -> int:
     if not project.is_file() or project.suffix.lower() != ".uproject":
         raise FileNotFoundError(f"Not a .uproject file: {project}")
     editor = require_editor(args.editor)
-    return build_project(project, editor, args.build_script)
+    with prefer_invoking_plugin_checkout(project):
+        return build_project(project, editor, args.build_script)
 
 
 def pack(args: argparse.Namespace) -> int:
