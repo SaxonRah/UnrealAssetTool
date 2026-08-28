@@ -428,18 +428,18 @@ namespace UnrealAssetTool
         {
             OutOperation = TEXT("anim_use_cached_pose");
             OutOwner = Blueprint ? Blueprint->GetPathName() : TEXT("");
-            if (UAnimGraphNode_SaveCachedPose* SavePose = UsePose->SaveCachedPoseNode.Get())
+            if (UAnimGraphNode_SaveCachedPose* CachedSavePose = UsePose->SaveCachedPoseNode.Get())
             {
-                OutSymbol = SavePose->CacheName;
+                OutSymbol = CachedSavePose->CacheName;
                 Semantic->SetStringField(TEXT("cache_name"), OutSymbol);
                 Semantic->SetStringField(TEXT("save_node_guid"),
-                    SavePose->NodeGuid.ToString(EGuidFormats::DigitsWithHyphensLower));
+                    CachedSavePose->NodeGuid.ToString(EGuidFormats::DigitsWithHyphensLower));
             }
         }
         else if (UAnimGraphNode_LinkedAnimLayer* LinkedLayer = Cast<UAnimGraphNode_LinkedAnimLayer>(Node))
         {
             OutOperation = TEXT("anim_linked_layer");
-            OutSymbol = LinkedLayer->GetLayerName().ToString();
+            OutSymbol = LinkedLayer->Node.Layer.ToString();
             OutOwner = Blueprint ? Blueprint->GetPathName() : TEXT("");
             Semantic->SetStringField(TEXT("layer_name"), OutSymbol);
             Semantic->SetStringField(TEXT("interface_guid"),
