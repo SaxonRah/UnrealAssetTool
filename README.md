@@ -298,4 +298,9 @@ README files + filenames + guessed asset behavior
 
 ### Build configuration matching
 
-`scan` checks the build configuration encoded by the exact `--editor` executable and then verifies Unreal's matching `.modules` manifest, not merely whether some `UnrealAssetTool` DLL exists. For example, `UnrealEditor-Cmd.exe` requires the Development module while `UnrealEditor-Win64-DebugGame-Cmd.exe` requires the DebugGame module. If the matching module/manifest is absent, `scan` builds that exact configuration before launching the commandlet.
+`scan` derives the build configuration only from the exact `--editor` executable supplied by the user. For example, `UnrealEditor-Cmd.exe` selects Development while `UnrealEditor-Win64-DebugGame-Cmd.exe` selects DebugGame. By default it asks UBT to incrementally build the complete `<Project>Editor` target, then verifies the exact configuration-specific `UnrealAssetTool` DLL and the project target receipt. A plugin-local `.modules` file is used when present but is not required.
+
+
+### Build/scan readiness (0.1.11)
+
+`uatool build` now builds the complete `<Project>Editor` target instead of only the `UnrealAssetTool` module. Unreal commandlet startup needs the project's own native modules and target receipt even for Blueprint-heavy samples. `uatool scan` performs the same incremental full-target build unless `--no-build` is supplied. A plugin-local `.modules` manifest is optional; the exact configuration-specific UATool DLL plus the project target receipt are the readiness checks.

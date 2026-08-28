@@ -136,14 +136,42 @@ def resolve_build_script(editor: Path, override: str | None) -> Path:
     return build_script
 
 
+def project_target_receipt_candidates(project: Path, editor: Path) -> list[Path]:
+    """Return the normal receipt paths for the selected Editor target/configuration."""
+    target = f"{project.stem}Editor"
+    binaries = project.parent / "Binaries" / "Win64"
+    configuration = editor_configuration(editor)
+    if configuration == "Development":
+        return [
+            binaries / f"{target}.target",
+            binaries / f"{target}-Win64-Development.target",
+        ]
+    return [binaries / f"{target}-Win64-{configuration}.target"]
+
+
+def project_target_receipt(project: Path, editor: Path) -> Path | None:
+    for candidate in project_target_receipt_candidates(project, editor):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 def build_project(project: Path, editor: Path, build_script_arg: str | None = None) -> int:
+    """Build the complete Editor target, not only the UATool module.
+
+    Commandlet startup loads the project's native game/editor modules before
+    UnrealAssetTool runs. Building only -Module=UnrealAssetTool can therefore
+    produce a perfectly valid plugin DLL while leaving a Blueprint-heavy sample
+    unable to start because its small native project module/target receipt was
+    never built. A full target build is incremental, so UBT also becomes our
+    source-freshness check for UATool.
+    """
     build_script = resolve_build_script(editor, build_script_arg)
     target = f"{project.stem}Editor"
     configuration = editor_configuration(editor)
     command = [
         str(build_script),
         f"-Target={target} Win64 {configuration}",
-        f"-Module={MODULE_NAME}",
         f"-Project={project}",
         "-WaitMutex",
         "-NoHotReloadFromIDE",
@@ -155,56 +183,59 @@ def build_project(project: Path, editor: Path, build_script_arg: str | None = No
 def ensure_plugin_binary(project: Path, editor: Path, build_script_arg: str | None, no_build: bool) -> None:
     configuration = editor_configuration(editor)
     expected_binary = expected_plugin_binary(editor)
-    expected_manifest = expected_module_manifest(editor)
-    manifest_binary = module_manifest_binary(editor)
-
-    # The manifest is authoritative: Unreal's module manager uses it to map the
-    # module name to a DLL. A stray DLL for another configuration is not enough.
-    if manifest_binary is not None:
-        return
-
-    existing = plugin_binary_candidates()
-    existing_text = ""
-    if existing:
-        existing_text = "\nExisting module binaries (not valid for this selected editor unless its manifest maps them):\n" + "\n".join(
-            f"  {path}" for path in existing
-        )
-
-    reason = (
-        f"Selected editor configuration: {configuration}\n"
-        f"Expected module manifest: {expected_manifest}\n"
-        f"Expected module binary:   {expected_binary}"
-    )
+    receipt = project_target_receipt(project, editor)
 
     if no_build:
-        raise RuntimeError(
-            f"{MODULE_NAME} is not loadable by the selected editor.\n"
-            f"{reason}"
-            f"{existing_text}\n"
-            "Build the matching configuration first, or omit --no-build so scan can build it automatically."
-        )
+        missing = []
+        if not expected_binary.is_file():
+            missing.append(f"UATool module binary: {expected_binary}")
+        if receipt is None:
+            candidates = ", ".join(str(path) for path in project_target_receipt_candidates(project, editor))
+            missing.append(f"project Editor target receipt (expected one of: {candidates})")
+        if missing:
+            raise RuntimeError(
+                "The selected project/editor configuration is not ready for a no-build scan.\n"
+                f"Selected editor configuration: {configuration}\n"
+                + "\n".join(f"Missing: {item}" for item in missing)
+                + "\nRun `uatool.py build ...` first, or omit --no-build."
+            )
+        return
 
-    print(f"{MODULE_NAME}: module is not loadable by the selected editor")
-    print(reason)
-    if existing:
-        print("module DLLs currently present:")
-        for path in existing:
-            print(f"  {path.name}")
-    print(f"building {project.stem}Editor Win64 {configuration} module {MODULE_NAME}")
-
+    # Always ask UBT to build the complete target. This is normally very cheap
+    # when everything is up to date, while also rebuilding stale UATool source
+    # and creating any missing project game/editor modules and target receipt.
     result = build_project(project, editor, build_script_arg)
     if result != 0:
         raise RuntimeError(f"Unreal build failed with exit code {result}")
 
-    manifest_binary = module_manifest_binary(editor)
-    if manifest_binary is None:
+    if not expected_binary.is_file():
+        existing = plugin_binary_candidates()
+        existing_text = ""
+        if existing:
+            existing_text = "\nModule DLLs currently present:\n" + "\n".join(f"  {path}" for path in existing)
         raise RuntimeError(
-            "The build completed, but Unreal still has no valid module-manifest mapping for "
-            f"{MODULE_NAME}.\nExpected manifest: {expected_manifest}\n"
-            f"Expected binary:   {expected_binary}"
+            "The full Editor target built successfully, but the exact UATool binary for the selected editor configuration is missing.\n"
+            f"Expected: {expected_binary}"
+            f"{existing_text}"
         )
-    print(f"module ready: {manifest_binary}")
 
+    receipt = project_target_receipt(project, editor)
+    if receipt is None:
+        candidates = "\n".join(f"  {path}" for path in project_target_receipt_candidates(project, editor))
+        raise RuntimeError(
+            "The full Editor target built successfully, but no project target receipt was produced.\n"
+            "Expected one of:\n"
+            f"{candidates}"
+        )
+
+    manifest_binary = module_manifest_binary(editor)
+    if manifest_binary is not None:
+        print(f"module ready: {manifest_binary}")
+    else:
+        # Project targets can load project-plugin modules through the target
+        # receipt even when UBT does not emit a plugin-local .modules manifest.
+        print(f"module ready: {expected_binary}")
+    print(f"target receipt: {receipt}")
 
 def create_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(
@@ -694,6 +725,12 @@ def scan(args: argparse.Namespace) -> int:
         output = (project.parent / output).resolve()
     output.mkdir(parents=True, exist_ok=True)
 
+    # A failed run must never be mistaken for a successful fresh scan simply
+    # because manifest.json was left behind by an older invocation.
+    manifest_path = output / "manifest.json"
+    if manifest_path.exists():
+        manifest_path.unlink()
+
     editor = require_editor(args.editor)
     ensure_plugin_binary(project, editor, args.build_script, args.no_build)
 
@@ -725,7 +762,6 @@ def scan(args: argparse.Namespace) -> int:
         report_editor_failure(project, result.returncode)
         return result.returncode
 
-    manifest_path = output / "manifest.json"
     if not manifest_path.is_file():
         print(
             "ERROR: Unreal exited successfully but UnrealAssetTool did not write manifest.json. "
