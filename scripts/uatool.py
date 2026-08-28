@@ -498,6 +498,35 @@ def create_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX bp_component_props_name_idx ON blueprint_component_properties(property_name);
         CREATE INDEX bp_component_props_component_idx ON blueprint_component_properties(blueprint_path, component_name);
 
+        CREATE TABLE blueprint_state_values (
+            blueprint_path TEXT NOT NULL,
+            owner_kind TEXT NOT NULL,
+            owner_id TEXT NOT NULL,
+            owner_name TEXT NOT NULL,
+            owner_class TEXT NOT NULL,
+            baseline_class TEXT NOT NULL,
+            root_property TEXT NOT NULL,
+            property_name TEXT NOT NULL,
+            property_path TEXT NOT NULL,
+            depth INTEGER NOT NULL,
+            container_kind TEXT NOT NULL,
+            property_type TEXT NOT NULL,
+            cpp_type TEXT NOT NULL,
+            value TEXT NOT NULL,
+            baseline_value TEXT NOT NULL,
+            baseline_present INTEGER NOT NULL,
+            referenced_object_path TEXT NOT NULL,
+            referenced_object_class TEXT NOT NULL,
+            baseline_object_path TEXT NOT NULL,
+            baseline_object_class TEXT NOT NULL,
+            property_flags INTEGER NOT NULL,
+            truncated INTEGER NOT NULL,
+            PRIMARY KEY(blueprint_path, owner_kind, owner_id, property_path)
+        );
+        CREATE INDEX bp_state_values_owner_idx ON blueprint_state_values(blueprint_path, owner_kind, owner_name);
+        CREATE INDEX bp_state_values_path_idx ON blueprint_state_values(property_path);
+        CREATE INDEX bp_state_values_object_idx ON blueprint_state_values(referenced_object_path);
+
         CREATE TABLE blueprint_timelines (
             timeline_path TEXT PRIMARY KEY,
             blueprint_path TEXT NOT NULL,
@@ -536,6 +565,32 @@ def create_schema(conn: sqlite3.Connection) -> None:
         );
         CREATE INDEX bp_timeline_tracks_blueprint_idx ON blueprint_timeline_tracks(blueprint_path, timeline_path);
 
+        CREATE TABLE blueprint_timeline_keys (
+            timeline_path TEXT NOT NULL,
+            blueprint_path TEXT NOT NULL,
+            timeline_name TEXT NOT NULL,
+            track_index INTEGER NOT NULL,
+            track_type TEXT NOT NULL,
+            track_name TEXT NOT NULL,
+            curve_path TEXT NOT NULL,
+            curve_class TEXT NOT NULL,
+            channel_index INTEGER NOT NULL,
+            channel_name TEXT NOT NULL,
+            key_index INTEGER NOT NULL,
+            time REAL NOT NULL,
+            value REAL NOT NULL,
+            interp_mode INTEGER NOT NULL,
+            tangent_mode INTEGER NOT NULL,
+            tangent_weight_mode INTEGER NOT NULL,
+            arrive_tangent REAL NOT NULL,
+            leave_tangent REAL NOT NULL,
+            arrive_tangent_weight REAL NOT NULL,
+            leave_tangent_weight REAL NOT NULL,
+            PRIMARY KEY(timeline_path, track_type, track_index, channel_index, key_index)
+        );
+        CREATE INDEX bp_timeline_keys_blueprint_idx ON blueprint_timeline_keys(blueprint_path, timeline_path);
+        CREATE INDEX bp_timeline_keys_time_idx ON blueprint_timeline_keys(timeline_path, time);
+
         CREATE TABLE blueprint_widgets (
             widget_path TEXT PRIMARY KEY,
             blueprint_path TEXT NOT NULL,
@@ -551,6 +606,35 @@ def create_schema(conn: sqlite3.Connection) -> None:
         );
         CREATE INDEX bp_widgets_blueprint_idx ON blueprint_widgets(blueprint_path, parent_widget_path);
         CREATE INDEX bp_widgets_class_idx ON blueprint_widgets(widget_class);
+
+        CREATE TABLE blueprint_widget_properties (
+            blueprint_path TEXT NOT NULL,
+            owner_kind TEXT NOT NULL,
+            owner_id TEXT NOT NULL,
+            owner_name TEXT NOT NULL,
+            owner_class TEXT NOT NULL,
+            baseline_class TEXT NOT NULL,
+            root_property TEXT NOT NULL,
+            property_name TEXT NOT NULL,
+            property_path TEXT NOT NULL,
+            depth INTEGER NOT NULL,
+            container_kind TEXT NOT NULL,
+            property_type TEXT NOT NULL,
+            cpp_type TEXT NOT NULL,
+            value TEXT NOT NULL,
+            baseline_value TEXT NOT NULL,
+            baseline_present INTEGER NOT NULL,
+            referenced_object_path TEXT NOT NULL,
+            referenced_object_class TEXT NOT NULL,
+            baseline_object_path TEXT NOT NULL,
+            baseline_object_class TEXT NOT NULL,
+            property_flags INTEGER NOT NULL,
+            truncated INTEGER NOT NULL,
+            PRIMARY KEY(blueprint_path, owner_kind, owner_id, property_path)
+        );
+        CREATE INDEX bp_widget_props_owner_idx ON blueprint_widget_properties(blueprint_path, owner_kind, owner_name);
+        CREATE INDEX bp_widget_props_path_idx ON blueprint_widget_properties(property_path);
+        CREATE INDEX bp_widget_props_object_idx ON blueprint_widget_properties(referenced_object_path);
 
         CREATE TABLE blueprint_widget_bindings (
             blueprint_path TEXT NOT NULL,
@@ -579,6 +663,63 @@ def create_schema(conn: sqlite3.Connection) -> None:
             json TEXT NOT NULL
         );
         CREATE INDEX bp_widget_animations_blueprint_idx ON blueprint_widget_animations(blueprint_path);
+
+        CREATE TABLE blueprint_widget_animation_bindings (
+            animation_path TEXT NOT NULL,
+            blueprint_path TEXT NOT NULL,
+            animation_name TEXT NOT NULL,
+            binding_index INTEGER NOT NULL,
+            binding_struct TEXT NOT NULL,
+            widget_name TEXT NOT NULL,
+            slot_widget_name TEXT NOT NULL,
+            animation_guid TEXT NOT NULL,
+            is_root_widget TEXT NOT NULL,
+            dynamic_binding TEXT NOT NULL,
+            PRIMARY KEY(animation_path, binding_index)
+        );
+        CREATE INDEX bp_widget_anim_bindings_blueprint_idx ON blueprint_widget_animation_bindings(blueprint_path, widget_name);
+
+        CREATE TABLE blueprint_functions (
+            function_id TEXT PRIMARY KEY,
+            blueprint_path TEXT NOT NULL,
+            graph_id TEXT NOT NULL,
+            graph_name TEXT NOT NULL,
+            graph_path TEXT NOT NULL,
+            name TEXT NOT NULL,
+            owner TEXT NOT NULL,
+            resolved_function TEXT NOT NULL,
+            function_flags INTEGER NOT NULL,
+            has_exec INTEGER NOT NULL,
+            pure_shape INTEGER NOT NULL,
+            result_node_count INTEGER NOT NULL,
+            inputs_json TEXT NOT NULL,
+            outputs_json TEXT NOT NULL,
+            locals_json TEXT NOT NULL,
+            json TEXT NOT NULL
+        );
+        CREATE INDEX bp_functions_blueprint_idx ON blueprint_functions(blueprint_path, name);
+        CREATE INDEX bp_functions_resolved_idx ON blueprint_functions(resolved_function);
+
+        CREATE TABLE blueprint_events (
+            event_id TEXT PRIMARY KEY,
+            blueprint_path TEXT NOT NULL,
+            graph_id TEXT NOT NULL,
+            graph_name TEXT NOT NULL,
+            node_class TEXT NOT NULL,
+            operation TEXT NOT NULL,
+            event_kind TEXT NOT NULL,
+            name TEXT NOT NULL,
+            owner TEXT NOT NULL,
+            component_name TEXT NOT NULL,
+            delegate_name TEXT NOT NULL,
+            delegate_owner TEXT NOT NULL,
+            input_name TEXT NOT NULL,
+            parameters_json TEXT NOT NULL,
+            json TEXT NOT NULL
+        );
+        CREATE INDEX bp_events_blueprint_idx ON blueprint_events(blueprint_path, event_kind);
+        CREATE INDEX bp_events_component_idx ON blueprint_events(component_name, delegate_name);
+        CREATE INDEX bp_events_input_idx ON blueprint_events(input_name);
 
         CREATE TABLE rigvm_editor_links (
             node_id TEXT PRIMARY KEY,
@@ -639,6 +780,19 @@ def create_schema(conn: sqlite3.Connection) -> None:
             variable_count INTEGER NOT NULL,
             component_count INTEGER NOT NULL,
             interface_count INTEGER NOT NULL,
+            function_count INTEGER NOT NULL,
+            event_count INTEGER NOT NULL,
+            default_count INTEGER NOT NULL,
+            component_override_count INTEGER NOT NULL,
+            state_value_count INTEGER NOT NULL,
+            timeline_count INTEGER NOT NULL,
+            timeline_track_count INTEGER NOT NULL,
+            timeline_key_count INTEGER NOT NULL,
+            widget_count INTEGER NOT NULL,
+            widget_property_count INTEGER NOT NULL,
+            widget_binding_count INTEGER NOT NULL,
+            widget_animation_count INTEGER NOT NULL,
+            widget_animation_binding_count INTEGER NOT NULL,
             graph_count INTEGER NOT NULL,
             graph_system_counts_json TEXT NOT NULL,
             operation_counts_json TEXT NOT NULL,
@@ -852,7 +1006,7 @@ def iter_blueprint_pin_rows(output: Path) -> Iterator[dict]:
 
 
 
-DERIVED_SCHEMA_VERSION = 1
+DERIVED_SCHEMA_VERSION = 2
 
 
 def _write_jsonl(path: Path, rows: Iterable[dict]) -> int:
@@ -900,95 +1054,402 @@ def _graph_match_tokens(graph: dict) -> list[str]:
         tokens.append(graph_name)
     return tokens
 
-def derive_rigvm_editor_links(output: Path) -> list[dict]:
-    graphs = {row.get("graph_id", ""): row for row in iter_blueprint_graph_rows(output)}
-    rig_by_bp_name: dict[str, dict[str, list[dict]]] = collections.defaultdict(lambda: collections.defaultdict(list))
-    rig_by_bp_pos: dict[str, dict[tuple[int, int], list[dict]]] = collections.defaultdict(lambda: collections.defaultdict(list))
-    for row in iter_jsonl(output / "rigvm_objects.jsonl"):
-        if row.get("kind") != "node":
-            continue
-        bp = row.get("blueprint_path", "")
-        rig_by_bp_name[bp][str(row.get("name", ""))].append(row)
-        pos = _parse_xy(str(row.get("position", "")))
-        if pos:
-            rig_by_bp_pos[bp][(round(pos[0]), round(pos[1]))].append(row)
+def _rigvm_name_matches(editor_name: str, rig_name: str) -> bool:
+    if not editor_name or not rig_name:
+        return False
+    return (
+        editor_name == rig_name
+        or rig_name.startswith(editor_name + "_")
+        or rig_name.startswith(editor_name + " ")
+        or rig_name.startswith(editor_name)
+        or editor_name.startswith(rig_name)
+    )
 
-    rows: list[dict] = []
+
+def _rigvm_graph_segments(object_id: str) -> list[str]:
+    value = object_id.split(":", 1)[1] if ":" in object_id else object_id
+    return [part for part in value.split(".") if part]
+
+
+def _editor_graph_scope_tokens(graph: dict) -> list[str]:
+    tokens = _graph_match_tokens(graph)
+    # Exact path segments carry more information than generic substring
+    # matching.  In particular they distinguish Add from Add_2 and nested
+    # SequenceExecution graphs that otherwise have identical node layouts.
+    return [token for token in tokens if token and token != "ContainedGraph"]
+
+
+def derive_rigvm_editor_links(output: Path) -> list[dict]:
+    """Join ControlRig editor nodes to their underlying RigVM model nodes.
+
+    Matching is deliberately graph-first.  A whole editor Control Rig graph is
+    compared with each RigVM graph scope in the same Blueprint, using node
+    names, node positions, exact graph hierarchy segments and node counts.  We
+    then match individual editor nodes only inside the uniquely selected model
+    graph.  This avoids collisions between repeated Entry/Return/Sequence nodes
+    in different nested RigVM graphs.
+    """
+    graphs = {row.get("graph_id", ""): row for row in iter_blueprint_graph_rows(output)}
+
+    editor_by_graph: dict[str, list[dict]] = collections.defaultdict(list)
     seen_editor_nodes: set[str] = set()
-    for source in iter_jsonl(output / "blueprint_nodes.jsonl"):
-        if source.get("operation") != "control_rig_node":
+    for row in iter_jsonl(output / "blueprint_nodes.jsonl"):
+        if row.get("operation") != "control_rig_node":
             continue
-        node_id = source.get("node_id", "")
+        node_id = row.get("node_id", "")
         if node_id in seen_editor_nodes:
             continue
         seen_editor_nodes.add(node_id)
-        semantic = source.get("semantic", {}) if isinstance(source.get("semantic"), dict) else {}
-        model_name = str(semantic.get("model_node_path", "") or source.get("symbol", ""))
-        graph = graphs.get(source.get("graph_id", ""), {})
-        tokens = _graph_match_tokens(graph)
-        sx, sy = float(source.get("x", 0)), float(source.get("y", 0))
-        bp = source.get("blueprint_path", "")
+        editor_by_graph[row.get("graph_id", "")].append(row)
 
-        candidate_map: dict[str, dict] = {}
-        for candidate in rig_by_bp_name.get(bp, {}).get(model_name, []):
-            candidate_map[candidate.get("object_id", "")] = candidate
-        for candidate in rig_by_bp_pos.get(bp, {}).get((round(sx), round(sy)), []):
-            candidate_map[candidate.get("object_id", "")] = candidate
+    rig_graphs_by_bp: dict[str, list[dict]] = collections.defaultdict(list)
+    rig_nodes_by_scope: dict[tuple[str, str], list[dict]] = collections.defaultdict(list)
+    for row in iter_jsonl(output / "rigvm_objects.jsonl"):
+        bp = row.get("blueprint_path", "")
+        if row.get("kind") == "graph":
+            rig_graphs_by_bp[bp].append(row)
+        elif row.get("kind") == "node":
+            rig_nodes_by_scope[(bp, row.get("outer_object_id", ""))].append(row)
 
-        scored: list[tuple[int, dict, list[str]]] = []
-        for candidate in candidate_map.values():
-            score = 0
-            basis: list[str] = []
-            name = str(candidate.get("name", ""))
-            outer = str(candidate.get("outer_object_id", ""))
-            pos = _parse_xy(str(candidate.get("position", "")))
-            if pos and abs(pos[0] - sx) < 0.51 and abs(pos[1] - sy) < 0.51:
-                score += 100
-                basis.append("position")
-            if model_name and name == model_name:
-                score += 50
-                basis.append("model_name")
-            elif model_name and (name.startswith(model_name) or model_name.startswith(name)):
-                score += 20
-                basis.append("model_name_prefix")
-            token_hits = sum(1 for token in tokens if token.lower() in outer.lower())
-            if token_hits:
-                score += token_hits * 15
-                basis.append(f"graph_context:{token_hits}")
-            if score:
-                scored.append((score, candidate, basis))
+    rows: list[dict] = []
+    for graph_id, editor_nodes in editor_by_graph.items():
+        if not editor_nodes:
+            continue
+        bp = editor_nodes[0].get("blueprint_path", "")
+        graph = graphs.get(graph_id, {})
+        graph_tokens = _editor_graph_scope_tokens(graph)
 
-        scored.sort(key=lambda item: (-item[0], item[1].get("object_id", "")))
-        best_score = scored[0][0] if scored else 0
-        best = [item for item in scored if item[0] == best_score]
-        status = "unmatched"
-        chosen: dict = {}
-        basis: list[str] = []
-        if len(best) == 1 and best_score >= 50:
-            status = "matched"
-            chosen = best[0][1]
-            basis = best[0][2]
-        elif len(best) > 1 and best_score >= 50:
-            status = "ambiguous"
-        confidence = "none"
-        if status == "matched":
-            confidence = "high" if best_score >= 100 else "medium"
+        scope_scores: list[tuple[int, int, int, dict, list[dict], list[str]]] = []
+        for rig_graph in rig_graphs_by_bp.get(bp, []):
+            rig_graph_id = rig_graph.get("object_id", "")
+            rig_nodes = rig_nodes_by_scope.get((bp, rig_graph_id), [])
+            if not rig_nodes:
+                continue
+
+            matched_editor_nodes = 0
+            node_score = 0
+            for editor_node in editor_nodes:
+                semantic = editor_node.get("semantic", {}) if isinstance(editor_node.get("semantic"), dict) else {}
+                editor_name = str(semantic.get("model_node_path", "") or editor_node.get("symbol", ""))
+                sx = float(editor_node.get("x", 0))
+                sy = float(editor_node.get("y", 0))
+                best = None
+                for rig_node in rig_nodes:
+                    rig_name = str(rig_node.get("name", ""))
+                    if editor_name == rig_name:
+                        score = 100
+                    elif _rigvm_name_matches(editor_name, rig_name):
+                        score = 55
+                    else:
+                        continue
+                    position = _parse_xy(str(rig_node.get("position", "")))
+                    if position:
+                        distance = ((position[0] - sx) ** 2 + (position[1] - sy) ** 2) ** 0.5
+                        if distance <= 1.0:
+                            score += 80
+                        elif distance <= 5.0:
+                            score += 50
+                        elif distance <= 30.0:
+                            score += 15
+                        elif distance > 200.0:
+                            score -= 20
+                    if best is None or score > best:
+                        best = score
+                if best is not None:
+                    matched_editor_nodes += 1
+                    node_score += best
+
+            rig_segments = _rigvm_graph_segments(rig_graph_id)
+            exact_context_hits = sum(1 for token in graph_tokens if token in rig_segments)
+            scope_score = node_score + exact_context_hits * 100
+            scope_score -= abs(len(editor_nodes) - len(rig_nodes)) * 5
+            scope_scores.append((
+                matched_editor_nodes,
+                scope_score,
+                exact_context_hits,
+                rig_graph,
+                rig_nodes,
+                graph_tokens,
+            ))
+
+        scope_scores.sort(key=lambda item: (-item[0], -item[1], item[3].get("object_id", "")))
+        chosen_scope = None
+        scope_tied = False
+        if scope_scores:
+            best_key = (scope_scores[0][0], scope_scores[0][1])
+            best_scopes = [item for item in scope_scores if (item[0], item[1]) == best_key]
+            if len(best_scopes) == 1:
+                chosen_scope = best_scopes[0]
+            else:
+                scope_tied = True
+
+        for editor_node in editor_nodes:
+            node_id = editor_node.get("node_id", "")
+            semantic = editor_node.get("semantic", {}) if isinstance(editor_node.get("semantic"), dict) else {}
+            editor_name = str(semantic.get("model_node_path", "") or editor_node.get("symbol", ""))
+            sx = float(editor_node.get("x", 0))
+            sy = float(editor_node.get("y", 0))
+
+            status = "unmatched"
+            confidence = "none"
+            chosen: dict = {}
+            best_score = 0
+            candidate_count = 0
+            match_basis: list[str] = []
+            rigvm_graph_id = ""
+            scope_score = 0
+
+            if chosen_scope is not None:
+                _, scope_score, exact_hits, rig_graph, rig_nodes, _ = chosen_scope
+                rigvm_graph_id = rig_graph.get("object_id", "")
+                candidates: list[tuple[int, float, dict, list[str]]] = []
+                for rig_node in rig_nodes:
+                    rig_name = str(rig_node.get("name", ""))
+                    basis: list[str] = []
+                    if editor_name == rig_name:
+                        score = 100
+                        basis.append("model_name")
+                    elif _rigvm_name_matches(editor_name, rig_name):
+                        score = 50
+                        basis.append("model_name_prefix")
+                    else:
+                        continue
+
+                    distance = float("inf")
+                    position = _parse_xy(str(rig_node.get("position", "")))
+                    if position:
+                        distance = ((position[0] - sx) ** 2 + (position[1] - sy) ** 2) ** 0.5
+                        if distance <= 1.0:
+                            score += 100
+                            basis.append("position_exact")
+                        elif distance <= 5.0:
+                            score += 60
+                            basis.append("position_near")
+                        elif distance <= 30.0:
+                            score += 20
+                            basis.append("position_tolerant")
+                        else:
+                            score -= min(30, int(distance / 100.0))
+                    candidates.append((score, distance, rig_node, basis))
+
+                candidates.sort(key=lambda item: (-item[0], item[1], item[2].get("object_id", "")))
+                if candidates:
+                    best_score = candidates[0][0]
+                    best_distance = candidates[0][1]
+                    tied = [item for item in candidates if item[0] == best_score and abs(item[1] - best_distance) < 1e-6]
+                    candidate_count = len(tied)
+                    if len(tied) == 1:
+                        status = "matched"
+                        confidence = "high"
+                        chosen = tied[0][2]
+                        match_basis = tied[0][3] + ["graph_scope", f"graph_context:{exact_hits}"]
+                    else:
+                        status = "ambiguous"
+            elif scope_tied:
+                status = "ambiguous"
+                candidate_count = len(scope_scores)
+
+            rows.append({
+                "node_id": node_id,
+                "blueprint_path": bp,
+                "graph_id": graph_id,
+                "graph_name": editor_node.get("graph_name", ""),
+                "model_node_path": editor_name,
+                "status": status,
+                "confidence": confidence,
+                "score": best_score,
+                "scope_score": scope_score,
+                "candidate_count": candidate_count,
+                "match_basis": match_basis,
+                "rigvm_graph_id": rigvm_graph_id,
+                "rigvm_object_id": chosen.get("object_id", ""),
+                "rigvm_operation": chosen.get("operation", ""),
+                "rigvm_class": chosen.get("class_path", ""),
+                "resolved_function_name": chosen.get("resolved_function_name", ""),
+                "template_notation": chosen.get("template_notation", ""),
+            })
+    return rows
+
+
+def _pin_type_fields(pin: dict) -> dict:
+    pin_type = pin.get("type", {}) if isinstance(pin.get("type"), dict) else {}
+    return {
+        "category": pin.get("pin_category", pin_type.get("category", "")),
+        "subcategory": pin.get("pin_subcategory", pin_type.get("subcategory", "")),
+        "subcategory_object": pin.get("pin_subcategory_object", pin_type.get("subcategory_object", "")),
+        "container_type": int(pin.get("container_type", pin_type.get("container_type", 0)) or 0),
+    }
+
+
+def _pin_signature(pin: dict) -> dict:
+    return {
+        "name": pin.get("name", ""),
+        "type": _pin_type_fields(pin),
+        "default_value": pin.get("default_value", ""),
+        "default_object": pin.get("default_object", ""),
+        "default_text": pin.get("default_text", ""),
+    }
+
+
+def _is_exec_pin(pin: dict) -> bool:
+    return str(_pin_type_fields(pin).get("category", "")).lower() == "exec"
+
+
+def _pin_direction_is_output(pin: dict) -> bool:
+    return str(pin.get("direction", "")).lower() in {"output", "egpd_output", "1"}
+
+
+def derive_blueprint_functions(output: Path) -> list[dict]:
+    nodes_by_graph: dict[str, list[dict]] = collections.defaultdict(list)
+    for node in iter_jsonl(output / "blueprint_nodes.jsonl"):
+        nodes_by_graph[node.get("graph_id", "")].append(node)
+    pins_by_node: dict[str, list[dict]] = collections.defaultdict(list)
+    for pin in iter_blueprint_pin_rows(output):
+        pins_by_node[pin.get("node_id", "")].append(pin)
+
+    rows: list[dict] = []
+    for graph in iter_blueprint_graph_rows(output):
+        gid = graph.get("graph_id", "")
+        graph_nodes = nodes_by_graph.get(gid, [])
+        entries = [n for n in graph_nodes if n.get("operation") == "function_entry"]
+        if not entries:
+            continue
+        entries.sort(key=lambda n: n.get("node_id", ""))
+        entry = entries[0]
+        results = sorted((n for n in graph_nodes if n.get("operation") == "function_result"), key=lambda n: n.get("node_id", ""))
+        entry_sem = entry.get("semantic", {}) if isinstance(entry.get("semantic"), dict) else {}
+
+        inputs = [
+            _pin_signature(pin)
+            for pin in pins_by_node.get(entry.get("node_id", ""), [])
+            if _pin_direction_is_output(pin) and not _is_exec_pin(pin) and pin.get("name") != "OutputDelegate"
+        ]
+        outputs: list[dict] = []
+        output_seen: set[tuple] = set()
+        for result in results:
+            for pin in pins_by_node.get(result.get("node_id", ""), []):
+                if _pin_direction_is_output(pin) or _is_exec_pin(pin):
+                    continue
+                signature = _pin_signature(pin)
+                key = (signature["name"], json.dumps(signature["type"], sort_keys=True))
+                if key not in output_seen:
+                    output_seen.add(key)
+                    outputs.append(signature)
+
+        has_exec = any(_is_exec_pin(pin) for pin in pins_by_node.get(entry.get("node_id", ""), []))
+        if not has_exec:
+            has_exec = any(_is_exec_pin(pin) for result in results for pin in pins_by_node.get(result.get("node_id", ""), []))
+        locals_value = entry_sem.get("local_variables", [])
+        locals_list = locals_value if isinstance(locals_value, list) else []
+        name = str(entry.get("symbol", "") or graph.get("graph_name", ""))
         rows.append({
-            "node_id": node_id,
-            "blueprint_path": bp,
-            "graph_id": source.get("graph_id", ""),
-            "graph_name": source.get("graph_name", ""),
-            "model_node_path": model_name,
-            "status": status,
-            "confidence": confidence,
-            "score": best_score,
-            "candidate_count": len(best),
-            "match_basis": basis,
-            "rigvm_object_id": chosen.get("object_id", ""),
-            "rigvm_operation": chosen.get("operation", ""),
-            "rigvm_class": chosen.get("class_path", ""),
-            "resolved_function_name": chosen.get("resolved_function_name", ""),
-            "template_notation": chosen.get("template_notation", ""),
+            "function_id": gid,
+            "blueprint_path": graph.get("blueprint_path", ""),
+            "graph_id": gid,
+            "graph_name": graph.get("graph_name", ""),
+            "graph_path": graph.get("graph_path", ""),
+            "graph_kind": graph.get("graph_kind", ""),
+            "graph_system": graph.get("graph_system", ""),
+            "name": name,
+            "owner": entry.get("owner", ""),
+            "resolved_function": entry_sem.get("resolved_function", ""),
+            "function_flags": int(entry_sem.get("function_flags", 0) or 0),
+            "has_exec": has_exec,
+            "pure_shape": not has_exec,
+            "entry_node_id": entry.get("node_id", ""),
+            "result_node_ids": [n.get("node_id", "") for n in results],
+            "result_node_count": len(results),
+            "inputs": inputs,
+            "outputs": outputs,
+            "locals": locals_list,
+        })
+    return rows
+
+
+def _node_property_lookup(output: Path) -> dict[str, dict[str, dict]]:
+    result: dict[str, dict[str, dict]] = collections.defaultdict(dict)
+    for row in iter_jsonl(output / "blueprint_node_properties.jsonl"):
+        node_id = row.get("node_id", "")
+        path = row.get("property_path", "") or row.get("property_name", "")
+        if node_id and path and path not in result[node_id]:
+            result[node_id][path] = row
+    return result
+
+
+def _property_value(props: dict[str, dict], *names: str) -> str:
+    for name in names:
+        row = props.get(name)
+        if row:
+            return str(row.get("object_path", "") or row.get("value", ""))
+    return ""
+
+
+def derive_blueprint_events(output: Path) -> list[dict]:
+    properties = _node_property_lookup(output)
+    pins_by_node: dict[str, list[dict]] = collections.defaultdict(list)
+    for pin in iter_blueprint_pin_rows(output):
+        pins_by_node[pin.get("node_id", "")].append(pin)
+
+    rows: list[dict] = []
+    event_ops = {"event", "custom_event", "enhanced_input_event", "legacy_input_action", "input_key"}
+    for node in iter_jsonl(output / "blueprint_nodes.jsonl"):
+        op = node.get("operation", "")
+        if op not in event_ops:
+            continue
+        node_id = node.get("node_id", "")
+        props = properties.get(node_id, {})
+        node_class = str(node.get("node_class", ""))
+        sem = node.get("semantic", {}) if isinstance(node.get("semantic"), dict) else {}
+
+        event_kind = "event"
+        if "ComponentBoundEvent" in node_class:
+            event_kind = "component_bound"
+        elif "InputAxisEvent" in node_class:
+            event_kind = "input_axis"
+        elif op == "custom_event":
+            event_kind = "custom"
+        elif op == "enhanced_input_event":
+            event_kind = "enhanced_input"
+        elif op == "legacy_input_action":
+            event_kind = "input_action"
+        elif op == "input_key":
+            event_kind = "input_key"
+        elif sem.get("override_function"):
+            event_kind = "override"
+
+        component_name = _property_value(props, "ComponentPropertyName")
+        delegate_name = _property_value(props, "DelegatePropertyName")
+        delegate_owner = _property_value(props, "DelegateOwnerClass")
+        input_name = (
+            str(sem.get("input_action", "") or sem.get("action_name", ""))
+            or _property_value(props, "InputActionName", "InputAxisName", "InputKey")
+        )
+        name = delegate_name if event_kind == "component_bound" and delegate_name else str(node.get("symbol", "") or node.get("title", ""))
+
+        parameters = [
+            _pin_signature(pin)
+            for pin in pins_by_node.get(node_id, [])
+            if _pin_direction_is_output(pin) and not _is_exec_pin(pin) and pin.get("name") != "OutputDelegate"
+        ]
+        rows.append({
+            "event_id": node_id,
+            "blueprint_path": node.get("blueprint_path", ""),
+            "graph_id": node.get("graph_id", ""),
+            "graph_name": node.get("graph_name", ""),
+            "node_class": node_class,
+            "operation": op,
+            "event_kind": event_kind,
+            "name": name,
+            "owner": node.get("owner", ""),
+            "component_name": component_name,
+            "delegate_name": delegate_name,
+            "delegate_owner": delegate_owner,
+            "input_name": input_name,
+            "override_function": bool(sem.get("override_function", False)),
+            "parameters": parameters,
+            "consume_input": _property_value(props, "bConsumeInput"),
+            "execute_when_paused": _property_value(props, "bExecuteWhenPaused"),
+            "override_parent_binding": _property_value(props, "bOverrideParentBinding"),
         })
     return rows
 
@@ -997,7 +1458,12 @@ def _relation_id(parts: tuple[str, ...]) -> str:
     return f"rel:{digest}"
 
 
-def derive_blueprint_relations(output: Path, rigvm_links: list[dict]) -> list[dict]:
+def derive_blueprint_relations(
+    output: Path,
+    rigvm_links: list[dict],
+    functions: list[dict] | None = None,
+    events: list[dict] | None = None,
+) -> list[dict]:
     rows: list[dict] = []
     seen: set[tuple[str, ...]] = set()
     node_graph: dict[str, str] = {}
@@ -1091,6 +1557,48 @@ def derive_blueprint_relations(output: Path, rigvm_links: list[dict]) -> list[di
             if isinstance(value, str) and value:
                 add(bp, gid, "node", nid, fn_key.replace("_function", "_callback"), "function", value)
 
+    for function in functions or []:
+        add(
+            function.get("blueprint_path", ""),
+            function.get("graph_id", ""),
+            "blueprint",
+            function.get("blueprint_path", ""),
+            "defines_function",
+            "function",
+            function.get("name", ""),
+            function.get("owner", ""),
+            {
+                "function_id": function.get("function_id", ""),
+                "inputs": function.get("inputs", []),
+                "outputs": function.get("outputs", []),
+                "has_exec": function.get("has_exec", False),
+            },
+        )
+
+    for event in events or []:
+        event_kind = event.get("event_kind", "")
+        if event_kind == "component_bound":
+            component = event.get("component_name", "")
+            delegate = event.get("delegate_name", "")
+            target = f"{component}.{delegate}" if component and delegate else (delegate or component)
+            add(
+                event.get("blueprint_path", ""), event.get("graph_id", ""), "node", event.get("event_id", ""),
+                "handles_delegate", "delegate", target, event.get("delegate_owner", ""),
+                {"component": component, "delegate": delegate, "parameters": event.get("parameters", [])},
+            )
+        elif event_kind in {"enhanced_input", "input_action", "input_axis", "input_key"}:
+            add(
+                event.get("blueprint_path", ""), event.get("graph_id", ""), "node", event.get("event_id", ""),
+                "handles_input", "input", event.get("input_name", "") or event.get("name", ""),
+                detail={"event_kind": event_kind, "parameters": event.get("parameters", [])},
+            )
+        elif event_kind in {"custom", "override", "event"}:
+            add(
+                event.get("blueprint_path", ""), event.get("graph_id", ""), "node", event.get("event_id", ""),
+                "defines_event", "event", event.get("name", ""), event.get("owner", ""),
+                {"event_kind": event_kind, "parameters": event.get("parameters", [])},
+            )
+
     for ref in iter_jsonl(output / "blueprint_node_references.jsonl"):
         if ref.get("node_owned"):
             continue
@@ -1139,6 +1647,37 @@ def derive_blueprint_relations(output: Path, rigvm_links: list[dict]) -> list[di
         if target:
             add(binding.get("blueprint_path", ""), "", "widget_binding", source_id, "binds_to", "function" if binding.get("function_name") else "property_path", target, detail={"widget": binding.get("object_name", ""), "property": binding.get("property_name", "")})
 
+    for state in iter_jsonl(output / "blueprint_state_values.jsonl"):
+        obj = state.get("referenced_object_path", "")
+        if obj:
+            add(
+                state.get("blueprint_path", ""), "", state.get("owner_kind", "state"), state.get("owner_id", ""),
+                "state_references_object", "object", obj, state.get("referenced_object_class", ""),
+                {"property_path": state.get("property_path", "")},
+            )
+
+    for prop in iter_jsonl(output / "blueprint_widget_properties.jsonl"):
+        obj = prop.get("referenced_object_path", "")
+        if obj:
+            add(
+                prop.get("blueprint_path", ""), "", prop.get("owner_kind", "widget"), prop.get("owner_id", ""),
+                "widget_references_object", "object", obj, prop.get("referenced_object_class", ""),
+                {"property_path": prop.get("property_path", "")},
+            )
+
+    for binding in iter_jsonl(output / "blueprint_widget_animation_bindings.jsonl"):
+        source = binding.get("animation_path", "")
+        widget = binding.get("widget_name", "")
+        if widget:
+            add(
+                binding.get("blueprint_path", ""), "", "widget_animation", source,
+                "animates_widget", "widget", widget, detail={
+                    "slot_widget": binding.get("slot_widget_name", ""),
+                    "animation_guid": binding.get("animation_guid", ""),
+                    "is_root_widget": binding.get("is_root_widget", ""),
+                },
+            )
+
     for link in rigvm_links:
         if link.get("status") == "matched":
             add(link.get("blueprint_path", ""), link.get("graph_id", ""), "node", link.get("node_id", ""), "maps_to_rigvm_node", "rigvm_node", link.get("rigvm_object_id", ""), link.get("rigvm_class", ""), {"operation": link.get("rigvm_operation", ""), "confidence": link.get("confidence", "")})
@@ -1166,8 +1705,19 @@ def _compact_semantic(semantic: dict) -> str:
     return "; ".join(parts[:8])
 
 
-def derive_graph_context(output: Path, rigvm_links: list[dict], max_chars: int = 524288) -> list[dict]:
+def derive_graph_context(
+    output: Path,
+    rigvm_links: list[dict],
+    functions: list[dict] | None = None,
+    events: list[dict] | None = None,
+    max_chars: int = 524288,
+) -> list[dict]:
     rig_by_node = {row.get("node_id", ""): row for row in rigvm_links if row.get("status") == "matched"}
+    function_by_graph = {row.get("graph_id", ""): row for row in (functions or [])}
+    event_by_node = {row.get("event_id", ""): row for row in (events or [])}
+    rig_pins_by_node: dict[str, list[dict]] = collections.defaultdict(list)
+    for pin in iter_jsonl(output / "rigvm_pins.jsonl"):
+        rig_pins_by_node[pin.get("outer_object_id", "")].append(pin)
     nodes_by_graph: dict[str, list[dict]] = collections.defaultdict(list)
     seen_node_ids: set[str] = set()
     for row in iter_jsonl(output / "blueprint_nodes.jsonl"):
@@ -1194,12 +1744,34 @@ def derive_graph_context(output: Path, rigvm_links: list[dict], max_chars: int =
             f"Blueprint: {graph.get('blueprint_path','')}",
             f"Graph: {graph.get('graph_name','')} [{graph.get('graph_system','')}/{graph.get('graph_kind','')}]",
             f"Path: {graph.get('graph_path','')}",
-            "Nodes:",
         ]
+        function = function_by_graph.get(gid)
+        if function:
+            def fmt_params(values: list[dict]) -> str:
+                return ", ".join(
+                    f"{p.get('name','')}:{p.get('type',{}).get('category','')}"
+                    for p in values
+                )
+            lines.append(
+                f"Function: {function.get('name','')}({fmt_params(function.get('inputs', []))})"
+                + (f" -> ({fmt_params(function.get('outputs', []))})" if function.get('outputs') else "")
+                + f" | exec={function.get('has_exec', False)} | locals={len(function.get('locals', []))}"
+            )
+        lines.append("Nodes:")
         for node in nodes:
             nid = node.get("node_id", "")
             label = node.get("symbol", "") or node.get("title", "")
             line = f"  {aliases[nid]} {node.get('operation','')} {label}".rstrip()
+            event = event_by_node.get(nid)
+            if event:
+                if event.get("event_kind") == "component_bound":
+                    line += f" | event={event.get('component_name','')}.{event.get('delegate_name','')}"
+                    if event.get("delegate_owner"):
+                        line += f" owner={event.get('delegate_owner','')}"
+                elif event.get("input_name"):
+                    line += f" | event={event.get('event_kind','')}:{event.get('input_name','')}"
+                else:
+                    line += f" | event={event.get('event_kind','')}:{event.get('name','')}"
             sem_text = _compact_semantic(node.get("semantic", {}) if isinstance(node.get("semantic"), dict) else {})
             if sem_text:
                 line += f" | {sem_text}"
@@ -1207,6 +1779,16 @@ def derive_graph_context(output: Path, rigvm_links: list[dict], max_chars: int =
             if rig:
                 rig_bits = [rig.get("rigvm_operation", ""), rig.get("resolved_function_name", ""), rig.get("template_notation", "")]
                 line += " | RigVM=" + " | ".join(bit for bit in rig_bits if bit)
+                rig_defaults = []
+                for rpin in rig_pins_by_node.get(rig.get("rigvm_object_id", ""), []):
+                    direction = str(rpin.get("direction", "")).lower()
+                    if "input" not in direction and direction not in {"", "0", "io"}:
+                        continue
+                    value = rpin.get("default_value_object", "") or rpin.get("default_value", "")
+                    if value not in (None, ""):
+                        rig_defaults.append(f"{rpin.get('name','')}={value}")
+                if rig_defaults:
+                    line += " | RigDefaults: " + ", ".join(rig_defaults[:10])
             defaults = []
             for pin in pins_by_node.get(nid, []):
                 if pin.get("direction") not in ("input", "EGPD_Input", "0"):
@@ -1252,7 +1834,12 @@ def derive_graph_context(output: Path, rigvm_links: list[dict], max_chars: int =
     return out
 
 
-def derive_blueprint_summaries(output: Path, relations: list[dict]) -> list[dict]:
+def derive_blueprint_summaries(
+    output: Path,
+    relations: list[dict],
+    functions: list[dict] | None = None,
+    events: list[dict] | None = None,
+) -> list[dict]:
     graphs_by_bp: dict[str, list[dict]] = collections.defaultdict(list)
     for graph in iter_blueprint_graph_rows(output):
         graphs_by_bp[graph.get("blueprint_path", "")].append(graph)
@@ -1267,6 +1854,24 @@ def derive_blueprint_summaries(output: Path, relations: list[dict]) -> list[dict
     rel_by_bp: dict[str, collections.Counter] = collections.defaultdict(collections.Counter)
     for rel in relations:
         rel_by_bp[rel.get("blueprint_path", "")][rel.get("relation", "")] += 1
+
+    function_counts = collections.Counter(row.get("blueprint_path", "") for row in (functions or []))
+    event_counts = collections.Counter(row.get("blueprint_path", "") for row in (events or []))
+    stream_counts: dict[str, collections.Counter] = {}
+    for filename, key in (
+        ("blueprint_defaults.jsonl", "default_count"),
+        ("blueprint_component_properties.jsonl", "component_override_count"),
+        ("blueprint_state_values.jsonl", "state_value_count"),
+        ("blueprint_timelines.jsonl", "timeline_count"),
+        ("blueprint_timeline_tracks.jsonl", "timeline_track_count"),
+        ("blueprint_timeline_keys.jsonl", "timeline_key_count"),
+        ("blueprint_widgets.jsonl", "widget_count"),
+        ("blueprint_widget_properties.jsonl", "widget_property_count"),
+        ("blueprint_widget_bindings.jsonl", "widget_binding_count"),
+        ("blueprint_widget_animations.jsonl", "widget_animation_count"),
+        ("blueprint_widget_animation_bindings.jsonl", "widget_animation_binding_count"),
+    ):
+        stream_counts[key] = collections.Counter(row.get("blueprint_path", "") for row in iter_jsonl(output / filename))
 
     out = []
     for bp in iter_jsonl(output / "blueprints.jsonl"):
@@ -1286,6 +1891,8 @@ def derive_blueprint_summaries(output: Path, relations: list[dict]) -> list[dict
             f"Variables ({len(variables)}): {', '.join(variables[:80])}",
             f"Components ({len(components)}): {', '.join(components[:80])}",
             f"Interfaces ({len(interfaces)}): {', '.join(interfaces[:40])}",
+            f"Functions: {function_counts[path]} | Events: {event_counts[path]} | Defaults: {stream_counts['default_count'][path]} | Component overrides: {stream_counts['component_override_count'][path]}",
+            f"Timelines: {stream_counts['timeline_count'][path]} ({stream_counts['timeline_key_count'][path]} keys) | Widgets: {stream_counts['widget_count'][path]} ({stream_counts['widget_property_count'][path]} changed properties)",
             "Graphs: " + ", ".join(f"{g.get('graph_name','')}[{g.get('graph_system','')}/{g.get('graph_kind','')}]" for g in graphs[:120]),
             "Operations: " + ", ".join(f"{k}={v}" for k, v in op_counts.most_common(60)),
             "Relations: " + ", ".join(f"{k}={v}" for k, v in rel_by_bp.get(path, collections.Counter()).most_common(40)),
@@ -1298,6 +1905,19 @@ def derive_blueprint_summaries(output: Path, relations: list[dict]) -> list[dict
             "variable_count": len(variables),
             "component_count": len(components),
             "interface_count": len(interfaces),
+            "function_count": function_counts[path],
+            "event_count": event_counts[path],
+            "default_count": stream_counts["default_count"][path],
+            "component_override_count": stream_counts["component_override_count"][path],
+            "state_value_count": stream_counts["state_value_count"][path],
+            "timeline_count": stream_counts["timeline_count"][path],
+            "timeline_track_count": stream_counts["timeline_track_count"][path],
+            "timeline_key_count": stream_counts["timeline_key_count"][path],
+            "widget_count": stream_counts["widget_count"][path],
+            "widget_property_count": stream_counts["widget_property_count"][path],
+            "widget_binding_count": stream_counts["widget_binding_count"][path],
+            "widget_animation_count": stream_counts["widget_animation_count"][path],
+            "widget_animation_binding_count": stream_counts["widget_animation_binding_count"][path],
             "graph_count": len(graphs),
             "graph_system_counts": dict(graph_systems),
             "operation_counts": dict(op_counts),
@@ -1310,11 +1930,15 @@ def derive_blueprint_summaries(output: Path, relations: list[dict]) -> list[dict
 def derive_output(output: Path) -> dict[str, int]:
     output = output.resolve()
     rigvm_links = derive_rigvm_editor_links(output)
-    relations = derive_blueprint_relations(output, rigvm_links)
-    graph_context = derive_graph_context(output, rigvm_links)
-    summaries = derive_blueprint_summaries(output, relations)
+    functions = derive_blueprint_functions(output)
+    events = derive_blueprint_events(output)
+    relations = derive_blueprint_relations(output, rigvm_links, functions, events)
+    graph_context = derive_graph_context(output, rigvm_links, functions, events)
+    summaries = derive_blueprint_summaries(output, relations, functions, events)
     counts = {
         "rigvm_editor_links": _write_jsonl(output / "rigvm_editor_links.jsonl", rigvm_links),
+        "blueprint_functions": _write_jsonl(output / "blueprint_functions.jsonl", functions),
+        "blueprint_events": _write_jsonl(output / "blueprint_events.jsonl", events),
         "blueprint_relations": _write_jsonl(output / "blueprint_relations.jsonl", relations),
         "blueprint_graph_context": _write_jsonl(output / "blueprint_graph_context.jsonl", graph_context),
         "blueprint_summaries": _write_jsonl(output / "blueprint_summaries.jsonl", summaries),
@@ -1609,6 +2233,22 @@ def build_database(output: Path) -> Path:
                 ),
             )
 
+        for row in iter_jsonl(output / "blueprint_state_values.jsonl"):
+            conn.execute(
+                "INSERT OR REPLACE INTO blueprint_state_values VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    row.get("blueprint_path", ""), row.get("owner_kind", ""), row.get("owner_id", ""),
+                    row.get("owner_name", ""), row.get("owner_class", ""), row.get("baseline_class", ""),
+                    row.get("root_property", ""), row.get("property_name", ""), row.get("property_path", ""),
+                    int(row.get("depth", 0)), row.get("container_kind", ""), row.get("property_type", ""),
+                    row.get("cpp_type", ""), row.get("value", ""), row.get("baseline_value", ""),
+                    1 if row.get("baseline_present", False) else 0, row.get("referenced_object_path", ""),
+                    row.get("referenced_object_class", ""), row.get("baseline_object_path", ""),
+                    row.get("baseline_object_class", ""), int(row.get("property_flags", 0)),
+                    1 if row.get("truncated", False) else 0,
+                ),
+            )
+
         for row in iter_jsonl(output / "blueprint_timelines.jsonl"):
             conn.execute(
                 "INSERT OR REPLACE INTO blueprint_timelines VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -1632,6 +2272,21 @@ def build_database(output: Path) -> Path:
                 ),
             )
 
+        for row in iter_jsonl(output / "blueprint_timeline_keys.jsonl"):
+            conn.execute(
+                "INSERT OR REPLACE INTO blueprint_timeline_keys VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    row.get("timeline_path", ""), row.get("blueprint_path", ""), row.get("timeline_name", ""),
+                    int(row.get("track_index", 0)), row.get("track_type", ""), row.get("track_name", ""),
+                    row.get("curve_path", ""), row.get("curve_class", ""), int(row.get("channel_index", 0)),
+                    row.get("channel_name", ""), int(row.get("key_index", 0)), float(row.get("time", 0.0)),
+                    float(row.get("value", 0.0)), int(row.get("interp_mode", 0)), int(row.get("tangent_mode", 0)),
+                    int(row.get("tangent_weight_mode", 0)), float(row.get("arrive_tangent", 0.0)),
+                    float(row.get("leave_tangent", 0.0)), float(row.get("arrive_tangent_weight", 0.0)),
+                    float(row.get("leave_tangent_weight", 0.0)),
+                ),
+            )
+
         for row in iter_jsonl(output / "blueprint_widgets.jsonl"):
             conn.execute(
                 "INSERT OR REPLACE INTO blueprint_widgets VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -1642,6 +2297,22 @@ def build_database(output: Path) -> Path:
                     json.dumps(row.get("properties", {}), ensure_ascii=False, separators=(",", ":")),
                     json.dumps(row.get("slot_properties", {}), ensure_ascii=False, separators=(",", ":")),
                     json.dumps(row, ensure_ascii=False, separators=(",", ":")),
+                ),
+            )
+
+        for row in iter_jsonl(output / "blueprint_widget_properties.jsonl"):
+            conn.execute(
+                "INSERT OR REPLACE INTO blueprint_widget_properties VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    row.get("blueprint_path", ""), row.get("owner_kind", ""), row.get("owner_id", ""),
+                    row.get("owner_name", ""), row.get("owner_class", ""), row.get("baseline_class", ""),
+                    row.get("root_property", ""), row.get("property_name", ""), row.get("property_path", ""),
+                    int(row.get("depth", 0)), row.get("container_kind", ""), row.get("property_type", ""),
+                    row.get("cpp_type", ""), row.get("value", ""), row.get("baseline_value", ""),
+                    1 if row.get("baseline_present", False) else 0, row.get("referenced_object_path", ""),
+                    row.get("referenced_object_class", ""), row.get("baseline_object_path", ""),
+                    row.get("baseline_object_class", ""), int(row.get("property_flags", 0)),
+                    1 if row.get("truncated", False) else 0,
                 ),
             )
 
@@ -1663,6 +2334,47 @@ def build_database(output: Path) -> Path:
                     row.get("animation_path", ""), row.get("blueprint_path", ""), row.get("animation_name", ""),
                     row.get("animation_class", ""), row.get("display_label", ""), row.get("movie_scene", ""),
                     row.get("animation_bindings", ""), json.dumps(row, ensure_ascii=False, separators=(",", ":")),
+                ),
+            )
+
+        for row in iter_jsonl(output / "blueprint_widget_animation_bindings.jsonl"):
+            conn.execute(
+                "INSERT OR REPLACE INTO blueprint_widget_animation_bindings VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    row.get("animation_path", ""), row.get("blueprint_path", ""), row.get("animation_name", ""),
+                    int(row.get("binding_index", 0)), row.get("binding_struct", ""), row.get("widget_name", ""),
+                    row.get("slot_widget_name", ""), row.get("animation_guid", ""), row.get("is_root_widget", ""),
+                    row.get("dynamic_binding", ""),
+                ),
+            )
+
+        for row in iter_jsonl(output / "blueprint_functions.jsonl"):
+            conn.execute(
+                "INSERT OR REPLACE INTO blueprint_functions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    row.get("function_id", ""), row.get("blueprint_path", ""), row.get("graph_id", ""),
+                    row.get("graph_name", ""), row.get("graph_path", ""), row.get("name", ""), row.get("owner", ""),
+                    row.get("resolved_function", ""), int(row.get("function_flags", 0)),
+                    1 if row.get("has_exec", False) else 0, 1 if row.get("pure_shape", False) else 0,
+                    int(row.get("result_node_count", 0)),
+                    json.dumps(row.get("inputs", []), ensure_ascii=False, separators=(",", ":")),
+                    json.dumps(row.get("outputs", []), ensure_ascii=False, separators=(",", ":")),
+                    json.dumps(row.get("locals", []), ensure_ascii=False, separators=(",", ":")),
+                    json.dumps(row, ensure_ascii=False, separators=(",", ":")),
+                ),
+            )
+
+        for row in iter_jsonl(output / "blueprint_events.jsonl"):
+            conn.execute(
+                "INSERT OR REPLACE INTO blueprint_events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    row.get("event_id", ""), row.get("blueprint_path", ""), row.get("graph_id", ""),
+                    row.get("graph_name", ""), row.get("node_class", ""), row.get("operation", ""),
+                    row.get("event_kind", ""), row.get("name", ""), row.get("owner", ""),
+                    row.get("component_name", ""), row.get("delegate_name", ""), row.get("delegate_owner", ""),
+                    row.get("input_name", ""),
+                    json.dumps(row.get("parameters", []), ensure_ascii=False, separators=(",", ":")),
+                    json.dumps(row, ensure_ascii=False, separators=(",", ":")),
                 ),
             )
 
@@ -1702,10 +2414,15 @@ def build_database(output: Path) -> Path:
 
         for row in iter_jsonl(output / "blueprint_summaries.jsonl"):
             conn.execute(
-                "INSERT OR REPLACE INTO blueprint_summaries VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT OR REPLACE INTO blueprint_summaries VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     row.get("blueprint_path", ""), row.get("name", ""), row.get("parent_class", ""), row.get("generated_class", ""),
                     int(row.get("variable_count", 0)), int(row.get("component_count", 0)), int(row.get("interface_count", 0)),
+                    int(row.get("function_count", 0)), int(row.get("event_count", 0)), int(row.get("default_count", 0)),
+                    int(row.get("component_override_count", 0)), int(row.get("state_value_count", 0)), int(row.get("timeline_count", 0)),
+                    int(row.get("timeline_track_count", 0)), int(row.get("timeline_key_count", 0)), int(row.get("widget_count", 0)),
+                    int(row.get("widget_property_count", 0)), int(row.get("widget_binding_count", 0)),
+                    int(row.get("widget_animation_count", 0)), int(row.get("widget_animation_binding_count", 0)),
                     int(row.get("graph_count", 0)), json.dumps(row.get("graph_system_counts", {}), ensure_ascii=False, separators=(",", ":")),
                     json.dumps(row.get("operation_counts", {}), ensure_ascii=False, separators=(",", ":")),
                     json.dumps(row.get("relation_counts", {}), ensure_ascii=False, separators=(",", ":")), row.get("text", ""),
@@ -1866,11 +2583,17 @@ DEFAULT_BUNDLE_FILES = (
     "blueprint_bindings.jsonl",
     "blueprint_defaults.jsonl",
     "blueprint_component_properties.jsonl",
+    "blueprint_state_values.jsonl",
     "blueprint_timelines.jsonl",
     "blueprint_timeline_tracks.jsonl",
+    "blueprint_timeline_keys.jsonl",
     "blueprint_widgets.jsonl",
+    "blueprint_widget_properties.jsonl",
     "blueprint_widget_bindings.jsonl",
     "blueprint_widget_animations.jsonl",
+    "blueprint_widget_animation_bindings.jsonl",
+    "blueprint_functions.jsonl",
+    "blueprint_events.jsonl",
     "blueprint_relations.jsonl",
     "blueprint_graph_context.jsonl",
     "blueprint_summaries.jsonl",
@@ -2194,6 +2917,46 @@ def query(args: argparse.Namespace) -> int:
         )
         _print_rows(rows, ("blueprint_path", "component_name", "property_name", "referenced_object_path", "value"))
 
+        print("\n[flattened blueprint state]")
+        rows = conn.execute(
+            """
+            SELECT blueprint_path, owner_kind, owner_name, property_path, cpp_type,
+                   referenced_object_path, substr(value,1,240) AS value
+            FROM blueprint_state_values
+            WHERE owner_name LIKE ? OR owner_class LIKE ? OR property_path LIKE ? OR cpp_type LIKE ?
+               OR value LIKE ? OR referenced_object_path LIKE ?
+            LIMIT ?
+            """,
+            (f"%{term}%", f"%{term}%", f"%{term}%", f"%{term}%", f"%{term}%", f"%{term}%", limit),
+        )
+        _print_rows(rows, ("blueprint_path", "owner_kind", "owner_name", "property_path", "cpp_type", "referenced_object_path", "value"))
+
+        print("\n[blueprint functions]")
+        rows = conn.execute(
+            """
+            SELECT blueprint_path, name, resolved_function, has_exec, inputs_json, outputs_json
+            FROM blueprint_functions
+            WHERE name LIKE ? OR resolved_function LIKE ? OR owner LIKE ?
+               OR inputs_json LIKE ? OR outputs_json LIKE ? OR locals_json LIKE ?
+            LIMIT ?
+            """,
+            (f"%{term}%", f"%{term}%", f"%{term}%", f"%{term}%", f"%{term}%", f"%{term}%", limit),
+        )
+        _print_rows(rows, ("blueprint_path", "name", "resolved_function", "has_exec", "inputs_json", "outputs_json"))
+
+        print("\n[blueprint events]")
+        rows = conn.execute(
+            """
+            SELECT blueprint_path, event_kind, name, component_name, delegate_name, delegate_owner, input_name
+            FROM blueprint_events
+            WHERE event_kind LIKE ? OR name LIKE ? OR component_name LIKE ? OR delegate_name LIKE ?
+               OR delegate_owner LIKE ? OR input_name LIKE ? OR parameters_json LIKE ?
+            LIMIT ?
+            """,
+            (f"%{term}%", f"%{term}%", f"%{term}%", f"%{term}%", f"%{term}%", f"%{term}%", f"%{term}%", limit),
+        )
+        _print_rows(rows, ("blueprint_path", "event_kind", "name", "component_name", "delegate_name", "delegate_owner", "input_name"))
+
         print("\n[timelines]")
         rows = conn.execute(
             """
@@ -2206,6 +2969,18 @@ def query(args: argparse.Namespace) -> int:
         )
         _print_rows(rows, ("blueprint_path", "timeline_name", "length", "auto_play", "loop", "update_function", "finished_function"))
 
+        print("\n[timeline keys]")
+        rows = conn.execute(
+            """
+            SELECT blueprint_path, timeline_name, track_name, channel_name, key_index, time, value, interp_mode
+            FROM blueprint_timeline_keys
+            WHERE timeline_name LIKE ? OR track_name LIKE ? OR channel_name LIKE ? OR curve_path LIKE ?
+            LIMIT ?
+            """,
+            (f"%{term}%", f"%{term}%", f"%{term}%", f"%{term}%", limit),
+        )
+        _print_rows(rows, ("blueprint_path", "timeline_name", "track_name", "channel_name", "key_index", "time", "value", "interp_mode"))
+
         print("\n[widgets]")
         rows = conn.execute(
             """
@@ -2217,6 +2992,32 @@ def query(args: argparse.Namespace) -> int:
             (f"%{term}%", f"%{term}%", f"%{term}%", f"%{term}%", f"%{term}%", limit),
         )
         _print_rows(rows, ("blueprint_path", "widget_name", "widget_class", "parent_widget_path", "slot_class"))
+
+        print("\n[widget properties]")
+        rows = conn.execute(
+            """
+            SELECT blueprint_path, owner_kind, owner_name, property_path, cpp_type, referenced_object_path,
+                   substr(value,1,240) AS value
+            FROM blueprint_widget_properties
+            WHERE owner_name LIKE ? OR owner_class LIKE ? OR property_path LIKE ? OR cpp_type LIKE ?
+               OR value LIKE ? OR referenced_object_path LIKE ?
+            LIMIT ?
+            """,
+            (f"%{term}%", f"%{term}%", f"%{term}%", f"%{term}%", f"%{term}%", f"%{term}%", limit),
+        )
+        _print_rows(rows, ("blueprint_path", "owner_kind", "owner_name", "property_path", "cpp_type", "referenced_object_path", "value"))
+
+        print("\n[widget animation bindings]")
+        rows = conn.execute(
+            """
+            SELECT blueprint_path, animation_name, widget_name, slot_widget_name, animation_guid
+            FROM blueprint_widget_animation_bindings
+            WHERE animation_name LIKE ? OR widget_name LIKE ? OR slot_widget_name LIKE ? OR dynamic_binding LIKE ?
+            LIMIT ?
+            """,
+            (f"%{term}%", f"%{term}%", f"%{term}%", f"%{term}%", limit),
+        )
+        _print_rows(rows, ("blueprint_path", "animation_name", "widget_name", "slot_widget_name", "animation_guid"))
 
         print("\n[blueprint node properties]")
         rows = conn.execute(

@@ -27,6 +27,8 @@ UnrealAssetTool separates **extraction**, **storage**, and **interpretation**.
 
 The commandlet is the authoritative extractor. SQLite and future AI summaries are derived indexes.
 
+Schema v8 further separates **scanner-only authored state** from **reproducible reconstruction**. Unreal extracts values that require deserialized editor objects (CDO/component/widget overrides and Timeline curve keys). Python derives function/event models, relations, graph context, summaries, and editor-ControlRig→RigVM joins from canonical JSONL so those algorithms can evolve without rescanning a project.
+
 ## Why JSONL is canonical
 
 A single `project.json` becomes impractical on real projects. JSONL gives the tool:
@@ -228,4 +230,4 @@ That makes the Unreal project itself a browsable knowledge source for an AI agen
 
 ## Derived visual-program views
 
-The commandlet owns engine-truth extraction. Python may build deterministic retrieval views over those facts without changing their meaning. In schema v7 this includes semantic relations, bounded graph-context text, Blueprint summaries, and a scored Control Rig editor-node to RigVM-model join. Derived views must retain ambiguity/status instead of silently guessing and must be regenerable from JSONL without launching Unreal.
+The commandlet owns engine-truth extraction. Python may build deterministic retrieval views over those facts without changing their meaning. In schema v8 this includes canonical function/event definitions, semantic relations, bounded graph-context text, Blueprint summaries, and a graph-first Control Rig editor-node to RigVM-model join. Derived views must retain ambiguity/status instead of silently guessing and must be regenerable from JSONL without launching Unreal.

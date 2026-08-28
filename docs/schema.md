@@ -1,4 +1,4 @@
-# UnrealAssetTool schema v7
+# UnrealAssetTool schema v8
 
 The scan format is line-oriented so individual records can be streamed, indexed, diffed, embedded, or retrieved without parsing a monolithic project document.
 
@@ -16,7 +16,8 @@ Important fields:
 - `project_dir`
 - `include_generated`
 - `include_engine`
-- `counts` (including normalized Blueprint graph/pin/interface counts and compact RigVM object/pin/link/reference counts; raw RigVM property count is normally zero)
+- `counts` (including normalized Blueprint graph/pin/interface counts, flattened state/Timeline/UMG counts, and compact RigVM object/pin/link/reference counts; raw RigVM property count is normally zero)
+- `derived_schema_version` and `derived_counts` after the Python derivation pass
 
 ## `files.jsonl`
 
@@ -338,3 +339,81 @@ Schema v7 adds non-graph Blueprint state that materially changes runtime/design 
 Graph scanning also de-duplicates emitted node, pin, and edge identities within each graph, not only graph objects themselves. This prevents repeated nested Control Rig editor nodes from appearing twice in canonical JSONL.
 
 The Python derivation layer has `derived_schema_version = 1` and emits `rigvm_editor_links.jsonl`, `blueprint_relations.jsonl`, `blueprint_graph_context.jsonl`, and `blueprint_summaries.jsonl`. These are reproducible indexes over canonical scan data and can be regenerated with `uatool.py derive`. The raw Unreal schema version and derived schema version are recorded separately in `manifest.json`.
+
+
+## Schema v8 Blueprint reconstruction streams
+
+### `blueprint_state_values.jsonl`
+
+A bounded, changed-only tree for CDO and component-template state.  Top-level
+schema-v7 override records remain available; this stream makes nested changed
+struct/array values addressable without dumping unchanged defaults.
+
+Important fields include `owner_kind`, `owner_id`, `owner_name`, `root_property`,
+`property_path`, `depth`, `container_kind`, current/baseline values, and direct
+current/baseline UObject references.  Recursion is deliberately bounded.
+
+### `blueprint_timeline_keys.jsonl`
+
+One record per rich-curve key used by a Blueprint Timeline track/channel.  It
+records Timeline/track/channel identity, key index, time/value, interpolation
+mode, tangent mode/weight mode, and arrive/leave tangent values and weights.
+
+### `blueprint_widget_properties.jsonl`
+
+Changed designer-widget and panel-slot properties relative to each object's
+class default object.  This supplements the compact hierarchy in
+`blueprint_widgets.jsonl` with class-specific authored state such as TextBlock,
+Image, Button/CommonUI, and slot-layout overrides when Unreal exposes them as
+reflected properties.
+
+### `blueprint_widget_animation_bindings.jsonl`
+
+Normalized `FWidgetAnimationBinding` records: animation identity, widget name,
+slot-widget name, animation GUID, root-widget flag, and dynamic binding data.
+
+## Schema v8 derived reconstruction streams
+
+These files are reproducible with `python scripts/uatool.py derive <output>` and
+do not require reopening Unreal.
+
+### `blueprint_functions.jsonl`
+
+Canonical function definitions derived from function-entry/result nodes and
+normalized pins.  Records contain function/graph identity, resolved function and
+flags, execution/pure shape, inputs, outputs, local variables, and result nodes.
+
+### `blueprint_events.jsonl`
+
+Canonical event definitions.  Event kinds include ordinary/override/custom,
+component-bound delegate events, Enhanced Input, legacy input actions, input
+axis events, and key events.  Component events promote component/delegate owner
+facts from serialized node properties and expose output parameters.
+
+### `rigvm_editor_links.jsonl`
+
+Schema v8 uses graph-first Control Rig matching: the entire editor graph is
+matched to a RigVM graph scope using exact hierarchy segments, model node names,
+positions, and graph shape before individual nodes are joined.  This avoids
+ambiguities from repeated Entry/Return/Sequence nodes in nested Control Rig
+functions.
+
+### `blueprint_relations.jsonl`
+
+Adds function/event relations (`defines_function`, `defines_event`,
+`handles_delegate`, `handles_input`), flattened-state/widget object-reference
+relations, normalized widget-animation targets, and the existing calls/reads/
+writes/assets/animation/Control Rig relations.
+
+### `blueprint_graph_context.jsonl`
+
+Retrieval-oriented deterministic graph text now includes canonical function
+signatures, specialized event identity, resolved RigVM operations/functions,
+RigVM input defaults, Blueprint pin defaults, and execution/data-flow edges.
+Canonical node/pin/edge tables remain authoritative.
+
+### `blueprint_summaries.jsonl`
+
+Per-Blueprint summaries additionally count functions, events, defaults,
+component/state overrides, Timelines/tracks/keys, widgets/properties/bindings,
+and widget animations/bindings.

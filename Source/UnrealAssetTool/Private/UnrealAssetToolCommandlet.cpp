@@ -24,6 +24,8 @@
 #include "AnimStateNodeBase.h"
 #include "AnimStateTransitionNode.h"
 #include "Dom/JsonObject.h"
+#include "Curves/CurveBase.h"
+#include "Curves/RichCurve.h"
 #include "EdGraph/EdGraph.h"
 #include "EdGraph/EdGraphNode.h"
 #include "EdGraph/EdGraphPin.h"
@@ -65,7 +67,7 @@
 
 namespace UnrealAssetTool
 {
-    static constexpr int32 SchemaVersion = 7;
+    static constexpr int32 SchemaVersion = 8;
     static constexpr int32 SourceChunkLines = 200;
 
     class FJsonlWriter
@@ -132,11 +134,15 @@ namespace UnrealAssetTool
         int64 BlueprintComponents = 0;
         int64 BlueprintDefaults = 0;
         int64 BlueprintComponentProperties = 0;
+        int64 BlueprintStateValues = 0;
         int64 BlueprintTimelines = 0;
         int64 BlueprintTimelineTracks = 0;
+        int64 BlueprintTimelineKeys = 0;
         int64 BlueprintWidgets = 0;
+        int64 BlueprintWidgetProperties = 0;
         int64 BlueprintWidgetBindings = 0;
         int64 BlueprintWidgetAnimations = 0;
+        int64 BlueprintWidgetAnimationBindings = 0;
     };
 
     static FString NormalizeAbsolutePath(const FString& InPath)
@@ -2692,10 +2698,333 @@ namespace UnrealAssetTool
         return FieldValue ? Field->GetObjectPropertyValue(FieldValue) : nullptr;
     }
 
+
+    struct FChangedValueScanContext
+    {
+        FString BlueprintPath;
+        FString OwnerKind;
+        FString OwnerId;
+        FString OwnerName;
+        FString OwnerClass;
+        FString BaselineClass;
+        FJsonlWriter* Writer = nullptr;
+        int64* Counter = nullptr;
+        UObject* ExportOwner = nullptr;
+        UObject* BaselineExportOwner = nullptr;
+    };
+
+    static FString ChangedValueContainerKind(const FProperty* Property)
+    {
+        if (CastField<FStructProperty>(Property))
+        {
+            return TEXT("struct");
+        }
+        if (CastField<FArrayProperty>(Property))
+        {
+            return TEXT("array");
+        }
+        if (CastField<FMapProperty>(Property))
+        {
+            return TEXT("map");
+        }
+        if (CastField<FSetProperty>(Property))
+        {
+            return TEXT("set");
+        }
+        if (CastField<FObjectPropertyBase>(Property))
+        {
+            return TEXT("object");
+        }
+        return TEXT("scalar");
+    }
+
+    static FString ExportPropertyTextDirect(
+        FProperty* Property,
+        const void* ValuePtr,
+        UObject* OwnerObject,
+        int32 MaxChars,
+        bool& bOutTruncated)
+    {
+        bOutTruncated = false;
+        if (!Property || !ValuePtr)
+        {
+            return TEXT("");
+        }
+
+        FString Value;
+        Property->ExportTextItem_Direct(
+            Value,
+            ValuePtr,
+            nullptr,
+            OwnerObject,
+            PPF_None,
+            nullptr);
+
+        if (MaxChars > 0 && Value.Len() > MaxChars)
+        {
+            Value = Value.Left(MaxChars);
+            bOutTruncated = true;
+        }
+        return Value;
+    }
+
+    static UObject* GetObjectPropertyValueDirect(
+        FProperty* Property,
+        const void* ValuePtr)
+    {
+        const FObjectPropertyBase* ObjectProperty = CastField<FObjectPropertyBase>(Property);
+        return ObjectProperty && ValuePtr
+            ? ObjectProperty->GetObjectPropertyValue(ValuePtr)
+            : nullptr;
+    }
+
+    static bool WriteChangedValueRecord(
+        FChangedValueScanContext& Context,
+        FProperty* Property,
+        const void* CurrentValue,
+        const void* BaselineValue,
+        const FString& RootProperty,
+        const FString& PropertyPath,
+        int32 Depth)
+    {
+        if (!Context.Writer || !Context.Counter || !Property || !CurrentValue)
+        {
+            return true;
+        }
+
+        bool bValueTruncated = false;
+        bool bBaselineTruncated = false;
+        const FString Value = ExportPropertyTextDirect(
+            Property, CurrentValue, Context.ExportOwner, 16384, bValueTruncated);
+        const FString BaselineText = BaselineValue
+            ? ExportPropertyTextDirect(
+                Property, BaselineValue, Context.BaselineExportOwner, 16384, bBaselineTruncated)
+            : TEXT("");
+
+        UObject* ObjectValue = GetObjectPropertyValueDirect(Property, CurrentValue);
+        UObject* BaselineObjectValue = BaselineValue
+            ? GetObjectPropertyValueDirect(Property, BaselineValue)
+            : nullptr;
+
+        const TSharedRef<FJsonObject> Json = MakeShared<FJsonObject>();
+        Json->SetStringField(TEXT("blueprint_path"), Context.BlueprintPath);
+        Json->SetStringField(TEXT("owner_kind"), Context.OwnerKind);
+        Json->SetStringField(TEXT("owner_id"), Context.OwnerId);
+        Json->SetStringField(TEXT("owner_name"), Context.OwnerName);
+        Json->SetStringField(TEXT("owner_class"), Context.OwnerClass);
+        Json->SetStringField(TEXT("baseline_class"), Context.BaselineClass);
+        Json->SetStringField(TEXT("root_property"), RootProperty);
+        Json->SetStringField(TEXT("property_name"), Property->GetName());
+        Json->SetStringField(TEXT("property_path"), PropertyPath);
+        Json->SetNumberField(TEXT("depth"), Depth);
+        Json->SetStringField(TEXT("container_kind"), ChangedValueContainerKind(Property));
+        Json->SetStringField(TEXT("property_type"), Property->GetClass()->GetName());
+        Json->SetStringField(TEXT("cpp_type"), Property->GetCPPType());
+        Json->SetStringField(TEXT("value"), Value);
+        Json->SetStringField(TEXT("baseline_value"), BaselineText);
+        Json->SetBoolField(TEXT("baseline_present"), BaselineValue != nullptr);
+        Json->SetStringField(
+            TEXT("referenced_object_path"),
+            ObjectValue ? ObjectValue->GetPathName() : TEXT(""));
+        Json->SetStringField(
+            TEXT("referenced_object_class"),
+            ObjectValue ? ObjectValue->GetClass()->GetPathName() : TEXT(""));
+        Json->SetStringField(
+            TEXT("baseline_object_path"),
+            BaselineObjectValue ? BaselineObjectValue->GetPathName() : TEXT(""));
+        Json->SetStringField(
+            TEXT("baseline_object_class"),
+            BaselineObjectValue ? BaselineObjectValue->GetClass()->GetPathName() : TEXT(""));
+        Json->SetNumberField(
+            TEXT("property_flags"),
+            static_cast<double>(Property->GetPropertyFlags()));
+        Json->SetBoolField(TEXT("truncated"), bValueTruncated || bBaselineTruncated);
+
+        if (!Context.Writer->Write(Json))
+        {
+            return false;
+        }
+        ++(*Context.Counter);
+        return true;
+    }
+
+    static bool ScanChangedValueDirect(
+        FChangedValueScanContext& Context,
+        FProperty* Property,
+        const void* CurrentValue,
+        const void* BaselineValue,
+        const FString& RootProperty,
+        const FString& PropertyPath,
+        int32 Depth)
+    {
+        if (!Property || !CurrentValue || !IsCapturableProperty(Property))
+        {
+            return true;
+        }
+
+        static constexpr int32 MaxDepth = 4;
+        static constexpr int32 MaxArrayElements = 64;
+
+        if (BaselineValue && Property->Identical(CurrentValue, BaselineValue, PPF_None))
+        {
+            return true;
+        }
+
+        if (!WriteChangedValueRecord(
+                Context,
+                Property,
+                CurrentValue,
+                BaselineValue,
+                RootProperty,
+                PropertyPath,
+                Depth))
+        {
+            return false;
+        }
+
+        if (Depth >= MaxDepth)
+        {
+            return true;
+        }
+
+        if (FStructProperty* StructProperty = CastField<FStructProperty>(Property))
+        {
+            if (!StructProperty->Struct)
+            {
+                return true;
+            }
+
+            for (TFieldIterator<FProperty> It(
+                     StructProperty->Struct,
+                     EFieldIterationFlags::Default);
+                 It;
+                 ++It)
+            {
+                FProperty* Child = *It;
+                if (!IsCapturableProperty(Child))
+                {
+                    continue;
+                }
+
+                for (int32 ChildArrayIndex = 0;
+                     ChildArrayIndex < Child->ArrayDim;
+                     ++ChildArrayIndex)
+                {
+                    const void* ChildCurrent =
+                        Child->ContainerPtrToValuePtr<void>(CurrentValue, ChildArrayIndex);
+                    const void* ChildBaseline = BaselineValue
+                        ? Child->ContainerPtrToValuePtr<void>(BaselineValue, ChildArrayIndex)
+                        : nullptr;
+
+                    FString ChildPath = FString::Printf(
+                        TEXT("%s.%s"),
+                        *PropertyPath,
+                        *Child->GetName());
+                    if (Child->ArrayDim > 1)
+                    {
+                        ChildPath += FString::Printf(TEXT("[%d]"), ChildArrayIndex);
+                    }
+
+                    if (!ScanChangedValueDirect(
+                            Context,
+                            Child,
+                            ChildCurrent,
+                            ChildBaseline,
+                            RootProperty,
+                            ChildPath,
+                            Depth + 1))
+                    {
+                        return false;
+                    }
+                }
+            }
+        }
+        else if (FArrayProperty* ArrayProperty = CastField<FArrayProperty>(Property))
+        {
+            if (!ArrayProperty->Inner)
+            {
+                return true;
+            }
+
+            FScriptArrayHelper CurrentHelper(ArrayProperty, CurrentValue);
+            TUniquePtr<FScriptArrayHelper> BaselineHelper;
+            if (BaselineValue)
+            {
+                BaselineHelper = MakeUnique<FScriptArrayHelper>(
+                    ArrayProperty,
+                    BaselineValue);
+            }
+
+            const int32 NumToScan = FMath::Min(CurrentHelper.Num(), MaxArrayElements);
+            for (int32 Index = 0; Index < NumToScan; ++Index)
+            {
+                const void* ElementCurrent = CurrentHelper.GetRawPtr(Index);
+                const void* ElementBaseline =
+                    BaselineHelper.IsValid() && Index < BaselineHelper->Num()
+                    ? BaselineHelper->GetRawPtr(Index)
+                    : nullptr;
+
+                const FString ElementPath = FString::Printf(
+                    TEXT("%s[%d]"),
+                    *PropertyPath,
+                    Index);
+
+                if (!ScanChangedValueDirect(
+                        Context,
+                        ArrayProperty->Inner,
+                        ElementCurrent,
+                        ElementBaseline,
+                        RootProperty,
+                        ElementPath,
+                        Depth + 1))
+                {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    static bool ScanChangedPropertyInContainers(
+        FChangedValueScanContext& Context,
+        FProperty* Property,
+        const void* CurrentContainer,
+        const void* BaselineContainer,
+        int32 ArrayIndex)
+    {
+        if (!Property || !CurrentContainer)
+        {
+            return true;
+        }
+
+        const void* CurrentValue =
+            Property->ContainerPtrToValuePtr<void>(CurrentContainer, ArrayIndex);
+        const void* BaselineValue = BaselineContainer
+            ? Property->ContainerPtrToValuePtr<void>(BaselineContainer, ArrayIndex)
+            : nullptr;
+
+        FString RootPath = Property->GetName();
+        if (Property->ArrayDim > 1)
+        {
+            RootPath += FString::Printf(TEXT("[%d]"), ArrayIndex);
+        }
+
+        return ScanChangedValueDirect(
+            Context,
+            Property,
+            CurrentValue,
+            BaselineValue,
+            Property->GetName(),
+            RootPath,
+            0);
+    }
+
     static bool ScanBlueprintDefaults(
         UBlueprint* Blueprint,
         const FString& BlueprintPath,
         FJsonlWriter& DefaultsWriter,
+        FJsonlWriter& StateValuesWriter,
         FScanCounts& Counts)
     {
         if (!Blueprint || !Blueprint->GeneratedClass)
@@ -2776,6 +3105,30 @@ namespace UnrealAssetTool
                     return false;
                 }
                 ++Counts.BlueprintDefaults;
+
+                FChangedValueScanContext StateContext;
+                StateContext.BlueprintPath = BlueprintPath;
+                StateContext.OwnerKind = TEXT("class_default");
+                StateContext.OwnerId = GeneratedClass->GetPathName();
+                StateContext.OwnerName = GeneratedClass->GetName();
+                StateContext.OwnerClass = GeneratedClass->GetPathName();
+                StateContext.BaselineClass = Blueprint->ParentClass
+                    ? Blueprint->ParentClass->GetPathName()
+                    : TEXT("");
+                StateContext.Writer = &StateValuesWriter;
+                StateContext.Counter = &Counts.BlueprintStateValues;
+                StateContext.ExportOwner = CDO;
+                StateContext.BaselineExportOwner = ParentCDO;
+
+                if (!ScanChangedPropertyInContainers(
+                        StateContext,
+                        Property,
+                        CDO,
+                        bCanCompareToParent ? ParentCDO : nullptr,
+                        ArrayIndex))
+                {
+                    return false;
+                }
             }
         }
 
@@ -2786,6 +3139,7 @@ namespace UnrealAssetTool
         UBlueprint* Blueprint,
         const FString& BlueprintPath,
         FJsonlWriter& ComponentPropertiesWriter,
+        FJsonlWriter& StateValuesWriter,
         FScanCounts& Counts)
     {
         if (!Blueprint || !Blueprint->SimpleConstructionScript)
@@ -2870,7 +3224,119 @@ namespace UnrealAssetTool
                         return false;
                     }
                     ++Counts.BlueprintComponentProperties;
+
+                    FChangedValueScanContext StateContext;
+                    StateContext.BlueprintPath = BlueprintPath;
+                    StateContext.OwnerKind = TEXT("component_template");
+                    StateContext.OwnerId = Template->GetPathName();
+                    StateContext.OwnerName = SCSNode->GetVariableName().ToString();
+                    StateContext.OwnerClass = SCSNode->ComponentClass->GetPathName();
+                    StateContext.BaselineClass = SCSNode->ComponentClass->GetPathName();
+                    StateContext.Writer = &StateValuesWriter;
+                    StateContext.Counter = &Counts.BlueprintStateValues;
+                    StateContext.ExportOwner = Template;
+                    StateContext.BaselineExportOwner = ClassDefault;
+
+                    if (!ScanChangedPropertyInContainers(
+                            StateContext,
+                            Property,
+                            Template,
+                            ClassDefault,
+                            ArrayIndex))
+                    {
+                        return false;
+                    }
                 }
+            }
+        }
+
+        return true;
+    }
+
+
+    static bool WriteTimelineCurveKeys(
+        UObject* CurveObject,
+        const FString& BlueprintPath,
+        const FString& TimelinePath,
+        const FString& TimelineName,
+        int32 TrackIndex,
+        const FString& TrackType,
+        const FString& TrackName,
+        FJsonlWriter& TimelineKeysWriter,
+        FScanCounts& Counts)
+    {
+        UCurveBase* Curve = Cast<UCurveBase>(CurveObject);
+        if (!Curve)
+        {
+            return true;
+        }
+
+        // Timeline templates use UCurveFloat/UCurveVector/UCurveLinearColor,
+        // all of which expose FRichCurve channels through UCurveBase::GetCurves.
+        // Avoid assuming arbitrary UCurveBase subclasses also use FRichCurve.
+        const FString CurveClassName = Curve->GetClass()->GetName();
+        if (CurveClassName != TEXT("CurveFloat") &&
+            CurveClassName != TEXT("CurveVector") &&
+            CurveClassName != TEXT("CurveLinearColor"))
+        {
+            return true;
+        }
+
+        const UCurveBase* ConstCurve = Curve;
+        const TArray<FRichCurveEditInfoConst> Curves = ConstCurve->GetCurves();
+        for (int32 ChannelIndex = 0; ChannelIndex < Curves.Num(); ++ChannelIndex)
+        {
+            const FRichCurveEditInfoConst& CurveInfo = Curves[ChannelIndex];
+            if (!CurveInfo.CurveToEdit)
+            {
+                continue;
+            }
+
+            const FRichCurve* RichCurve =
+                static_cast<const FRichCurve*>(CurveInfo.CurveToEdit);
+            const TArray<FRichCurveKey>& Keys = RichCurve->GetConstRefOfKeys();
+
+            for (int32 KeyIndex = 0; KeyIndex < Keys.Num(); ++KeyIndex)
+            {
+                const FRichCurveKey& Key = Keys[KeyIndex];
+
+                const TSharedRef<FJsonObject> Json = MakeShared<FJsonObject>();
+                Json->SetStringField(TEXT("blueprint_path"), BlueprintPath);
+                Json->SetStringField(TEXT("timeline_path"), TimelinePath);
+                Json->SetStringField(TEXT("timeline_name"), TimelineName);
+                Json->SetNumberField(TEXT("track_index"), TrackIndex);
+                Json->SetStringField(TEXT("track_type"), TrackType);
+                Json->SetStringField(TEXT("track_name"), TrackName);
+                Json->SetStringField(
+                    TEXT("curve_path"),
+                    CurveObject ? CurveObject->GetPathName() : TEXT(""));
+                Json->SetStringField(
+                    TEXT("curve_class"),
+                    CurveObject ? CurveObject->GetClass()->GetPathName() : TEXT(""));
+                Json->SetNumberField(TEXT("channel_index"), ChannelIndex);
+                Json->SetStringField(TEXT("channel_name"), CurveInfo.CurveName.ToString());
+                Json->SetNumberField(TEXT("key_index"), KeyIndex);
+                Json->SetNumberField(TEXT("time"), Key.Time);
+                Json->SetNumberField(TEXT("value"), Key.Value);
+                Json->SetNumberField(
+                    TEXT("interp_mode"),
+                    static_cast<int32>(Key.InterpMode));
+                Json->SetNumberField(
+                    TEXT("tangent_mode"),
+                    static_cast<int32>(Key.TangentMode));
+                Json->SetNumberField(
+                    TEXT("tangent_weight_mode"),
+                    static_cast<int32>(Key.TangentWeightMode));
+                Json->SetNumberField(TEXT("arrive_tangent"), Key.ArriveTangent);
+                Json->SetNumberField(TEXT("leave_tangent"), Key.LeaveTangent);
+                Json->SetNumberField(TEXT("arrive_tangent_weight"), Key.ArriveTangentWeight);
+                Json->SetNumberField(TEXT("leave_tangent_weight"), Key.LeaveTangentWeight);
+
+                if (!TimelineKeysWriter.Write(Json))
+                {
+                    return false;
+                }
+                ++Counts.BlueprintTimelineKeys;
             }
         }
 
@@ -2885,6 +3351,7 @@ namespace UnrealAssetTool
         const FName ArrayPropertyName,
         const FString& TrackType,
         FJsonlWriter& TimelineTracksWriter,
+        FJsonlWriter& TimelineKeysWriter,
         FScanCounts& Counts)
     {
         if (!Timeline)
@@ -2975,6 +3442,21 @@ namespace UnrealAssetTool
                 return false;
             }
             ++Counts.BlueprintTimelineTracks;
+
+            if (Curve &&
+                !WriteTimelineCurveKeys(
+                    Curve,
+                    BlueprintPath,
+                    TimelinePath,
+                    TimelineName,
+                    TrackIndex,
+                    TrackType,
+                    TrackName,
+                    TimelineKeysWriter,
+                    Counts))
+            {
+                return false;
+            }
         }
 
         return true;
@@ -2985,6 +3467,7 @@ namespace UnrealAssetTool
         const FString& BlueprintPath,
         FJsonlWriter& TimelinesWriter,
         FJsonlWriter& TimelineTracksWriter,
+        FJsonlWriter& TimelineKeysWriter,
         FScanCounts& Counts)
     {
         if (!Blueprint)
@@ -3031,16 +3514,16 @@ namespace UnrealAssetTool
 
             if (!WriteTimelineTrackArray(
                     Timeline, BlueprintPath, TimelinePath, TimelineName,
-                    TEXT("FloatTracks"), TEXT("float"), TimelineTracksWriter, Counts) ||
+                    TEXT("FloatTracks"), TEXT("float"), TimelineTracksWriter, TimelineKeysWriter, Counts) ||
                 !WriteTimelineTrackArray(
                     Timeline, BlueprintPath, TimelinePath, TimelineName,
-                    TEXT("VectorTracks"), TEXT("vector"), TimelineTracksWriter, Counts) ||
+                    TEXT("VectorTracks"), TEXT("vector"), TimelineTracksWriter, TimelineKeysWriter, Counts) ||
                 !WriteTimelineTrackArray(
                     Timeline, BlueprintPath, TimelinePath, TimelineName,
-                    TEXT("LinearColorTracks"), TEXT("linear_color"), TimelineTracksWriter, Counts) ||
+                    TEXT("LinearColorTracks"), TEXT("linear_color"), TimelineTracksWriter, TimelineKeysWriter, Counts) ||
                 !WriteTimelineTrackArray(
                     Timeline, BlueprintPath, TimelinePath, TimelineName,
-                    TEXT("EventTracks"), TEXT("event"), TimelineTracksWriter, Counts))
+                    TEXT("EventTracks"), TEXT("event"), TimelineTracksWriter, TimelineKeysWriter, Counts))
             {
                 return false;
             }
@@ -3111,6 +3594,82 @@ namespace UnrealAssetTool
             }
         }
         return Json;
+    }
+
+
+    static bool ScanObjectOverridesAgainstClassDefault(
+        UObject* Object,
+        const FString& BlueprintPath,
+        const FString& OwnerKind,
+        const FString& OwnerName,
+        const TSet<FName>& SkipPropertyNames,
+        FJsonlWriter& WidgetPropertiesWriter,
+        FScanCounts& Counts)
+    {
+        if (!Object || !Object->GetClass())
+        {
+            return true;
+        }
+
+        UObject* ClassDefault = Object->GetClass()->GetDefaultObject();
+        if (!ClassDefault)
+        {
+            return true;
+        }
+
+        static constexpr uint64 SkipFlags =
+            CPF_Transient | CPF_DuplicateTransient | CPF_NonPIEDuplicateTransient | CPF_Deprecated;
+
+        FChangedValueScanContext StateContext;
+        StateContext.BlueprintPath = BlueprintPath;
+        StateContext.OwnerKind = OwnerKind;
+        StateContext.OwnerId = Object->GetPathName();
+        StateContext.OwnerName = OwnerName;
+        StateContext.OwnerClass = Object->GetClass()->GetPathName();
+        StateContext.BaselineClass = Object->GetClass()->GetPathName();
+        StateContext.Writer = &WidgetPropertiesWriter;
+        StateContext.Counter = &Counts.BlueprintWidgetProperties;
+        StateContext.ExportOwner = Object;
+        StateContext.BaselineExportOwner = ClassDefault;
+
+        for (TFieldIterator<FProperty> It(
+                 Object->GetClass(),
+                 EFieldIterationFlags::IncludeSuper);
+             It;
+             ++It)
+        {
+            FProperty* Property = *It;
+            if (!Property ||
+                Property->HasAnyPropertyFlags(SkipFlags) ||
+                SkipPropertyNames.Contains(Property->GetFName()))
+            {
+                continue;
+            }
+
+            for (int32 ArrayIndex = 0; ArrayIndex < Property->ArrayDim; ++ArrayIndex)
+            {
+                if (Property->Identical_InContainer(
+                        Object,
+                        ClassDefault,
+                        ArrayIndex,
+                        PPF_None))
+                {
+                    continue;
+                }
+
+                if (!ScanChangedPropertyInContainers(
+                        StateContext,
+                        Property,
+                        Object,
+                        ClassDefault,
+                        ArrayIndex))
+                {
+                    return false;
+                }
+            }
+        }
+
+        return true;
     }
 
     static bool WriteWidgetBindings(
@@ -3187,12 +3746,101 @@ namespace UnrealAssetTool
         return true;
     }
 
+
+    static bool WriteWidgetAnimationBindings(
+        UObject* Animation,
+        const FString& BlueprintPath,
+        FJsonlWriter& WidgetAnimationBindingsWriter,
+        FScanCounts& Counts)
+    {
+        if (!Animation)
+        {
+            return true;
+        }
+
+        FArrayProperty* ArrayProperty = CastField<FArrayProperty>(
+            Animation->GetClass()->FindPropertyByName(TEXT("AnimationBindings")));
+        FStructProperty* InnerStruct = ArrayProperty
+            ? CastField<FStructProperty>(ArrayProperty->Inner)
+            : nullptr;
+        if (!ArrayProperty || !InnerStruct || !InnerStruct->Struct)
+        {
+            return true;
+        }
+
+        const void* ArrayValue = ArrayProperty->ContainerPtrToValuePtr<void>(Animation);
+        if (!ArrayValue)
+        {
+            return true;
+        }
+
+        FScriptArrayHelper Helper(ArrayProperty, ArrayValue);
+        for (int32 BindingIndex = 0; BindingIndex < Helper.Num(); ++BindingIndex)
+        {
+            const void* BindingValue = Helper.GetRawPtr(BindingIndex);
+            UStruct* BindingStruct = InnerStruct->Struct;
+
+            const TSharedRef<FJsonObject> Json = MakeShared<FJsonObject>();
+            Json->SetStringField(TEXT("blueprint_path"), BlueprintPath);
+            Json->SetStringField(TEXT("animation_path"), Animation->GetPathName());
+            Json->SetStringField(TEXT("animation_name"), Animation->GetName());
+            Json->SetNumberField(TEXT("binding_index"), BindingIndex);
+            Json->SetStringField(TEXT("binding_struct"), BindingStruct->GetPathName());
+            Json->SetStringField(
+                TEXT("widget_name"),
+                ExportStructFieldText(
+                    BindingStruct,
+                    BindingValue,
+                    TEXT("WidgetName"),
+                    Animation));
+            Json->SetStringField(
+                TEXT("slot_widget_name"),
+                ExportStructFieldText(
+                    BindingStruct,
+                    BindingValue,
+                    TEXT("SlotWidgetName"),
+                    Animation));
+            Json->SetStringField(
+                TEXT("animation_guid"),
+                ExportStructFieldText(
+                    BindingStruct,
+                    BindingValue,
+                    TEXT("AnimationGuid"),
+                    Animation));
+            Json->SetStringField(
+                TEXT("is_root_widget"),
+                ExportStructFieldText(
+                    BindingStruct,
+                    BindingValue,
+                    TEXT("bIsRootWidget"),
+                    Animation));
+            Json->SetStringField(
+                TEXT("dynamic_binding"),
+                ExportStructFieldText(
+                    BindingStruct,
+                    BindingValue,
+                    TEXT("DynamicBinding"),
+                    Animation,
+                    16384));
+
+            if (!WidgetAnimationBindingsWriter.Write(Json))
+            {
+                return false;
+            }
+            ++Counts.BlueprintWidgetAnimationBindings;
+        }
+
+        return true;
+    }
+
     static bool ScanBlueprintWidgets(
         UBlueprint* Blueprint,
         const FString& BlueprintPath,
         FJsonlWriter& WidgetsWriter,
+        FJsonlWriter& WidgetPropertiesWriter,
         FJsonlWriter& WidgetBindingsWriter,
         FJsonlWriter& WidgetAnimationsWriter,
+        FJsonlWriter& WidgetAnimationBindingsWriter,
         FScanCounts& Counts)
     {
         if (!Blueprint)
@@ -3266,6 +3914,42 @@ namespace UnrealAssetTool
                     return false;
                 }
                 ++Counts.BlueprintWidgets;
+
+                const TSet<FName> WidgetSkipProperties =
+                {
+                    TEXT("Slot")
+                };
+                if (!ScanObjectOverridesAgainstClassDefault(
+                        Object,
+                        BlueprintPath,
+                        TEXT("widget"),
+                        Object->GetName(),
+                        WidgetSkipProperties,
+                        WidgetPropertiesWriter,
+                        Counts))
+                {
+                    return false;
+                }
+
+                if (Slot)
+                {
+                    const TSet<FName> SlotSkipProperties =
+                    {
+                        TEXT("Parent"),
+                        TEXT("Content")
+                    };
+                    if (!ScanObjectOverridesAgainstClassDefault(
+                            Slot,
+                            BlueprintPath,
+                            TEXT("widget_slot"),
+                            Object->GetName(),
+                            SlotSkipProperties,
+                            WidgetPropertiesWriter,
+                            Counts))
+                    {
+                        return false;
+                    }
+                }
             }
         }
 
@@ -3310,6 +3994,15 @@ namespace UnrealAssetTool
                 return false;
             }
             ++Counts.BlueprintWidgetAnimations;
+
+            if (!WriteWidgetAnimationBindings(
+                    Animation,
+                    BlueprintPath,
+                    WidgetAnimationBindingsWriter,
+                    Counts))
+            {
+                return false;
+            }
         }
 
         return true;
@@ -3328,11 +4021,15 @@ namespace UnrealAssetTool
         FJsonlWriter& InterfacesWriter,
         FJsonlWriter& DefaultsWriter,
         FJsonlWriter& ComponentPropertiesWriter,
+        FJsonlWriter& StateValuesWriter,
         FJsonlWriter& TimelinesWriter,
         FJsonlWriter& TimelineTracksWriter,
+        FJsonlWriter& TimelineKeysWriter,
         FJsonlWriter& WidgetsWriter,
+        FJsonlWriter& WidgetPropertiesWriter,
         FJsonlWriter& WidgetBindingsWriter,
         FJsonlWriter& WidgetAnimationsWriter,
+        FJsonlWriter& WidgetAnimationBindingsWriter,
         FJsonlWriter& RigVMObjectsWriter,
         FJsonlWriter& RigVMPinsWriter,
         FJsonlWriter& RigVMLinksWriter,
@@ -3461,24 +4158,29 @@ namespace UnrealAssetTool
                 Blueprint,
                 ObjectPath,
                 DefaultsWriter,
+                StateValuesWriter,
                 Counts) ||
             !ScanComponentTemplateProperties(
                 Blueprint,
                 ObjectPath,
                 ComponentPropertiesWriter,
+                StateValuesWriter,
                 Counts) ||
             !ScanBlueprintTimelines(
                 Blueprint,
                 ObjectPath,
                 TimelinesWriter,
                 TimelineTracksWriter,
+                TimelineKeysWriter,
                 Counts) ||
             !ScanBlueprintWidgets(
                 Blueprint,
                 ObjectPath,
                 WidgetsWriter,
+                WidgetPropertiesWriter,
                 WidgetBindingsWriter,
                 WidgetAnimationsWriter,
+                WidgetAnimationBindingsWriter,
                 Counts))
         {
             return false;
@@ -3761,11 +4463,15 @@ namespace UnrealAssetTool
         FJsonlWriter& InterfacesWriter,
         FJsonlWriter& DefaultsWriter,
         FJsonlWriter& ComponentPropertiesWriter,
+        FJsonlWriter& StateValuesWriter,
         FJsonlWriter& TimelinesWriter,
         FJsonlWriter& TimelineTracksWriter,
+        FJsonlWriter& TimelineKeysWriter,
         FJsonlWriter& WidgetsWriter,
+        FJsonlWriter& WidgetPropertiesWriter,
         FJsonlWriter& WidgetBindingsWriter,
         FJsonlWriter& WidgetAnimationsWriter,
+        FJsonlWriter& WidgetAnimationBindingsWriter,
         FJsonlWriter& RigVMObjectsWriter,
         FJsonlWriter& RigVMPinsWriter,
         FJsonlWriter& RigVMLinksWriter,
@@ -3867,11 +4573,15 @@ namespace UnrealAssetTool
                             InterfacesWriter,
                             DefaultsWriter,
                             ComponentPropertiesWriter,
+                            StateValuesWriter,
                             TimelinesWriter,
                             TimelineTracksWriter,
+                            TimelineKeysWriter,
                             WidgetsWriter,
+                            WidgetPropertiesWriter,
                             WidgetBindingsWriter,
                             WidgetAnimationsWriter,
+                            WidgetAnimationBindingsWriter,
                             RigVMObjectsWriter,
                             RigVMPinsWriter,
                             RigVMLinksWriter,
@@ -3954,11 +4664,15 @@ int32 UUnrealAssetToolCommandlet::Main(const FString& Params)
     FJsonlWriter InterfacesWriter(FPaths::Combine(OutputDir, TEXT("blueprint_interfaces.jsonl")));
     FJsonlWriter DefaultsWriter(FPaths::Combine(OutputDir, TEXT("blueprint_defaults.jsonl")));
     FJsonlWriter ComponentPropertiesWriter(FPaths::Combine(OutputDir, TEXT("blueprint_component_properties.jsonl")));
+    FJsonlWriter StateValuesWriter(FPaths::Combine(OutputDir, TEXT("blueprint_state_values.jsonl")));
     FJsonlWriter TimelinesWriter(FPaths::Combine(OutputDir, TEXT("blueprint_timelines.jsonl")));
     FJsonlWriter TimelineTracksWriter(FPaths::Combine(OutputDir, TEXT("blueprint_timeline_tracks.jsonl")));
+    FJsonlWriter TimelineKeysWriter(FPaths::Combine(OutputDir, TEXT("blueprint_timeline_keys.jsonl")));
     FJsonlWriter WidgetsWriter(FPaths::Combine(OutputDir, TEXT("blueprint_widgets.jsonl")));
+    FJsonlWriter WidgetPropertiesWriter(FPaths::Combine(OutputDir, TEXT("blueprint_widget_properties.jsonl")));
     FJsonlWriter WidgetBindingsWriter(FPaths::Combine(OutputDir, TEXT("blueprint_widget_bindings.jsonl")));
     FJsonlWriter WidgetAnimationsWriter(FPaths::Combine(OutputDir, TEXT("blueprint_widget_animations.jsonl")));
+    FJsonlWriter WidgetAnimationBindingsWriter(FPaths::Combine(OutputDir, TEXT("blueprint_widget_animation_bindings.jsonl")));
     FJsonlWriter RigVMObjectsWriter(FPaths::Combine(OutputDir, TEXT("rigvm_objects.jsonl")));
     FJsonlWriter RigVMPinsWriter(FPaths::Combine(OutputDir, TEXT("rigvm_pins.jsonl")));
     FJsonlWriter RigVMLinksWriter(FPaths::Combine(OutputDir, TEXT("rigvm_links.jsonl")));
@@ -3970,9 +4684,10 @@ int32 UUnrealAssetToolCommandlet::Main(const FString& Params)
         !DependenciesWriter.IsValid() || !BlueprintsWriter.IsValid() || !GraphsWriter.IsValid() ||
         !NodesWriter.IsValid() || !PinsWriter.IsValid() || !PropertiesWriter.IsValid() ||
         !ReferencesWriter.IsValid() || !BindingsWriter.IsValid() || !InterfacesWriter.IsValid() ||
-        !DefaultsWriter.IsValid() || !ComponentPropertiesWriter.IsValid() ||
-        !TimelinesWriter.IsValid() || !TimelineTracksWriter.IsValid() ||
-        !WidgetsWriter.IsValid() || !WidgetBindingsWriter.IsValid() || !WidgetAnimationsWriter.IsValid() ||
+        !DefaultsWriter.IsValid() || !ComponentPropertiesWriter.IsValid() || !StateValuesWriter.IsValid() ||
+        !TimelinesWriter.IsValid() || !TimelineTracksWriter.IsValid() || !TimelineKeysWriter.IsValid() ||
+        !WidgetsWriter.IsValid() || !WidgetPropertiesWriter.IsValid() || !WidgetBindingsWriter.IsValid() ||
+        !WidgetAnimationsWriter.IsValid() || !WidgetAnimationBindingsWriter.IsValid() ||
         !RigVMObjectsWriter.IsValid() || !RigVMPinsWriter.IsValid() || !RigVMLinksWriter.IsValid() ||
         !RigVMPropertiesWriter.IsValid() || !RigVMReferencesWriter.IsValid() ||
         !EdgesWriter.IsValid())
@@ -4005,11 +4720,15 @@ int32 UUnrealAssetToolCommandlet::Main(const FString& Params)
             InterfacesWriter,
             DefaultsWriter,
             ComponentPropertiesWriter,
+            StateValuesWriter,
             TimelinesWriter,
             TimelineTracksWriter,
+            TimelineKeysWriter,
             WidgetsWriter,
+            WidgetPropertiesWriter,
             WidgetBindingsWriter,
             WidgetAnimationsWriter,
+            WidgetAnimationBindingsWriter,
             RigVMObjectsWriter,
             RigVMPinsWriter,
             RigVMLinksWriter,
@@ -4061,11 +4780,15 @@ int32 UUnrealAssetToolCommandlet::Main(const FString& Params)
     CountsJson->SetNumberField(TEXT("blueprint_components"), static_cast<double>(Counts.BlueprintComponents));
     CountsJson->SetNumberField(TEXT("blueprint_defaults"), static_cast<double>(Counts.BlueprintDefaults));
     CountsJson->SetNumberField(TEXT("blueprint_component_properties"), static_cast<double>(Counts.BlueprintComponentProperties));
+    CountsJson->SetNumberField(TEXT("blueprint_state_values"), static_cast<double>(Counts.BlueprintStateValues));
     CountsJson->SetNumberField(TEXT("blueprint_timelines"), static_cast<double>(Counts.BlueprintTimelines));
     CountsJson->SetNumberField(TEXT("blueprint_timeline_tracks"), static_cast<double>(Counts.BlueprintTimelineTracks));
+    CountsJson->SetNumberField(TEXT("blueprint_timeline_keys"), static_cast<double>(Counts.BlueprintTimelineKeys));
     CountsJson->SetNumberField(TEXT("blueprint_widgets"), static_cast<double>(Counts.BlueprintWidgets));
+    CountsJson->SetNumberField(TEXT("blueprint_widget_properties"), static_cast<double>(Counts.BlueprintWidgetProperties));
     CountsJson->SetNumberField(TEXT("blueprint_widget_bindings"), static_cast<double>(Counts.BlueprintWidgetBindings));
     CountsJson->SetNumberField(TEXT("blueprint_widget_animations"), static_cast<double>(Counts.BlueprintWidgetAnimations));
+    CountsJson->SetNumberField(TEXT("blueprint_widget_animation_bindings"), static_cast<double>(Counts.BlueprintWidgetAnimationBindings));
     Manifest->SetObjectField(TEXT("counts"), CountsJson);
 
     if (!SaveJsonObject(FPaths::Combine(OutputDir, TEXT("manifest.json")), Manifest))

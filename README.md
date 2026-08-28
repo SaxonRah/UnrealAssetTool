@@ -19,6 +19,8 @@ Given a `.uproject`, UnrealAssetTool should answer questions such as:
 
 The output is deliberately **loss-minimizing and sharded**. Raw structural facts are stored first; higher-level summaries can be derived later and regenerated without rescanning Unreal assets.
 
+Schema 8 keeps that boundary explicit: scanner-only facts (designer defaults, Timeline curve keys, widget instance overrides) are canonical JSONL, while function/event normalization, semantic relations, graph-context text, summaries, and Control Rig/RigVM joins are deterministic Python-derived views.
+
 ## Why it runs inside Unreal
 
 `.uasset` and `.umap` files are serialized Unreal packages whose internal representation changes with engine versions and asset types. Reverse-engineering them outside the engine would duplicate a large amount of Unreal's loader, reflection, versioning, and editor-only logic.
@@ -34,7 +36,7 @@ The primary scanner is therefore an **Editor Commandlet**. Unreal itself supplie
 
 A small Python launcher invokes the commandlet and converts the JSONL records into `uat.db` for fast retrieval.
 
-## Current milestone (0.3.0)
+## Current milestone (0.4.0)
 
 The first vertical slice indexes:
 
@@ -77,9 +79,13 @@ For Blueprint-family assets the scanner loads the real asset and records:
 - optional raw RigVM reflection properties for deep extractor development rather than multi-gigabyte default output.
 - Blueprint class-default-object overrides relative to the parent CDO, including referenced UObject values;
 - component-template property overrides relative to the component class default object;
-- Timeline templates and float/vector/color/event tracks;
-- UMG designer widget trees, panel-slot layout properties, editor bindings, and widget animations;
-- deterministic derived Blueprint relations, per-graph AI context, per-Blueprint summaries, and Control Rig editor-node to RigVM-model joins that can be regenerated without running Unreal;
+- bounded flattened changed-state paths for nested structs and arrays in CDO/component overrides;
+- Timeline templates and float/vector/color/event tracks plus rich-curve key time/value/interpolation/tangent data;
+- UMG designer widget trees plus class-specific changed widget/slot properties relative to their class defaults;
+- normalized UMG editor bindings, widget animations, and per-animation widget/slot binding records;
+- canonical derived Blueprint function signatures (inputs, outputs, locals, flags, execution shape);
+- canonical derived event definitions, including component-bound delegates and input events;
+- deterministic derived Blueprint relations, per-graph AI context, per-Blueprint summaries, and graph-first Control Rig editor-node to RigVM-model joins that can be regenerated without running Unreal;
 
 This is enough to reconstruct a large portion of Blueprint control/data flow without screenshots or documentation.
 
