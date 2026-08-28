@@ -1,4 +1,4 @@
-# UnrealAssetTool schema v5
+# UnrealAssetTool schema v6
 
 The scan format is line-oriented so individual records can be streamed, indexed, diffed, embedded, or retrieved without parsing a monolithic project document.
 
@@ -16,7 +16,7 @@ Important fields:
 - `project_dir`
 - `include_generated`
 - `include_engine`
-- `counts` (including Blueprint semantic/property/reference/binding counts and RigVM object/property/reference counts for schema v5)
+- `counts` (including normalized Blueprint graph/pin/interface counts and compact RigVM object/pin/link/reference counts; raw RigVM property count is normally zero)
 
 ## `files.jsonl`
 
@@ -86,7 +86,7 @@ One record per Blueprint graph node.
 
 Important fields:
 
-- `node_id`: stable-ish composite ID using Blueprint object path, graph name, and node GUID;
+- `node_id`: stable-ish composite ID using Blueprint object path, full graph identity, and node GUID;
 - `blueprint_path`
 - `graph_name`
 - `graph_kind`
@@ -148,6 +148,21 @@ For Animation Blueprints, `graph_kind` distinguishes the editor graph class rath
 
 Animation state/transition node semantics include exact state names, rule graph paths, previous/next states, transition priority, crossfade duration, automatic-rule settings, shared-rule/crossfade metadata, and state reset/type settings when Unreal exposes them.
 
+
+
+## `blueprint_graphs.jsonl`
+
+One record per unique Blueprint-owned graph. Schema v6 deduplicates `UBlueprint::GetAllGraphs()` by full graph path before scanning, preventing repeated nested Control Rig graphs from producing duplicate node IDs. Records include `graph_id`, full `graph_path`, `graph_kind`, `graph_system`, graph/schema classes, outer/parent context, and node count.
+
+## `blueprint_pins.jsonl`
+
+One normalized record per Blueprint pin, including its node/graph IDs, index, direction, type object, default value/object/text, visibility/connectability flags, and link count. Pins remain inline in `blueprint_nodes.jsonl` for self-contained node records.
+
+## `blueprint_interfaces.jsonl`
+
+One record per implemented Blueprint interface, including the interface class and associated function graph paths.
+
+The SQLite packer also normalizes the `variables` and `components` arrays already stored in each `blueprints.jsonl` record into `blueprint_variables` and `blueprint_components` tables. These are derived indexes rather than additional canonical JSONL streams.
 
 ## `blueprint_node_properties.jsonl`
 
@@ -217,15 +232,19 @@ Important fields:
 
 This stream preserves both normalized fields and the raw reflected map-value text. It is intended for facts such as an AnimGraph runtime property being driven by a Property Access/function path.
 
+## Compact RigVM model (schema v6)
+
+Normal scans write compact RigVM graph/node records to `rigvm_objects.jsonl`, normalized model pins to `rigvm_pins.jsonl`, links to `rigvm_links.jsonl`, and structural/external UObject relationships to `rigvm_references.jsonl`. `rigvm_properties.jsonl` is only populated when `-IncludeRawRigVMProperties` / `--include-raw-rigvm-properties` is requested.
+
 ## `rigvm_objects.jsonl`
 
-One record per Blueprint-owned UObject whose class derives from `RigVMGraph`, `RigVMNode`, `RigVMPin`, or `RigVMLink`.
+One compact record per Blueprint-owned RigVM graph or node. Pins and links are normalized into their own streams so normal scans do not duplicate them in the object stream.
 
 Important fields:
 
 - `object_id`: full UObject path;
 - `blueprint_path`
-- `kind`: `graph`, `node`, `pin`, or `link`;
+- `kind`: `graph` or `node`;
 - `class_path`
 - `name`
 - `outer_object_id`
@@ -233,6 +252,14 @@ Important fields:
 - `operation`: factual class-based operation for RigVM nodes.
 
 Recognized node operations include `rigvm_function_entry`, `rigvm_function_return`, `rigvm_function_reference`, `rigvm_variable`, `rigvm_unit`, `rigvm_dispatch`, `rigvm_invoke_entry`, `rigvm_reroute`, `rigvm_enum`, `rigvm_comment`, `rigvm_parameter`, `rigvm_library`, and `rigvm_template`. Unknown RigVM node subclasses remain `rigvm_node` rather than having behavior inferred from names.
+
+## `rigvm_pins.jsonl`
+
+One compact record per RigVM model pin, including its full pin ID/path, owning model object, direction, C++ type/type object, default value/object/type, custom widget, and key constant/input/dynamic/lazy flags.
+
+## `rigvm_links.jsonl`
+
+One compact record per RigVM link, including its full link ID/path and exact `source_pin_path` / `target_pin_path`.
 
 ## `rigvm_properties.jsonl`
 

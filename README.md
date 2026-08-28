@@ -34,7 +34,7 @@ The primary scanner is therefore an **Editor Commandlet**. Unreal itself supplie
 
 A small Python launcher invokes the commandlet and converts the JSONL records into `uat.db` for fast retrieval.
 
-## Current MVP (0.1.9)
+## Current milestone (0.2.0)
 
 The first vertical slice indexes:
 
@@ -59,9 +59,10 @@ The first vertical slice indexes:
 For Blueprint-family assets the scanner loads the real asset and records:
 
 - Blueprint class, parent class, generated class, type, and status;
-- member variables and pin types;
-- Simple Construction Script components and attachment hierarchy;
+- member variables and pin types, with normalized SQLite variable records even when a variable is never referenced by a graph node;
+- Simple Construction Script components and attachment hierarchy, with normalized component records for retrieval;
 - every graph;
+- a normalized graph table with stable graph IDs, full graph paths, graph kind, visual system, schema, outer/parent relationship, and node count;
 - every graph node, node class, title, comment, and editor position;
 - normalized semantic operation/symbol/owner fields for core K2 node types;
 - structured semantic metadata for variable accesses, calls, events, casts, macros, branches, function boundaries, switches, selects, sequences, reroutes, self references, and actor spawning;
@@ -69,9 +70,11 @@ For Blueprint-family assets the scanner loads the real asset and records:
 - reflected non-transient node properties, including nested runtime-node structs flattened into addressable paths such as `Node.Sequence` and `Node.BlendSpace`;
 - node-owned AnimGraph binding subobjects plus normalized `PropertyBindings` records, so runtime/thread-safe binding paths are directly queryable;
 - normalized node-level UObject reference edges from reflected properties to assets/classes;
-- RigVM/Control Rig model objects discovered from the Blueprint's owned UObject hierarchy, including graphs, nodes, pins, links, reflected properties, and object-reference topology;
-- every pin, direction, type, defaults, and flags;
-- every pin-to-pin graph edge.
+- normalized Blueprint interfaces implemented by each Blueprint;
+- every pin as both inline node data and a normalized `blueprint_pins` record;
+- every pin-to-pin graph edge with source/target node IDs and explicit execution-vs-data flow classification;
+- compact RigVM/Control Rig graph/node/pin/link records plus object-reference topology;
+- optional raw RigVM reflection properties for deep extractor development rather than multi-gigabyte default output.
 
 This is enough to reconstruct a large portion of Blueprint control/data flow without screenshots or documentation.
 
@@ -162,6 +165,8 @@ The underlying commandlet can still be run directly once the plugin module is bu
 E:\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Cmd.exe MyProject.uproject -run=UnrealAssetTool -Output=.uatool -unattended -nop4 -nosplash -NoShaderCompile
 ```
 
+`scan` also creates `<ProjectName>.uatool.zip` beside the `.uproject`. That is the normal file to upload for analysis; it excludes `uat.db` and the optional raw RigVM property dump.
+
 ## Output
 
 ```text
@@ -172,14 +177,19 @@ E:\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Cmd.exe MyProject.uproject -run=Unr
   assets.jsonl
   asset_dependencies.jsonl
   blueprints.jsonl
+  blueprint_graphs.jsonl
   blueprint_nodes.jsonl
+  blueprint_pins.jsonl
+  blueprint_edges.jsonl
+  blueprint_interfaces.jsonl
   blueprint_node_properties.jsonl
   blueprint_node_references.jsonl
   blueprint_bindings.jsonl
   rigvm_objects.jsonl
+  rigvm_pins.jsonl
+  rigvm_links.jsonl
   rigvm_properties.jsonl
   rigvm_references.jsonl
-  blueprint_edges.jsonl
   uat.db
 ```
 
@@ -187,6 +197,20 @@ The JSONL files are the canonical scan output. `uat.db` is a derived query/index
 
 ```powershell
 python scripts\uatool.py pack .uatool
+```
+
+Create/recreate the compact upload bundle without rescanning Unreal:
+
+```powershell
+python scripts\uatool.py bundle .uatool
+```
+
+By default `rigvm_properties.jsonl` is empty because the compact RigVM model contains the fields needed for normal retrieval. For extractor development, request the old loss-minimizing raw reflection stream explicitly:
+
+```powershell
+python scripts\uatool.py scan MyProject.uproject `
+    --editor "E:\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Cmd.exe" `
+    --include-raw-rigvm-properties
 ```
 
 Quick search:
@@ -215,11 +239,14 @@ Property Access, Chooser/Proxy evaluation, BlendSpace players, sequence evaluato
 
 `blueprint_bindings.jsonl` normalizes the entries stored in AnimGraph node binding objects instead of leaving the entire `PropertyBindings` map as one reflection string. Records retain the target property, access path, path segments, compiled context, pin types, and the raw reflected value. This makes bindings such as `BlendTime -> Get_MMBlendTime` directly searchable.
 
-Control Rig editor nodes are only one presentation of a deeper RigVM model. UATool therefore also walks Blueprint-owned objects and records objects whose class hierarchy derives from `RigVMGraph`, `RigVMNode`, `RigVMPin`, or `RigVMLink`. The result is split into:
+Control Rig editor nodes are only one presentation of a deeper RigVM model. UATool therefore also walks Blueprint-owned objects and records objects whose class hierarchy derives from `RigVMGraph`, `RigVMNode`, `RigVMPin`, or `RigVMLink`. The default result is split into:
 
-- `rigvm_objects.jsonl`: object identity, kind, class, outer, and factual node operation classification;
-- `rigvm_properties.jsonl`: reflected RigVM graph/node/pin/link properties;
+- `rigvm_objects.jsonl`: compact RigVM graph/node identity, hierarchy, node operation, title/function/template information, and contained-graph facts;
+- `rigvm_pins.jsonl`: pin direction, C++ type, type object, default value/object, owning model object, and widget metadata;
+- `rigvm_links.jsonl`: explicit source-pin-path to target-pin-path connections;
 - `rigvm_references.jsonl`: normalized object and object-array references such as graph-to-node, node-to-pin, pin-to-subpin/link, and references to external assets/classes when Unreal stores them as UObject properties.
+
+`rigvm_properties.jsonl` remains available behind `--include-raw-rigvm-properties` when developing deeper extractors. It is intentionally not part of the normal scan because the GASP corpus demonstrated that a loss-minimizing reflection dump can exceed 1.5 million property rows while adding little value to routine retrieval.
 
 RigVM node operations distinguish function entry/return/reference, variables, units, dispatch, reroutes, enums, comments, parameters, library/template nodes, and related model-node classes by the actual Unreal class hierarchy. UATool does not infer a unit's behavior from its display name; deeper unit/function semantics can be promoted later from these model properties. This reflection-first path deliberately avoids depending on non-exported convenience methods of Unreal `MinimalAPI` editor classes.
 
@@ -301,6 +328,6 @@ README files + filenames + guessed asset behavior
 `scan` derives the build configuration only from the exact `--editor` executable supplied by the user. For example, `UnrealEditor-Cmd.exe` selects Development while `UnrealEditor-Win64-DebugGame-Cmd.exe` selects DebugGame. By default it asks UBT to incrementally build the complete `<Project>Editor` target, then verifies the exact configuration-specific `UnrealAssetTool` DLL and the project target receipt. A plugin-local `.modules` file is used when present but is not required.
 
 
-### Build/scan readiness (0.1.11)
+### Build/scan readiness
 
 `uatool build` now builds the complete `<Project>Editor` target instead of only the `UnrealAssetTool` module. Unreal commandlet startup needs the project's own native modules and target receipt even for Blueprint-heavy samples. `uatool scan` performs the same incremental full-target build unless `--no-build` is supplied. A plugin-local `.modules` manifest is optional; the exact configuration-specific UATool DLL plus the project target receipt are the readiness checks.
