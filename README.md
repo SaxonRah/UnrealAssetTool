@@ -34,7 +34,7 @@ The primary scanner is therefore an **Editor Commandlet**. Unreal itself supplie
 
 A small Python launcher invokes the commandlet and converts the JSONL records into `uat.db` for fast retrieval.
 
-## Current MVP (0.1)
+## Current MVP (0.1.2)
 
 The first vertical slice indexes:
 
@@ -93,28 +93,56 @@ Clone or copy this repository to:
 <MyProject>/Plugins/UnrealAssetTool/
 ```
 
-Regenerate project files/build the editor target if Unreal requests it. The plugin is Editor-only and contains no runtime content.
+UnrealAssetTool contains an Editor C++ module, so it must be built at least once before Unreal can load the commandlet. The launcher can do this automatically when the module DLL is missing.
 
-## Scan a UE 5.8 project
+## Build and scan a UE 5.8 project
 
-From the plugin repository or any directory:
+Engine selection is intentionally explicit. UnrealAssetTool does **not** inspect the registry, Epic Launcher metadata, `EngineAssociation`, environment variables, or guessed installation directories. Pass the exact editor executable you want used for the scan:
 
 ```powershell
-python scripts\uatool.py scan E:\TheDigitalGame\ue\hyperreality\hyperreality.uproject --engine G:\UE_5.8
+python scripts\uatool.py scan `
+    "E:\TheDigitalGame\ue\GameAnimationSample\GameAnimationSample.uproject" `
+    --editor "E:\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Cmd.exe"
 ```
 
-If Unreal is installed in Epic's normal `C:\Program Files\Epic Games\UE_<version>` location and the `.uproject` has a normal `EngineAssociation`, `--engine` may be omitted.
+This works the same way for Launcher engines and source/custom engine builds: point `--editor` at that build's `UnrealEditor-Cmd.exe`.
 
-You can also point directly at the command executable:
+If the UnrealAssetTool editor module has not been compiled yet, `scan` first invokes the project Editor build. For the standard engine layout, the build script is taken deterministically from the supplied editor path:
 
-```powershell
-python scripts\uatool.py scan MyProject.uproject --editor G:\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Cmd.exe
+```text
+E:\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Cmd.exe
+                    ↓
+E:\UE_5.8\Engine\Build\BatchFiles\Build.bat
 ```
 
-The commandlet can also be run directly:
+For a custom engine with a nonstandard layout, provide the build script explicitly as well:
 
 ```powershell
-UnrealEditor-Cmd.exe MyProject.uproject -run=UnrealAssetTool -Output=.uatool -unattended -nop4 -nosplash -NoShaderCompile
+python scripts\uatool.py scan MyProject.uproject `
+    --editor "X:\MyUE\bin\UnrealEditor-Cmd.exe" `
+    --build-script "X:\MyUE\Build\Build.bat"
+```
+
+You can also build separately:
+
+```powershell
+python scripts\uatool.py build `
+    "E:\TheDigitalGame\ue\GameAnimationSample\GameAnimationSample.uproject" `
+    --editor "E:\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Cmd.exe"
+```
+
+Or suppress the automatic first build if you know the module is already compiled:
+
+```powershell
+python scripts\uatool.py scan MyProject.uproject `
+    --editor "E:\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Cmd.exe" `
+    --no-build
+```
+
+The underlying commandlet can still be run directly once the plugin module is built:
+
+```powershell
+E:\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Cmd.exe MyProject.uproject -run=UnrealAssetTool -Output=.uatool -unattended -nop4 -nosplash -NoShaderCompile
 ```
 
 ## Output

@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sqlite3
 import subprocess
 import sys
@@ -29,49 +28,91 @@ def iter_jsonl(path: Path) -> Iterator[dict]:
                 raise RuntimeError(f"Invalid JSON in {path}:{line_number}: {exc}") from exc
 
 
-def read_uproject(path: Path) -> dict:
-    with path.open("r", encoding="utf-8-sig") as f:
-        return json.load(f)
+def require_editor(editor_arg: str) -> Path:
+    """Return exactly the Unreal Editor executable supplied by the user."""
+    editor = Path(editor_arg).expanduser().resolve()
+    if not editor.is_file():
+        raise FileNotFoundError(
+            "Unreal editor executable does not exist:\n"
+            f"  {editor}\n"
+            "Pass the exact UnrealEditor-Cmd.exe path with --editor."
+        )
+    return editor
 
 
-def find_editor(project: Path, engine: str | None, editor: str | None) -> Path:
-    if editor:
-        candidate = Path(editor).expanduser().resolve()
-        if candidate.is_file():
-            return candidate
-        raise FileNotFoundError(f"Unreal editor command executable not found: {candidate}")
+def plugin_root() -> Path:
+    return Path(__file__).resolve().parent.parent
 
-    roots: list[Path] = []
-    if engine:
-        roots.append(Path(engine).expanduser())
-    if os.environ.get("UE_ENGINE_ROOT"):
-        roots.append(Path(os.environ["UE_ENGINE_ROOT"]).expanduser())
 
-    try:
-        association = str(read_uproject(project).get("EngineAssociation", "")).strip()
-    except Exception:
-        association = ""
+def plugin_binary_candidates() -> list[Path]:
+    binaries = plugin_root() / "Binaries" / "Win64"
+    if not binaries.is_dir():
+        return []
+    return sorted(binaries.glob("*UnrealAssetTool*.dll"))
 
-    if association:
-        version = association
-        if version.startswith("UE_"):
-            version = version[3:]
-        roots.extend(
-            [
-                Path(f"C:/Program Files/Epic Games/UE_{version}"),
-                Path(f"C:/Program Files/Epic Games/{association}"),
-            ]
+
+def resolve_build_script(editor: Path, override: str | None) -> Path:
+    if override:
+        build_script = Path(override).expanduser().resolve()
+    else:
+        # The editor path is explicit. We do not search for an engine. For a
+        # normal Launcher or source build, UnrealEditor-Cmd.exe lives at:
+        #   <EngineRoot>/Engine/Binaries/Win64/UnrealEditor-Cmd.exe
+        # so Engine is exactly three parents above the executable.
+        try:
+            engine_dir = editor.parents[2]
+        except IndexError as exc:
+            raise FileNotFoundError(
+                "Could not derive Engine/Build/BatchFiles/Build.bat from --editor. "
+                "Pass --build-script explicitly."
+            ) from exc
+        build_script = engine_dir / "Build" / "BatchFiles" / "Build.bat"
+
+    if not build_script.is_file():
+        raise FileNotFoundError(
+            "Unreal build script does not exist:\n"
+            f"  {build_script}\n"
+            "Pass it explicitly with --build-script if your custom engine uses a nonstandard layout."
+        )
+    return build_script
+
+
+def build_project(project: Path, editor: Path, build_script_arg: str | None = None) -> int:
+    build_script = resolve_build_script(editor, build_script_arg)
+    target = f"{project.stem}Editor"
+    command = [
+        str(build_script),
+        f"-Target={target} Win64 Development",
+        "-Module=UnrealAssetTool",
+        f"-Project={project}",
+        "-WaitMutex",
+        "-NoHotReloadFromIDE",
+    ]
+    print("building:", subprocess.list2cmdline(command))
+    return subprocess.run(command, check=False).returncode
+
+
+def ensure_plugin_binary(project: Path, editor: Path, build_script_arg: str | None, no_build: bool) -> None:
+    if plugin_binary_candidates():
+        return
+
+    if no_build:
+        raise RuntimeError(
+            "UnrealAssetTool has source code but no compiled editor module. "
+            "Run `python scripts\\uatool.py build <project> --editor <UnrealEditor-Cmd.exe>` first, "
+            "or omit --no-build so scan can build it automatically."
         )
 
-    for root in roots:
-        candidate = root / "Engine" / "Binaries" / "Win64" / "UnrealEditor-Cmd.exe"
-        if candidate.is_file():
-            return candidate.resolve()
+    print("UnrealAssetTool module is not built yet; building the project editor target first.")
+    result = build_project(project, editor, build_script_arg)
+    if result != 0:
+        raise RuntimeError(f"Unreal build failed with exit code {result}")
 
-    raise FileNotFoundError(
-        "Could not locate UnrealEditor-Cmd.exe. Pass --engine <UE root> or "
-        "--editor <full path to UnrealEditor-Cmd.exe>, or set UE_ENGINE_ROOT."
-    )
+    if not plugin_binary_candidates():
+        raise RuntimeError(
+            "The project build completed, but no UnrealAssetTool editor DLL was produced under "
+            f"{plugin_root() / 'Binaries' / 'Win64'}."
+        )
 
 
 def create_schema(conn: sqlite3.Connection) -> None:
@@ -308,7 +349,9 @@ def scan(args: argparse.Namespace) -> int:
         output = (project.parent / output).resolve()
     output.mkdir(parents=True, exist_ok=True)
 
-    editor = find_editor(project, args.engine, args.editor)
+    editor = require_editor(args.editor)
+    ensure_plugin_binary(project, editor, args.build_script, args.no_build)
+
     command = [
         str(editor),
         str(project),
@@ -332,6 +375,14 @@ def scan(args: argparse.Namespace) -> int:
     db_path = build_database(output)
     print(f"database: {db_path}")
     return 0
+
+
+def build(args: argparse.Namespace) -> int:
+    project = Path(args.project).expanduser().resolve()
+    if not project.is_file() or project.suffix.lower() != ".uproject":
+        raise FileNotFoundError(f"Not a .uproject file: {project}")
+    editor = require_editor(args.editor)
+    return build_project(project, editor, args.build_script)
 
 
 def pack(args: argparse.Namespace) -> int:
@@ -417,14 +468,21 @@ def make_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="uatool", description="UnrealAssetTool project indexer")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p_scan = sub.add_parser("scan", help="run the Unreal commandlet and build uat.db")
+    p_scan = sub.add_parser("scan", help="build if needed, run the Unreal commandlet, and build uat.db")
     p_scan.add_argument("project", help="path to .uproject")
-    p_scan.add_argument("--engine", help="Unreal Engine root, e.g. G:/UE_5.8")
-    p_scan.add_argument("--editor", help="full path to UnrealEditor-Cmd.exe")
+    p_scan.add_argument("--editor", required=True, help="exact path to UnrealEditor-Cmd.exe")
+    p_scan.add_argument("--build-script", help="optional exact path to Engine/Build/BatchFiles/Build.bat")
+    p_scan.add_argument("--no-build", action="store_true", help="do not build automatically when the plugin DLL is missing")
     p_scan.add_argument("--output", help="output directory; default: <project>/.uatool")
     p_scan.add_argument("--include-generated", action="store_true", help="include Binaries/Intermediate/Saved/etc in filesystem metadata")
     p_scan.add_argument("--include-engine", action="store_true", help="include Engine-owned assets, not only project/plugin assets")
     p_scan.set_defaults(func=scan)
+
+    p_build = sub.add_parser("build", help="build the project's Editor target so UnrealAssetTool can load")
+    p_build.add_argument("project", help="path to .uproject")
+    p_build.add_argument("--editor", required=True, help="exact path to UnrealEditor-Cmd.exe")
+    p_build.add_argument("--build-script", help="optional exact path to Engine/Build/BatchFiles/Build.bat")
+    p_build.set_defaults(func=build)
 
     p_pack = sub.add_parser("pack", help="rebuild uat.db from existing JSONL output")
     p_pack.add_argument("output", help="directory containing manifest.json and JSONL files")
