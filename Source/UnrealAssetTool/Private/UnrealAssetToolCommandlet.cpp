@@ -3283,7 +3283,8 @@ namespace UnrealAssetTool
         }
 
         const UCurveBase* ConstCurve = Curve;
-        const TArray<FRichCurveEditInfoConst> Curves = ConstCurve->GetCurves();
+        TArray<FRichCurveEditInfoConst> Curves;
+        ConstCurve->GetCurves(Curves);
         for (int32 ChannelIndex = 0; ChannelIndex < Curves.Num(); ++ChannelIndex)
         {
             const FRichCurveEditInfoConst& CurveInfo = Curves[ChannelIndex];
