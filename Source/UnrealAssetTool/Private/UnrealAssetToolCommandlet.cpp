@@ -65,7 +65,7 @@
 
 namespace UnrealAssetTool
 {
-    static constexpr int32 SchemaVersion = 6;
+    static constexpr int32 SchemaVersion = 7;
     static constexpr int32 SourceChunkLines = 200;
 
     class FJsonlWriter
@@ -130,6 +130,13 @@ namespace UnrealAssetTool
         int64 BlueprintEdges = 0;
         int64 BlueprintVariables = 0;
         int64 BlueprintComponents = 0;
+        int64 BlueprintDefaults = 0;
+        int64 BlueprintComponentProperties = 0;
+        int64 BlueprintTimelines = 0;
+        int64 BlueprintTimelineTracks = 0;
+        int64 BlueprintWidgets = 0;
+        int64 BlueprintWidgetBindings = 0;
+        int64 BlueprintWidgetAnimations = 0;
     };
 
     static FString NormalizeAbsolutePath(const FString& InPath)
@@ -373,6 +380,8 @@ namespace UnrealAssetTool
         }
         return TEXT("");
     }
+
+    static bool ClassIsOrDerivedFromName(const UClass* Class, const FName BaseClassName);
 
     static FString ExportReflectedPropertyText(UObject* Object, const FName PropertyName)
     {
@@ -2538,6 +2547,774 @@ namespace UnrealAssetTool
         return true;
     }
 
+
+    static FString ExportPropertyTextInContainer(
+        FProperty* Property,
+        const void* Container,
+        UObject* OwnerObject,
+        int32 ArrayIndex = 0,
+        int32 MaxChars = 65536)
+    {
+        if (!Property || !Container)
+        {
+            return TEXT("");
+        }
+
+        FString Value;
+        Property->ExportText_InContainer(
+            ArrayIndex,
+            Value,
+            Container,
+            nullptr,
+            OwnerObject,
+            PPF_None,
+            nullptr);
+
+        if (MaxChars > 0 && Value.Len() > MaxChars)
+        {
+            Value = Value.Left(MaxChars);
+        }
+        return Value;
+    }
+
+    static UObject* GetObjectPropertyValueInContainer(
+        FProperty* Property,
+        const void* Container,
+        int32 ArrayIndex = 0)
+    {
+        if (!Property || !Container)
+        {
+            return nullptr;
+        }
+
+        const FObjectPropertyBase* ObjectProperty = CastField<FObjectPropertyBase>(Property);
+        if (!ObjectProperty)
+        {
+            return nullptr;
+        }
+
+        const void* ValuePtr = Property->ContainerPtrToValuePtr<void>(Container, ArrayIndex);
+        return ValuePtr ? ObjectProperty->GetObjectPropertyValue(ValuePtr) : nullptr;
+    }
+
+    static void GetReflectedObjectArray(
+        UObject* Object,
+        const FName PropertyName,
+        TArray<UObject*>& OutObjects)
+    {
+        if (!Object)
+        {
+            return;
+        }
+
+        FArrayProperty* ArrayProperty = CastField<FArrayProperty>(
+            Object->GetClass()->FindPropertyByName(PropertyName));
+        if (!ArrayProperty)
+        {
+            return;
+        }
+
+        FObjectPropertyBase* InnerObject = CastField<FObjectPropertyBase>(ArrayProperty->Inner);
+        if (!InnerObject)
+        {
+            return;
+        }
+
+        const void* ArrayValue = ArrayProperty->ContainerPtrToValuePtr<void>(Object);
+        if (!ArrayValue)
+        {
+            return;
+        }
+
+        FScriptArrayHelper Helper(ArrayProperty, ArrayValue);
+        OutObjects.Reserve(OutObjects.Num() + Helper.Num());
+        for (int32 Index = 0; Index < Helper.Num(); ++Index)
+        {
+            const void* ElementValue = Helper.GetRawPtr(Index);
+            if (UObject* Value = InnerObject->GetObjectPropertyValue(ElementValue))
+            {
+                OutObjects.Add(Value);
+            }
+        }
+    }
+
+    static FString ExportStructFieldText(
+        UStruct* Struct,
+        const void* StructValue,
+        const FName FieldName,
+        UObject* OwnerObject,
+        int32 MaxChars = 16384)
+    {
+        if (!Struct || !StructValue)
+        {
+            return TEXT("");
+        }
+
+        FProperty* Field = Struct->FindPropertyByName(FieldName);
+        if (!Field)
+        {
+            return TEXT("");
+        }
+
+        const void* FieldValue = Field->ContainerPtrToValuePtr<void>(StructValue);
+        if (!FieldValue)
+        {
+            return TEXT("");
+        }
+
+        FString Value;
+        Field->ExportTextItem_Direct(Value, FieldValue, nullptr, OwnerObject, PPF_None, nullptr);
+        if (MaxChars > 0 && Value.Len() > MaxChars)
+        {
+            Value = Value.Left(MaxChars);
+        }
+        return Value;
+    }
+
+    static UObject* GetStructObjectField(
+        UStruct* Struct,
+        const void* StructValue,
+        const FName FieldName)
+    {
+        if (!Struct || !StructValue)
+        {
+            return nullptr;
+        }
+
+        FObjectPropertyBase* Field = CastField<FObjectPropertyBase>(
+            Struct->FindPropertyByName(FieldName));
+        if (!Field)
+        {
+            return nullptr;
+        }
+
+        const void* FieldValue = Field->ContainerPtrToValuePtr<void>(StructValue);
+        return FieldValue ? Field->GetObjectPropertyValue(FieldValue) : nullptr;
+    }
+
+    static bool ScanBlueprintDefaults(
+        UBlueprint* Blueprint,
+        const FString& BlueprintPath,
+        FJsonlWriter& DefaultsWriter,
+        FScanCounts& Counts)
+    {
+        if (!Blueprint || !Blueprint->GeneratedClass)
+        {
+            return true;
+        }
+
+        UClass* GeneratedClass = Blueprint->GeneratedClass;
+        UObject* CDO = GeneratedClass->GetDefaultObject();
+        UObject* ParentCDO = Blueprint->ParentClass ? Blueprint->ParentClass->GetDefaultObject() : nullptr;
+        if (!CDO)
+        {
+            return true;
+        }
+
+        static constexpr uint64 SkipFlags =
+            CPF_Transient | CPF_DuplicateTransient | CPF_NonPIEDuplicateTransient | CPF_Deprecated;
+
+        for (TFieldIterator<FProperty> It(GeneratedClass, EFieldIterationFlags::IncludeSuper); It; ++It)
+        {
+            FProperty* Property = *It;
+            if (!Property || Property->HasAnyPropertyFlags(SkipFlags))
+            {
+                continue;
+            }
+
+            const UClass* DeclaringClass = Property->GetOwnerClass();
+            const bool bDeclaredHere = DeclaringClass == GeneratedClass;
+            const bool bCanCompareToParent =
+                ParentCDO &&
+                Blueprint->ParentClass &&
+                Property->IsInContainer(Blueprint->ParentClass);
+
+            for (int32 ArrayIndex = 0; ArrayIndex < Property->ArrayDim; ++ArrayIndex)
+            {
+                const bool bDifferent =
+                    !bCanCompareToParent ||
+                    !Property->Identical_InContainer(CDO, ParentCDO, ArrayIndex, PPF_None);
+                if (!bDifferent)
+                {
+                    continue;
+                }
+
+                const FString Value = ExportPropertyTextInContainer(
+                    Property, CDO, CDO, ArrayIndex, 65536);
+                const FString ParentValue = bCanCompareToParent
+                    ? ExportPropertyTextInContainer(Property, ParentCDO, ParentCDO, ArrayIndex, 65536)
+                    : TEXT("");
+
+                UObject* ObjectValue = GetObjectPropertyValueInContainer(
+                    Property, CDO, ArrayIndex);
+
+                const TSharedRef<FJsonObject> Json = MakeShared<FJsonObject>();
+                Json->SetStringField(TEXT("blueprint_path"), BlueprintPath);
+                Json->SetStringField(TEXT("class_path"), GeneratedClass->GetPathName());
+                Json->SetStringField(TEXT("property_name"), Property->GetName());
+                Json->SetStringField(
+                    TEXT("declaring_class"),
+                    DeclaringClass ? DeclaringClass->GetPathName() : TEXT(""));
+                Json->SetNumberField(TEXT("array_index"), ArrayIndex);
+                Json->SetStringField(TEXT("property_type"), Property->GetClass()->GetName());
+                Json->SetStringField(TEXT("cpp_type"), Property->GetCPPType());
+                Json->SetStringField(TEXT("value"), Value);
+                Json->SetStringField(TEXT("parent_value"), ParentValue);
+                Json->SetStringField(
+                    TEXT("referenced_object_path"),
+                    ObjectValue ? ObjectValue->GetPathName() : TEXT(""));
+                Json->SetStringField(
+                    TEXT("referenced_object_class"),
+                    ObjectValue ? ObjectValue->GetClass()->GetPathName() : TEXT(""));
+                Json->SetBoolField(TEXT("declared_here"), bDeclaredHere);
+                Json->SetNumberField(
+                    TEXT("property_flags"),
+                    static_cast<double>(Property->GetPropertyFlags()));
+
+                if (!DefaultsWriter.Write(Json))
+                {
+                    return false;
+                }
+                ++Counts.BlueprintDefaults;
+            }
+        }
+
+        return true;
+    }
+
+    static bool ScanComponentTemplateProperties(
+        UBlueprint* Blueprint,
+        const FString& BlueprintPath,
+        FJsonlWriter& ComponentPropertiesWriter,
+        FScanCounts& Counts)
+    {
+        if (!Blueprint || !Blueprint->SimpleConstructionScript)
+        {
+            return true;
+        }
+
+        static constexpr uint64 SkipFlags =
+            CPF_Transient | CPF_DuplicateTransient | CPF_NonPIEDuplicateTransient | CPF_Deprecated;
+
+        for (USCS_Node* SCSNode : Blueprint->SimpleConstructionScript->GetAllNodes())
+        {
+            if (!SCSNode || !SCSNode->ComponentTemplate || !SCSNode->ComponentClass)
+            {
+                continue;
+            }
+
+            UObject* Template = SCSNode->ComponentTemplate;
+            UObject* ClassDefault = SCSNode->ComponentClass->GetDefaultObject();
+            if (!ClassDefault)
+            {
+                continue;
+            }
+
+            for (TFieldIterator<FProperty> It(SCSNode->ComponentClass, EFieldIterationFlags::IncludeSuper); It; ++It)
+            {
+                FProperty* Property = *It;
+                if (!Property || Property->HasAnyPropertyFlags(SkipFlags))
+                {
+                    continue;
+                }
+
+                for (int32 ArrayIndex = 0; ArrayIndex < Property->ArrayDim; ++ArrayIndex)
+                {
+                    if (Property->Identical_InContainer(
+                            Template, ClassDefault, ArrayIndex, PPF_None))
+                    {
+                        continue;
+                    }
+
+                    const FString Value = ExportPropertyTextInContainer(
+                        Property, Template, Template, ArrayIndex, 65536);
+                    const FString DefaultValue = ExportPropertyTextInContainer(
+                        Property, ClassDefault, ClassDefault, ArrayIndex, 65536);
+                    UObject* ObjectValue = GetObjectPropertyValueInContainer(
+                        Property, Template, ArrayIndex);
+
+                    const TSharedRef<FJsonObject> Json = MakeShared<FJsonObject>();
+                    Json->SetStringField(TEXT("blueprint_path"), BlueprintPath);
+                    Json->SetStringField(
+                        TEXT("component_name"),
+                        SCSNode->GetVariableName().ToString());
+                    Json->SetStringField(
+                        TEXT("component_class"),
+                        SCSNode->ComponentClass->GetPathName());
+                    Json->SetStringField(
+                        TEXT("template_path"),
+                        Template->GetPathName());
+                    Json->SetStringField(TEXT("property_name"), Property->GetName());
+                    Json->SetStringField(
+                        TEXT("declaring_class"),
+                        Property->GetOwnerClass()
+                            ? Property->GetOwnerClass()->GetPathName()
+                            : TEXT(""));
+                    Json->SetNumberField(TEXT("array_index"), ArrayIndex);
+                    Json->SetStringField(TEXT("property_type"), Property->GetClass()->GetName());
+                    Json->SetStringField(TEXT("cpp_type"), Property->GetCPPType());
+                    Json->SetStringField(TEXT("value"), Value);
+                    Json->SetStringField(TEXT("class_default_value"), DefaultValue);
+                    Json->SetStringField(
+                        TEXT("referenced_object_path"),
+                        ObjectValue ? ObjectValue->GetPathName() : TEXT(""));
+                    Json->SetStringField(
+                        TEXT("referenced_object_class"),
+                        ObjectValue ? ObjectValue->GetClass()->GetPathName() : TEXT(""));
+                    Json->SetNumberField(
+                        TEXT("property_flags"),
+                        static_cast<double>(Property->GetPropertyFlags()));
+
+                    if (!ComponentPropertiesWriter.Write(Json))
+                    {
+                        return false;
+                    }
+                    ++Counts.BlueprintComponentProperties;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    static bool WriteTimelineTrackArray(
+        UObject* Timeline,
+        const FString& BlueprintPath,
+        const FString& TimelinePath,
+        const FString& TimelineName,
+        const FName ArrayPropertyName,
+        const FString& TrackType,
+        FJsonlWriter& TimelineTracksWriter,
+        FScanCounts& Counts)
+    {
+        if (!Timeline)
+        {
+            return true;
+        }
+
+        FArrayProperty* ArrayProperty = CastField<FArrayProperty>(
+            Timeline->GetClass()->FindPropertyByName(ArrayPropertyName));
+        if (!ArrayProperty)
+        {
+            return true;
+        }
+
+        FStructProperty* InnerStructProperty = CastField<FStructProperty>(ArrayProperty->Inner);
+        if (!InnerStructProperty || !InnerStructProperty->Struct)
+        {
+            return true;
+        }
+
+        const void* ArrayValue = ArrayProperty->ContainerPtrToValuePtr<void>(Timeline);
+        if (!ArrayValue)
+        {
+            return true;
+        }
+
+        FScriptArrayHelper Helper(ArrayProperty, ArrayValue);
+        for (int32 TrackIndex = 0; TrackIndex < Helper.Num(); ++TrackIndex)
+        {
+            const void* TrackValue = Helper.GetRawPtr(TrackIndex);
+            UStruct* TrackStruct = InnerStructProperty->Struct;
+
+            const FString TrackName = ExportStructFieldText(
+                TrackStruct, TrackValue, TEXT("TrackName"), Timeline);
+            const FString PropertyName = ExportStructFieldText(
+                TrackStruct, TrackValue, TEXT("PropertyName"), Timeline);
+            const FString FunctionName = ExportStructFieldText(
+                TrackStruct, TrackValue, TEXT("FunctionName"), Timeline);
+            const FString bExternalCurve = ExportStructFieldText(
+                TrackStruct, TrackValue, TEXT("bIsExternalCurve"), Timeline);
+
+            UObject* Curve = nullptr;
+            static const FName CurveFields[] =
+            {
+                TEXT("CurveFloat"),
+                TEXT("CurveVector"),
+                TEXT("CurveLinearColor"),
+                TEXT("CurveKeys")
+            };
+            for (const FName CurveField : CurveFields)
+            {
+                Curve = GetStructObjectField(TrackStruct, TrackValue, CurveField);
+                if (Curve)
+                {
+                    break;
+                }
+            }
+
+            FString RawValue;
+            InnerStructProperty->ExportTextItem_Direct(
+                RawValue, TrackValue, nullptr, Timeline, PPF_None, nullptr);
+            if (RawValue.Len() > 32768)
+            {
+                RawValue = RawValue.Left(32768);
+            }
+
+            const TSharedRef<FJsonObject> Json = MakeShared<FJsonObject>();
+            Json->SetStringField(TEXT("blueprint_path"), BlueprintPath);
+            Json->SetStringField(TEXT("timeline_path"), TimelinePath);
+            Json->SetStringField(TEXT("timeline_name"), TimelineName);
+            Json->SetNumberField(TEXT("track_index"), TrackIndex);
+            Json->SetStringField(TEXT("track_type"), TrackType);
+            Json->SetStringField(TEXT("track_struct"), TrackStruct->GetPathName());
+            Json->SetStringField(TEXT("track_name"), TrackName);
+            Json->SetStringField(TEXT("property_name"), PropertyName);
+            Json->SetStringField(TEXT("function_name"), FunctionName);
+            Json->SetStringField(TEXT("external_curve"), bExternalCurve);
+            Json->SetStringField(
+                TEXT("curve_path"),
+                Curve ? Curve->GetPathName() : TEXT(""));
+            Json->SetStringField(
+                TEXT("curve_class"),
+                Curve ? Curve->GetClass()->GetPathName() : TEXT(""));
+            Json->SetStringField(TEXT("raw_value"), RawValue);
+
+            if (!TimelineTracksWriter.Write(Json))
+            {
+                return false;
+            }
+            ++Counts.BlueprintTimelineTracks;
+        }
+
+        return true;
+    }
+
+    static bool ScanBlueprintTimelines(
+        UBlueprint* Blueprint,
+        const FString& BlueprintPath,
+        FJsonlWriter& TimelinesWriter,
+        FJsonlWriter& TimelineTracksWriter,
+        FScanCounts& Counts)
+    {
+        if (!Blueprint)
+        {
+            return true;
+        }
+
+        TArray<UObject*> Timelines;
+        GetReflectedObjectArray(Blueprint, TEXT("Timelines"), Timelines);
+        for (UObject* Timeline : Timelines)
+        {
+            if (!Timeline)
+            {
+                continue;
+            }
+
+            const FString TimelinePath = Timeline->GetPathName();
+            FString TimelineName = Timeline->GetName();
+            TimelineName.RemoveFromEnd(TEXT("_Template"));
+
+            const TSharedRef<FJsonObject> Json = MakeShared<FJsonObject>();
+            Json->SetStringField(TEXT("blueprint_path"), BlueprintPath);
+            Json->SetStringField(TEXT("timeline_path"), TimelinePath);
+            Json->SetStringField(TEXT("timeline_name"), TimelineName);
+            Json->SetStringField(TEXT("timeline_class"), Timeline->GetClass()->GetPathName());
+            Json->SetStringField(TEXT("guid"), ExportReflectedPropertyText(Timeline, TEXT("TimelineGuid")));
+            Json->SetStringField(TEXT("length"), ExportReflectedPropertyText(Timeline, TEXT("TimelineLength")));
+            Json->SetStringField(TEXT("length_mode"), ExportReflectedPropertyText(Timeline, TEXT("LengthMode")));
+            Json->SetStringField(TEXT("auto_play"), ExportReflectedPropertyText(Timeline, TEXT("bAutoPlay")));
+            Json->SetStringField(TEXT("loop"), ExportReflectedPropertyText(Timeline, TEXT("bLoop")));
+            Json->SetStringField(TEXT("replicated"), ExportReflectedPropertyText(Timeline, TEXT("bReplicated")));
+            Json->SetStringField(TEXT("ignore_time_dilation"), ExportReflectedPropertyText(Timeline, TEXT("bIgnoreTimeDilation")));
+            Json->SetStringField(TEXT("tick_group"), ExportReflectedPropertyText(Timeline, TEXT("TimelineTickGroup")));
+            Json->SetStringField(TEXT("update_function"), ExportReflectedPropertyText(Timeline, TEXT("UpdateFunctionName")));
+            Json->SetStringField(TEXT("finished_function"), ExportReflectedPropertyText(Timeline, TEXT("FinishedFunctionName")));
+            Json->SetStringField(TEXT("direction_property"), ExportReflectedPropertyText(Timeline, TEXT("DirectionPropertyName")));
+            Json->SetStringField(TEXT("variable_name"), ExportReflectedPropertyText(Timeline, TEXT("VariableName")));
+
+            if (!TimelinesWriter.Write(Json))
+            {
+                return false;
+            }
+            ++Counts.BlueprintTimelines;
+
+            if (!WriteTimelineTrackArray(
+                    Timeline, BlueprintPath, TimelinePath, TimelineName,
+                    TEXT("FloatTracks"), TEXT("float"), TimelineTracksWriter, Counts) ||
+                !WriteTimelineTrackArray(
+                    Timeline, BlueprintPath, TimelinePath, TimelineName,
+                    TEXT("VectorTracks"), TEXT("vector"), TimelineTracksWriter, Counts) ||
+                !WriteTimelineTrackArray(
+                    Timeline, BlueprintPath, TimelinePath, TimelineName,
+                    TEXT("LinearColorTracks"), TEXT("linear_color"), TimelineTracksWriter, Counts) ||
+                !WriteTimelineTrackArray(
+                    Timeline, BlueprintPath, TimelinePath, TimelineName,
+                    TEXT("EventTracks"), TEXT("event"), TimelineTracksWriter, Counts))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    static TSharedRef<FJsonObject> SelectedObjectPropertiesToJson(
+        UObject* Object,
+        const TArray<FName>& PropertyNames)
+    {
+        const TSharedRef<FJsonObject> Json = MakeShared<FJsonObject>();
+        if (!Object)
+        {
+            return Json;
+        }
+
+        for (const FName PropertyName : PropertyNames)
+        {
+            FProperty* Property = Object->GetClass()->FindPropertyByName(PropertyName);
+            if (!Property || !IsCapturableProperty(Property))
+            {
+                continue;
+            }
+            Json->SetStringField(
+                PropertyName.ToString(),
+                ExportPropertyTextInContainer(Property, Object, Object, 0, 16384));
+        }
+        return Json;
+    }
+
+    static TSharedRef<FJsonObject> SlotPropertiesToJson(UObject* Slot)
+    {
+        const TSharedRef<FJsonObject> Json = MakeShared<FJsonObject>();
+        if (!Slot)
+        {
+            return Json;
+        }
+
+        int32 Written = 0;
+        for (UClass* Class = Slot->GetClass();
+             Class && Class != UObject::StaticClass();
+             Class = Class->GetSuperClass())
+        {
+            for (TFieldIterator<FProperty> It(Class, EFieldIterationFlags::None); It; ++It)
+            {
+                FProperty* Property = *It;
+                if (!IsCapturableProperty(Property) ||
+                    Property->GetFName() == TEXT("Content") ||
+                    Property->GetFName() == TEXT("Parent"))
+                {
+                    continue;
+                }
+
+                Json->SetStringField(
+                    Property->GetName(),
+                    ExportPropertyTextInContainer(Property, Slot, Slot, 0, 4096));
+                if (++Written >= 64)
+                {
+                    return Json;
+                }
+            }
+
+            if (Class->GetFName() == TEXT("PanelSlot"))
+            {
+                break;
+            }
+        }
+        return Json;
+    }
+
+    static bool WriteWidgetBindings(
+        UBlueprint* Blueprint,
+        const FString& BlueprintPath,
+        FJsonlWriter& WidgetBindingsWriter,
+        FScanCounts& Counts)
+    {
+        if (!Blueprint)
+        {
+            return true;
+        }
+
+        FArrayProperty* ArrayProperty = CastField<FArrayProperty>(
+            Blueprint->GetClass()->FindPropertyByName(TEXT("Bindings")));
+        if (!ArrayProperty)
+        {
+            return true;
+        }
+
+        FStructProperty* InnerStructProperty = CastField<FStructProperty>(ArrayProperty->Inner);
+        if (!InnerStructProperty || !InnerStructProperty->Struct)
+        {
+            return true;
+        }
+
+        const void* ArrayValue = ArrayProperty->ContainerPtrToValuePtr<void>(Blueprint);
+        if (!ArrayValue)
+        {
+            return true;
+        }
+
+        FScriptArrayHelper Helper(ArrayProperty, ArrayValue);
+        for (int32 BindingIndex = 0; BindingIndex < Helper.Num(); ++BindingIndex)
+        {
+            const void* BindingValue = Helper.GetRawPtr(BindingIndex);
+            UStruct* BindingStruct = InnerStructProperty->Struct;
+
+            const TSharedRef<FJsonObject> Json = MakeShared<FJsonObject>();
+            Json->SetStringField(TEXT("blueprint_path"), BlueprintPath);
+            Json->SetNumberField(TEXT("binding_index"), BindingIndex);
+            Json->SetStringField(TEXT("binding_struct"), BindingStruct->GetPathName());
+            Json->SetStringField(TEXT("object_name"),
+                ExportStructFieldText(BindingStruct, BindingValue, TEXT("ObjectName"), Blueprint));
+            Json->SetStringField(TEXT("property_name"),
+                ExportStructFieldText(BindingStruct, BindingValue, TEXT("PropertyName"), Blueprint));
+            Json->SetStringField(TEXT("function_name"),
+                ExportStructFieldText(BindingStruct, BindingValue, TEXT("FunctionName"), Blueprint));
+            Json->SetStringField(TEXT("source_property"),
+                ExportStructFieldText(BindingStruct, BindingValue, TEXT("SourceProperty"), Blueprint));
+            Json->SetStringField(TEXT("source_path"),
+                ExportStructFieldText(BindingStruct, BindingValue, TEXT("SourcePath"), Blueprint));
+            Json->SetStringField(TEXT("kind"),
+                ExportStructFieldText(BindingStruct, BindingValue, TEXT("Kind"), Blueprint));
+            Json->SetStringField(TEXT("member_guid"),
+                ExportStructFieldText(BindingStruct, BindingValue, TEXT("MemberGuid"), Blueprint));
+
+            FString RawValue;
+            InnerStructProperty->ExportTextItem_Direct(
+                RawValue, BindingValue, nullptr, Blueprint, PPF_None, nullptr);
+            if (RawValue.Len() > 32768)
+            {
+                RawValue = RawValue.Left(32768);
+            }
+            Json->SetStringField(TEXT("raw_value"), RawValue);
+
+            if (!WidgetBindingsWriter.Write(Json))
+            {
+                return false;
+            }
+            ++Counts.BlueprintWidgetBindings;
+        }
+
+        return true;
+    }
+
+    static bool ScanBlueprintWidgets(
+        UBlueprint* Blueprint,
+        const FString& BlueprintPath,
+        FJsonlWriter& WidgetsWriter,
+        FJsonlWriter& WidgetBindingsWriter,
+        FJsonlWriter& WidgetAnimationsWriter,
+        FScanCounts& Counts)
+    {
+        if (!Blueprint)
+        {
+            return true;
+        }
+
+        UObject* WidgetTree = GetReflectedObjectProperty(Blueprint, TEXT("WidgetTree"));
+        if (WidgetTree)
+        {
+            TArray<UObject*> OwnedObjects;
+            GetObjectsWithOuter(
+                WidgetTree,
+                OwnedObjects,
+                EGetObjectsFlags::IncludeNestedObjects);
+
+            static const TArray<FName> WidgetPropertyNames =
+            {
+                TEXT("bIsVariable"),
+                TEXT("Visibility"),
+                TEXT("bIsEnabled"),
+                TEXT("RenderOpacity"),
+                TEXT("RenderTransform"),
+                TEXT("RenderTransformPivot"),
+                TEXT("ToolTipText"),
+                TEXT("bHiddenInDesigner"),
+                TEXT("bLockedInDesigner"),
+                TEXT("bExpandedInDesigner")
+            };
+
+            for (UObject* Object : OwnedObjects)
+            {
+                if (!Object ||
+                    !ClassIsOrDerivedFromName(Object->GetClass(), TEXT("Widget")))
+                {
+                    continue;
+                }
+
+                UObject* Slot = GetReflectedObjectProperty(Object, TEXT("Slot"));
+                UObject* ParentWidget = Slot
+                    ? GetReflectedObjectProperty(Slot, TEXT("Parent"))
+                    : nullptr;
+
+                const TSharedRef<FJsonObject> Json = MakeShared<FJsonObject>();
+                Json->SetStringField(TEXT("blueprint_path"), BlueprintPath);
+                Json->SetStringField(TEXT("widget_tree"), WidgetTree->GetPathName());
+                Json->SetStringField(TEXT("widget_path"), Object->GetPathName());
+                Json->SetStringField(TEXT("widget_name"), Object->GetName());
+                Json->SetStringField(TEXT("widget_class"), Object->GetClass()->GetPathName());
+                Json->SetStringField(
+                    TEXT("parent_widget_path"),
+                    ParentWidget ? ParentWidget->GetPathName() : TEXT(""));
+                Json->SetStringField(
+                    TEXT("parent_widget_name"),
+                    ParentWidget ? ParentWidget->GetName() : TEXT(""));
+                Json->SetStringField(
+                    TEXT("slot_path"),
+                    Slot ? Slot->GetPathName() : TEXT(""));
+                Json->SetStringField(
+                    TEXT("slot_class"),
+                    Slot ? Slot->GetClass()->GetPathName() : TEXT(""));
+                Json->SetObjectField(
+                    TEXT("properties"),
+                    SelectedObjectPropertiesToJson(Object, WidgetPropertyNames));
+                Json->SetObjectField(
+                    TEXT("slot_properties"),
+                    SlotPropertiesToJson(Slot));
+
+                if (!WidgetsWriter.Write(Json))
+                {
+                    return false;
+                }
+                ++Counts.BlueprintWidgets;
+            }
+        }
+
+        if (!WriteWidgetBindings(
+                Blueprint,
+                BlueprintPath,
+                WidgetBindingsWriter,
+                Counts))
+        {
+            return false;
+        }
+
+        TArray<UObject*> Animations;
+        GetReflectedObjectArray(Blueprint, TEXT("Animations"), Animations);
+        for (int32 AnimationIndex = 0; AnimationIndex < Animations.Num(); ++AnimationIndex)
+        {
+            UObject* Animation = Animations[AnimationIndex];
+            if (!Animation)
+            {
+                continue;
+            }
+
+            UObject* MovieScene = GetReflectedObjectProperty(Animation, TEXT("MovieScene"));
+            const TSharedRef<FJsonObject> Json = MakeShared<FJsonObject>();
+            Json->SetStringField(TEXT("blueprint_path"), BlueprintPath);
+            Json->SetNumberField(TEXT("animation_index"), AnimationIndex);
+            Json->SetStringField(TEXT("animation_path"), Animation->GetPathName());
+            Json->SetStringField(TEXT("animation_name"), Animation->GetName());
+            Json->SetStringField(TEXT("animation_class"), Animation->GetClass()->GetPathName());
+            Json->SetStringField(
+                TEXT("display_label"),
+                ExportReflectedPropertyText(Animation, TEXT("DisplayLabel")));
+            Json->SetStringField(
+                TEXT("movie_scene"),
+                MovieScene ? MovieScene->GetPathName() : TEXT(""));
+            Json->SetStringField(
+                TEXT("animation_bindings"),
+                ExportReflectedPropertyText(Animation, TEXT("AnimationBindings")));
+
+            if (!WidgetAnimationsWriter.Write(Json))
+            {
+                return false;
+            }
+            ++Counts.BlueprintWidgetAnimations;
+        }
+
+        return true;
+    }
+
     static bool ScanBlueprint(
         UBlueprint* Blueprint,
         const FString& ObjectPath,
@@ -2549,6 +3326,13 @@ namespace UnrealAssetTool
         FJsonlWriter& ReferencesWriter,
         FJsonlWriter& BindingsWriter,
         FJsonlWriter& InterfacesWriter,
+        FJsonlWriter& DefaultsWriter,
+        FJsonlWriter& ComponentPropertiesWriter,
+        FJsonlWriter& TimelinesWriter,
+        FJsonlWriter& TimelineTracksWriter,
+        FJsonlWriter& WidgetsWriter,
+        FJsonlWriter& WidgetBindingsWriter,
+        FJsonlWriter& WidgetAnimationsWriter,
         FJsonlWriter& RigVMObjectsWriter,
         FJsonlWriter& RigVMPinsWriter,
         FJsonlWriter& RigVMLinksWriter,
@@ -2673,6 +3457,33 @@ namespace UnrealAssetTool
         }
         ++Counts.Blueprints;
 
+        if (!ScanBlueprintDefaults(
+                Blueprint,
+                ObjectPath,
+                DefaultsWriter,
+                Counts) ||
+            !ScanComponentTemplateProperties(
+                Blueprint,
+                ObjectPath,
+                ComponentPropertiesWriter,
+                Counts) ||
+            !ScanBlueprintTimelines(
+                Blueprint,
+                ObjectPath,
+                TimelinesWriter,
+                TimelineTracksWriter,
+                Counts) ||
+            !ScanBlueprintWidgets(
+                Blueprint,
+                ObjectPath,
+                WidgetsWriter,
+                WidgetBindingsWriter,
+                WidgetAnimationsWriter,
+                Counts))
+        {
+            return false;
+        }
+
         for (UEdGraph* Graph : UniqueGraphs)
         {
             if (!Graph)
@@ -2695,7 +3506,16 @@ namespace UnrealAssetTool
             GraphJson->SetStringField(TEXT("graph_system"), GraphSystemValue);
             GraphJson->SetStringField(TEXT("graph_class"), Graph->GetClass()->GetPathName());
             GraphJson->SetStringField(TEXT("schema_class"), Graph->GetSchema() ? Graph->GetSchema()->GetClass()->GetPathName() : TEXT(""));
-            GraphJson->SetNumberField(TEXT("node_count"), Graph->Nodes.Num());
+
+            TSet<FString> UniqueGraphNodeIds;
+            for (int32 NodeIndex = 0; NodeIndex < Graph->Nodes.Num(); ++NodeIndex)
+            {
+                if (UEdGraphNode* CountNode = Graph->Nodes[NodeIndex])
+                {
+                    UniqueGraphNodeIds.Add(MakeNodeId(ObjectPath, Graph, CountNode, NodeIndex));
+                }
+            }
+            GraphJson->SetNumberField(TEXT("node_count"), UniqueGraphNodeIds.Num());
 
             UObject* GraphOuter = Graph->GetOuter();
             GraphJson->SetStringField(TEXT("outer_path"), GraphOuter ? GraphOuter->GetPathName() : TEXT(""));
@@ -2718,6 +3538,8 @@ namespace UnrealAssetTool
 
             TMap<const UEdGraphNode*, FString> NodeIds;
             TMap<const UEdGraphPin*, FString> PinIds;
+            TSet<FString> SeenNodeIds;
+            TSet<FString> SeenPinIds;
 
             for (int32 NodeIndex = 0; NodeIndex < Graph->Nodes.Num(); ++NodeIndex)
             {
@@ -2729,6 +3551,11 @@ namespace UnrealAssetTool
 
                 const FString NodeId = MakeNodeId(ObjectPath, Graph, Node, NodeIndex);
                 NodeIds.Add(Node, NodeId);
+                if (SeenNodeIds.Contains(NodeId))
+                {
+                    continue;
+                }
+                SeenNodeIds.Add(NodeId);
 
                 const TSharedRef<FJsonObject> NodeJson = MakeShared<FJsonObject>();
                 NodeJson->SetStringField(TEXT("node_id"), NodeId);
@@ -2769,6 +3596,11 @@ namespace UnrealAssetTool
                     }
                     const FString PinId = MakePinId(NodeId, Pin, PinIndex);
                     PinIds.Add(Pin, PinId);
+                    if (SeenPinIds.Contains(PinId))
+                    {
+                        continue;
+                    }
+                    SeenPinIds.Add(PinId);
 
                     const TSharedRef<FJsonObject> PinJson = MakeShared<FJsonObject>();
                     PinJson->SetStringField(TEXT("pin_id"), PinId);
@@ -2826,6 +3658,7 @@ namespace UnrealAssetTool
                 }
             }
 
+            TSet<FString> SeenEdgeKeys;
             for (UEdGraphNode* Node : Graph->Nodes)
             {
                 if (!Node)
@@ -2862,6 +3695,13 @@ namespace UnrealAssetTool
                         {
                             continue;
                         }
+
+                        const FString EdgeKey = *SourcePinId + TEXT("->") + *TargetPinId;
+                        if (SeenEdgeKeys.Contains(EdgeKey))
+                        {
+                            continue;
+                        }
+                        SeenEdgeKeys.Add(EdgeKey);
 
                         const TSharedRef<FJsonObject> EdgeJson = MakeShared<FJsonObject>();
                         EdgeJson->SetStringField(TEXT("blueprint_path"), ObjectPath);
@@ -2919,6 +3759,13 @@ namespace UnrealAssetTool
         FJsonlWriter& ReferencesWriter,
         FJsonlWriter& BindingsWriter,
         FJsonlWriter& InterfacesWriter,
+        FJsonlWriter& DefaultsWriter,
+        FJsonlWriter& ComponentPropertiesWriter,
+        FJsonlWriter& TimelinesWriter,
+        FJsonlWriter& TimelineTracksWriter,
+        FJsonlWriter& WidgetsWriter,
+        FJsonlWriter& WidgetBindingsWriter,
+        FJsonlWriter& WidgetAnimationsWriter,
         FJsonlWriter& RigVMObjectsWriter,
         FJsonlWriter& RigVMPinsWriter,
         FJsonlWriter& RigVMLinksWriter,
@@ -3018,6 +3865,13 @@ namespace UnrealAssetTool
                             ReferencesWriter,
                             BindingsWriter,
                             InterfacesWriter,
+                            DefaultsWriter,
+                            ComponentPropertiesWriter,
+                            TimelinesWriter,
+                            TimelineTracksWriter,
+                            WidgetsWriter,
+                            WidgetBindingsWriter,
+                            WidgetAnimationsWriter,
                             RigVMObjectsWriter,
                             RigVMPinsWriter,
                             RigVMLinksWriter,
@@ -3098,6 +3952,13 @@ int32 UUnrealAssetToolCommandlet::Main(const FString& Params)
     FJsonlWriter ReferencesWriter(FPaths::Combine(OutputDir, TEXT("blueprint_node_references.jsonl")));
     FJsonlWriter BindingsWriter(FPaths::Combine(OutputDir, TEXT("blueprint_bindings.jsonl")));
     FJsonlWriter InterfacesWriter(FPaths::Combine(OutputDir, TEXT("blueprint_interfaces.jsonl")));
+    FJsonlWriter DefaultsWriter(FPaths::Combine(OutputDir, TEXT("blueprint_defaults.jsonl")));
+    FJsonlWriter ComponentPropertiesWriter(FPaths::Combine(OutputDir, TEXT("blueprint_component_properties.jsonl")));
+    FJsonlWriter TimelinesWriter(FPaths::Combine(OutputDir, TEXT("blueprint_timelines.jsonl")));
+    FJsonlWriter TimelineTracksWriter(FPaths::Combine(OutputDir, TEXT("blueprint_timeline_tracks.jsonl")));
+    FJsonlWriter WidgetsWriter(FPaths::Combine(OutputDir, TEXT("blueprint_widgets.jsonl")));
+    FJsonlWriter WidgetBindingsWriter(FPaths::Combine(OutputDir, TEXT("blueprint_widget_bindings.jsonl")));
+    FJsonlWriter WidgetAnimationsWriter(FPaths::Combine(OutputDir, TEXT("blueprint_widget_animations.jsonl")));
     FJsonlWriter RigVMObjectsWriter(FPaths::Combine(OutputDir, TEXT("rigvm_objects.jsonl")));
     FJsonlWriter RigVMPinsWriter(FPaths::Combine(OutputDir, TEXT("rigvm_pins.jsonl")));
     FJsonlWriter RigVMLinksWriter(FPaths::Combine(OutputDir, TEXT("rigvm_links.jsonl")));
@@ -3109,6 +3970,9 @@ int32 UUnrealAssetToolCommandlet::Main(const FString& Params)
         !DependenciesWriter.IsValid() || !BlueprintsWriter.IsValid() || !GraphsWriter.IsValid() ||
         !NodesWriter.IsValid() || !PinsWriter.IsValid() || !PropertiesWriter.IsValid() ||
         !ReferencesWriter.IsValid() || !BindingsWriter.IsValid() || !InterfacesWriter.IsValid() ||
+        !DefaultsWriter.IsValid() || !ComponentPropertiesWriter.IsValid() ||
+        !TimelinesWriter.IsValid() || !TimelineTracksWriter.IsValid() ||
+        !WidgetsWriter.IsValid() || !WidgetBindingsWriter.IsValid() || !WidgetAnimationsWriter.IsValid() ||
         !RigVMObjectsWriter.IsValid() || !RigVMPinsWriter.IsValid() || !RigVMLinksWriter.IsValid() ||
         !RigVMPropertiesWriter.IsValid() || !RigVMReferencesWriter.IsValid() ||
         !EdgesWriter.IsValid())
@@ -3139,6 +4003,13 @@ int32 UUnrealAssetToolCommandlet::Main(const FString& Params)
             ReferencesWriter,
             BindingsWriter,
             InterfacesWriter,
+            DefaultsWriter,
+            ComponentPropertiesWriter,
+            TimelinesWriter,
+            TimelineTracksWriter,
+            WidgetsWriter,
+            WidgetBindingsWriter,
+            WidgetAnimationsWriter,
             RigVMObjectsWriter,
             RigVMPinsWriter,
             RigVMLinksWriter,
@@ -3188,6 +4059,13 @@ int32 UUnrealAssetToolCommandlet::Main(const FString& Params)
     CountsJson->SetNumberField(TEXT("blueprint_edges"), static_cast<double>(Counts.BlueprintEdges));
     CountsJson->SetNumberField(TEXT("blueprint_variables"), static_cast<double>(Counts.BlueprintVariables));
     CountsJson->SetNumberField(TEXT("blueprint_components"), static_cast<double>(Counts.BlueprintComponents));
+    CountsJson->SetNumberField(TEXT("blueprint_defaults"), static_cast<double>(Counts.BlueprintDefaults));
+    CountsJson->SetNumberField(TEXT("blueprint_component_properties"), static_cast<double>(Counts.BlueprintComponentProperties));
+    CountsJson->SetNumberField(TEXT("blueprint_timelines"), static_cast<double>(Counts.BlueprintTimelines));
+    CountsJson->SetNumberField(TEXT("blueprint_timeline_tracks"), static_cast<double>(Counts.BlueprintTimelineTracks));
+    CountsJson->SetNumberField(TEXT("blueprint_widgets"), static_cast<double>(Counts.BlueprintWidgets));
+    CountsJson->SetNumberField(TEXT("blueprint_widget_bindings"), static_cast<double>(Counts.BlueprintWidgetBindings));
+    CountsJson->SetNumberField(TEXT("blueprint_widget_animations"), static_cast<double>(Counts.BlueprintWidgetAnimations));
     Manifest->SetObjectField(TEXT("counts"), CountsJson);
 
     if (!SaveJsonObject(FPaths::Combine(OutputDir, TEXT("manifest.json")), Manifest))

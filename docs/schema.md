@@ -1,4 +1,4 @@
-# UnrealAssetTool schema v6
+# UnrealAssetTool schema v7
 
 The scan format is line-oriented so individual records can be streamed, indexed, diffed, embedded, or retrieved without parsing a monolithic project document.
 
@@ -324,3 +324,17 @@ One directed record per output-pin to linked-pin connection.
 The Python `pack` step creates a derived SQLite database with normalized tables and an FTS5 source index when the local SQLite build supports FTS5.
 
 Canonical truth remains the JSONL output. The database may be deleted and rebuilt without rescanning Unreal.
+
+
+## Schema v7 Blueprint state and derived reconstruction
+
+Schema v7 adds non-graph Blueprint state that materially changes runtime/design behavior:
+
+- `blueprint_defaults.jsonl`: CDO values that differ from the parent CDO (plus Blueprint-declared fields), with property type/flags and direct UObject references.
+- `blueprint_component_properties.jsonl`: SCS component-template values that differ from the component class default object.
+- `blueprint_timelines.jsonl` and `blueprint_timeline_tracks.jsonl`: Timeline configuration and typed tracks/curves/functions.
+- `blueprint_widgets.jsonl`, `blueprint_widget_bindings.jsonl`, and `blueprint_widget_animations.jsonl`: UMG designer hierarchy, slot layout state, editor bindings, and animations.
+
+Graph scanning also de-duplicates emitted node, pin, and edge identities within each graph, not only graph objects themselves. This prevents repeated nested Control Rig editor nodes from appearing twice in canonical JSONL.
+
+The Python derivation layer has `derived_schema_version = 1` and emits `rigvm_editor_links.jsonl`, `blueprint_relations.jsonl`, `blueprint_graph_context.jsonl`, and `blueprint_summaries.jsonl`. These are reproducible indexes over canonical scan data and can be regenerated with `uatool.py derive`. The raw Unreal schema version and derived schema version are recorded separately in `manifest.json`.

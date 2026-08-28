@@ -224,3 +224,8 @@ get_context(query, token_budget=20000)
 ```
 
 That makes the Unreal project itself a browsable knowledge source for an AI agent.
+
+
+## Derived visual-program views
+
+The commandlet owns engine-truth extraction. Python may build deterministic retrieval views over those facts without changing their meaning. In schema v7 this includes semantic relations, bounded graph-context text, Blueprint summaries, and a scored Control Rig editor-node to RigVM-model join. Derived views must retain ambiguity/status instead of silently guessing and must be regenerable from JSONL without launching Unreal.
