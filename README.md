@@ -34,7 +34,7 @@ The primary scanner is therefore an **Editor Commandlet**. Unreal itself supplie
 
 A small Python launcher invokes the commandlet and converts the JSONL records into `uat.db` for fast retrieval.
 
-## Current MVP (0.1.2)
+## Current MVP (0.1.3)
 
 The first vertical slice indexes:
 
@@ -241,3 +241,8 @@ not:
 ```text
 README files + filenames + guessed asset behavior
 ```
+
+
+### Build configuration matching
+
+`scan` checks the build configuration encoded by the exact `--editor` executable and then verifies Unreal's matching `.modules` manifest, not merely whether some `UnrealAssetTool` DLL exists. For example, `UnrealEditor-Cmd.exe` requires the Development module while `UnrealEditor-Win64-DebugGame-Cmd.exe` requires the DebugGame module. If the matching module/manifest is absent, `scan` builds that exact configuration before launching the commandlet.

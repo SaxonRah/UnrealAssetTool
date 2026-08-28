@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Iterable, Iterator
 
 DB_NAME = "uat.db"
+MODULE_NAME = "UnrealAssetTool"
 
 
 def iter_jsonl(path: Path) -> Iterator[dict]:
@@ -44,11 +45,69 @@ def plugin_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+def editor_configuration(editor: Path) -> str:
+    """Infer only the build configuration encoded by the exact editor filename.
+
+    This does not discover an engine installation. Unreal's unsuffixed
+    UnrealEditor[ -Cmd ].exe is the Development editor. Configuration-specific
+    executables encode their configuration in the filename.
+    """
+    name = editor.name.lower()
+    if "-debuggame" in name:
+        return "DebugGame"
+    if "-debug" in name:
+        return "Debug"
+    if "-test" in name:
+        return "Test"
+    if "-shipping" in name:
+        return "Shipping"
+    return "Development"
+
+
+def expected_plugin_binary(editor: Path) -> Path:
+    binaries = plugin_root() / "Binaries" / "Win64"
+    configuration = editor_configuration(editor)
+    if configuration == "Development":
+        filename = f"UnrealEditor-{MODULE_NAME}.dll"
+    else:
+        filename = f"UnrealEditor-{MODULE_NAME}-Win64-{configuration}.dll"
+    return binaries / filename
+
+
+def expected_module_manifest(editor: Path) -> Path:
+    binaries = plugin_root() / "Binaries" / "Win64"
+    configuration = editor_configuration(editor)
+    if configuration == "Development":
+        filename = "UnrealEditor.modules"
+    else:
+        filename = f"UnrealEditor-Win64-{configuration}.modules"
+    return binaries / filename
+
+
+def module_manifest_binary(editor: Path) -> Path | None:
+    """Return the DLL that Unreal's manifest maps to our module, if valid."""
+    manifest = expected_module_manifest(editor)
+    if not manifest.is_file():
+        return None
+    try:
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    modules = data.get("Modules")
+    if not isinstance(modules, dict):
+        return None
+    filename = modules.get(MODULE_NAME)
+    if not isinstance(filename, str) or not filename:
+        return None
+    binary = manifest.parent / filename
+    return binary if binary.is_file() else None
+
+
 def plugin_binary_candidates() -> list[Path]:
     binaries = plugin_root() / "Binaries" / "Win64"
     if not binaries.is_dir():
         return []
-    return sorted(binaries.glob("*UnrealAssetTool*.dll"))
+    return sorted(binaries.glob(f"*{MODULE_NAME}*.dll"))
 
 
 def resolve_build_script(editor: Path, override: str | None) -> Path:
@@ -80,10 +139,11 @@ def resolve_build_script(editor: Path, override: str | None) -> Path:
 def build_project(project: Path, editor: Path, build_script_arg: str | None = None) -> int:
     build_script = resolve_build_script(editor, build_script_arg)
     target = f"{project.stem}Editor"
+    configuration = editor_configuration(editor)
     command = [
         str(build_script),
-        f"-Target={target} Win64 Development",
-        "-Module=UnrealAssetTool",
+        f"-Target={target} Win64 {configuration}",
+        f"-Module={MODULE_NAME}",
         f"-Project={project}",
         "-WaitMutex",
         "-NoHotReloadFromIDE",
@@ -93,26 +153,57 @@ def build_project(project: Path, editor: Path, build_script_arg: str | None = No
 
 
 def ensure_plugin_binary(project: Path, editor: Path, build_script_arg: str | None, no_build: bool) -> None:
-    if plugin_binary_candidates():
+    configuration = editor_configuration(editor)
+    expected_binary = expected_plugin_binary(editor)
+    expected_manifest = expected_module_manifest(editor)
+    manifest_binary = module_manifest_binary(editor)
+
+    # The manifest is authoritative: Unreal's module manager uses it to map the
+    # module name to a DLL. A stray DLL for another configuration is not enough.
+    if manifest_binary is not None:
         return
+
+    existing = plugin_binary_candidates()
+    existing_text = ""
+    if existing:
+        existing_text = "\nExisting module binaries (not valid for this selected editor unless its manifest maps them):\n" + "\n".join(
+            f"  {path}" for path in existing
+        )
+
+    reason = (
+        f"Selected editor configuration: {configuration}\n"
+        f"Expected module manifest: {expected_manifest}\n"
+        f"Expected module binary:   {expected_binary}"
+    )
 
     if no_build:
         raise RuntimeError(
-            "UnrealAssetTool has source code but no compiled editor module. "
-            "Run `python scripts\\uatool.py build <project> --editor <UnrealEditor-Cmd.exe>` first, "
-            "or omit --no-build so scan can build it automatically."
+            f"{MODULE_NAME} is not loadable by the selected editor.\n"
+            f"{reason}"
+            f"{existing_text}\n"
+            "Build the matching configuration first, or omit --no-build so scan can build it automatically."
         )
 
-    print("UnrealAssetTool module is not built yet; building the project editor target first.")
+    print(f"{MODULE_NAME}: module is not loadable by the selected editor")
+    print(reason)
+    if existing:
+        print("module DLLs currently present:")
+        for path in existing:
+            print(f"  {path.name}")
+    print(f"building {project.stem}Editor Win64 {configuration} module {MODULE_NAME}")
+
     result = build_project(project, editor, build_script_arg)
     if result != 0:
         raise RuntimeError(f"Unreal build failed with exit code {result}")
 
-    if not plugin_binary_candidates():
+    manifest_binary = module_manifest_binary(editor)
+    if manifest_binary is None:
         raise RuntimeError(
-            "The project build completed, but no UnrealAssetTool editor DLL was produced under "
-            f"{plugin_root() / 'Binaries' / 'Win64'}."
+            "The build completed, but Unreal still has no valid module-manifest mapping for "
+            f"{MODULE_NAME}.\nExpected manifest: {expected_manifest}\n"
+            f"Expected binary:   {expected_binary}"
         )
+    print(f"module ready: {manifest_binary}")
 
 
 def create_schema(conn: sqlite3.Connection) -> None:
