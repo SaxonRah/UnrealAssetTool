@@ -67,7 +67,7 @@
 
 namespace UnrealAssetTool
 {
-    static constexpr int32 SchemaVersion = 9;
+    static constexpr int32 SchemaVersion = 10;
     static constexpr int32 SourceChunkLines = 200;
 
     class FJsonlWriter
@@ -158,6 +158,15 @@ namespace UnrealAssetTool
         int64 StateTreeTransitions = 0;
         int64 StateTreeBindings = 0;
         int64 AIProperties = 0;
+        int64 PCGGraphs = 0;
+        int64 PCGNodes = 0;
+        int64 PCGPins = 0;
+        int64 PCGEdges = 0;
+        int64 PCGProperties = 0;
+        int64 Materials = 0;
+        int64 MaterialExpressions = 0;
+        int64 MaterialEdges = 0;
+        int64 MaterialProperties = 0;
     };
 
     static FString NormalizeAbsolutePath(const FString& InPath)
@@ -5222,6 +5231,645 @@ namespace UnrealAssetTool
         return true;
     }
 
+
+    static UObject* GetReflectedObjectProperty(UObject* Object, const FName PropertyName)
+    {
+        if (!Object)
+        {
+            return nullptr;
+        }
+        FObjectPropertyBase* Property = CastField<FObjectPropertyBase>(
+            Object->GetClass()->FindPropertyByName(PropertyName));
+        if (!Property)
+        {
+            return nullptr;
+        }
+        const void* Value = Property->ContainerPtrToValuePtr<void>(Object);
+        return Value ? Property->GetObjectPropertyValue(Value) : nullptr;
+    }
+
+    static FString ExportObjectPropertyByName(UObject* Object, const FName PropertyName, int32 MaxChars = 16384)
+    {
+        if (!Object)
+        {
+            return TEXT("");
+        }
+        FProperty* Property = Object->GetClass()->FindPropertyByName(PropertyName);
+        if (!Property)
+        {
+            return TEXT("");
+        }
+        const void* Value = Property->ContainerPtrToValuePtr<void>(Object);
+        if (!Value)
+        {
+            return TEXT("");
+        }
+        FString Text;
+        Property->ExportTextItem_Direct(Text, Value, nullptr, Object, PPF_None, nullptr);
+        if (MaxChars > 0 && Text.Len() > MaxChars)
+        {
+            Text = Text.Left(MaxChars);
+        }
+        return Text;
+    }
+
+    static bool ScanVisualObjectProperties(
+        UObject* Object,
+        const FString& AssetPath,
+        const FString& System,
+        const FString& OwnerKind,
+        const FString& OwnerId,
+        FJsonlWriter& Writer,
+        int64& Counter)
+    {
+        if (!Object)
+        {
+            return true;
+        }
+
+        static constexpr int32 MaxChars = 32768;
+        for (UClass* Class = Object->GetClass(); Class && Class != UObject::StaticClass(); Class = Class->GetSuperClass())
+        {
+            for (TFieldIterator<FProperty> It(Class, EFieldIterationFlags::None); It; ++It)
+            {
+                FProperty* Property = *It;
+                if (!IsCapturableProperty(Property))
+                {
+                    continue;
+                }
+                const void* ValuePtr = Property->ContainerPtrToValuePtr<void>(Object);
+                if (!ValuePtr)
+                {
+                    continue;
+                }
+
+                FString Value;
+                Property->ExportTextItem_Direct(Value, ValuePtr, nullptr, Object, PPF_None, nullptr);
+                bool bTruncated = false;
+                if (Value.Len() > MaxChars)
+                {
+                    Value = Value.Left(MaxChars);
+                    bTruncated = true;
+                }
+
+                UObject* ObjectValue = nullptr;
+                if (const FObjectPropertyBase* ObjectProperty = CastField<FObjectPropertyBase>(Property))
+                {
+                    ObjectValue = ObjectProperty->GetObjectPropertyValue(ValuePtr);
+                }
+
+                const TSharedRef<FJsonObject> Json = MakeShared<FJsonObject>();
+                Json->SetStringField(TEXT("asset_path"), AssetPath);
+                Json->SetStringField(TEXT("system"), System);
+                Json->SetStringField(TEXT("owner_kind"), OwnerKind);
+                Json->SetStringField(TEXT("owner_id"), OwnerId);
+                Json->SetStringField(TEXT("owner_class"), Object->GetClass()->GetPathName());
+                Json->SetStringField(TEXT("declaring_type"), Class->GetPathName());
+                Json->SetStringField(TEXT("property_name"), Property->GetName());
+                Json->SetStringField(TEXT("property_type"), Property->GetClass()->GetName());
+                Json->SetStringField(TEXT("cpp_type"), Property->GetCPPType());
+                Json->SetStringField(TEXT("value"), Value);
+                Json->SetStringField(TEXT("object_path"), ObjectValue ? ObjectValue->GetPathName() : TEXT(""));
+                Json->SetStringField(TEXT("object_class"), ObjectValue ? ObjectValue->GetClass()->GetPathName() : TEXT(""));
+                Json->SetNumberField(TEXT("property_flags"), static_cast<double>(Property->GetPropertyFlags()));
+                Json->SetBoolField(TEXT("truncated"), bTruncated);
+                if (!Writer.Write(Json))
+                {
+                    return false;
+                }
+                ++Counter;
+            }
+        }
+        return true;
+    }
+
+    static UObject* PCGNodeSettingsObject(UObject* Node)
+    {
+        if (!Node)
+        {
+            return nullptr;
+        }
+
+        UObject* Settings = GetReflectedObjectProperty(Node, TEXT("SettingsInterface"));
+        if (!Settings)
+        {
+            Settings = GetReflectedObjectProperty(Node, TEXT("Settings"));
+        }
+        if (Settings)
+        {
+            return Settings;
+        }
+
+        // UE's public PCG API exposes settings through accessors, while the serialized
+        // backing property name can vary. Fall back to any reflected object property
+        // whose value is a PCG settings/settings-interface object.
+        for (UClass* Class = Node->GetClass(); Class && Class != UObject::StaticClass(); Class = Class->GetSuperClass())
+        {
+            for (TFieldIterator<FProperty> It(Class, EFieldIterationFlags::None); It; ++It)
+            {
+                FObjectPropertyBase* ObjectProperty = CastField<FObjectPropertyBase>(*It);
+                if (!ObjectProperty)
+                {
+                    continue;
+                }
+                const void* ValuePtr = ObjectProperty->ContainerPtrToValuePtr<void>(Node);
+                UObject* Candidate = ValuePtr ? ObjectProperty->GetObjectPropertyValue(ValuePtr) : nullptr;
+                if (Candidate &&
+                    (ClassIsOrDerivedFromName(Candidate->GetClass(), TEXT("PCGSettingsInterface")) ||
+                     ClassIsOrDerivedFromName(Candidate->GetClass(), TEXT("PCGSettings"))))
+                {
+                    return Candidate;
+                }
+            }
+        }
+
+        TArray<UObject*> OwnedObjects;
+        GetObjectsWithOuter(Node, OwnedObjects, true);
+        for (UObject* Candidate : OwnedObjects)
+        {
+            if (Candidate &&
+                (ClassIsOrDerivedFromName(Candidate->GetClass(), TEXT("PCGSettingsInterface")) ||
+                 ClassIsOrDerivedFromName(Candidate->GetClass(), TEXT("PCGSettings"))))
+            {
+                return Candidate;
+            }
+        }
+        return nullptr;
+    }
+
+    static void GetPCGNodePinsByDirection(
+        UObject* Node,
+        const FString& Direction,
+        TArray<UObject*>& OutPins)
+    {
+        OutPins.Reset();
+        if (!Node)
+        {
+            return;
+        }
+
+        const FName PreferredName = Direction == TEXT("input")
+            ? TEXT("InputPins")
+            : TEXT("OutputPins");
+        OutPins = GetReflectedObjectArray(Node, PreferredName);
+        if (OutPins.Num() > 0)
+        {
+            return;
+        }
+
+        // Be tolerant of backing-field renames: find any reflected array of PCGPin
+        // objects whose property name conveys the requested direction.
+        for (UClass* Class = Node->GetClass(); Class && Class != UObject::StaticClass(); Class = Class->GetSuperClass())
+        {
+            for (TFieldIterator<FProperty> It(Class, EFieldIterationFlags::None); It; ++It)
+            {
+                FArrayProperty* ArrayProperty = CastField<FArrayProperty>(*It);
+                FObjectPropertyBase* InnerObject = ArrayProperty
+                    ? CastField<FObjectPropertyBase>(ArrayProperty->Inner)
+                    : nullptr;
+                if (!ArrayProperty || !InnerObject)
+                {
+                    continue;
+                }
+                const FString PropertyName = ArrayProperty->GetName();
+                if (!PropertyName.Contains(Direction, ESearchCase::IgnoreCase) ||
+                    !PropertyName.Contains(TEXT("pin"), ESearchCase::IgnoreCase))
+                {
+                    continue;
+                }
+
+                const void* ArrayValue = ArrayProperty->ContainerPtrToValuePtr<void>(Node);
+                if (!ArrayValue)
+                {
+                    continue;
+                }
+                FScriptArrayHelper Helper(ArrayProperty, ArrayValue);
+                for (int32 Index = 0; Index < Helper.Num(); ++Index)
+                {
+                    UObject* Candidate = InnerObject->GetObjectPropertyValue(Helper.GetRawPtr(Index));
+                    if (Candidate && ClassIsOrDerivedFromName(Candidate->GetClass(), TEXT("PCGPin")))
+                    {
+                        OutPins.Add(Candidate);
+                    }
+                }
+                if (OutPins.Num() > 0)
+                {
+                    return;
+                }
+            }
+        }
+    }
+
+    static UObject* FindOuterPCGGraph(UObject* Object)
+    {
+        for (UObject* Outer = Object ? Object->GetOuter() : nullptr; Outer; Outer = Outer->GetOuter())
+        {
+            if (ClassIsOrDerivedFromName(Outer->GetClass(), TEXT("PCGGraph")))
+            {
+                return Outer;
+            }
+        }
+        return nullptr;
+    }
+
+    static bool ScanPCGGraphAsset(
+        UObject* Graph,
+        const FString& AssetPath,
+        FJsonlWriter& GraphsWriter,
+        FJsonlWriter& NodesWriter,
+        FJsonlWriter& PinsWriter,
+        FJsonlWriter& EdgesWriter,
+        FJsonlWriter& PropertiesWriter,
+        FScanCounts& Counts)
+    {
+        if (!Graph)
+        {
+            return true;
+        }
+
+        TArray<UObject*> OwnedObjects;
+        GetObjectsWithOuter(Graph, OwnedObjects, true);
+        OwnedObjects.Sort([](const UObject& A, const UObject& B) { return A.GetPathName() < B.GetPathName(); });
+
+        TArray<UObject*> Nodes;
+        TArray<UObject*> Pins;
+        TArray<UObject*> Edges;
+        TArray<UObject*> EmbeddedGraphs;
+        for (UObject* Object : OwnedObjects)
+        {
+            if (!Object) continue;
+            if (ClassIsOrDerivedFromName(Object->GetClass(), TEXT("PCGGraph")))
+            {
+                if (FindOuterPCGGraph(Object) == Graph) EmbeddedGraphs.Add(Object);
+                continue;
+            }
+            if (FindOuterPCGGraph(Object) != Graph) continue;
+            if (ClassIsOrDerivedFromName(Object->GetClass(), TEXT("PCGNode"))) Nodes.Add(Object);
+            else if (ClassIsOrDerivedFromName(Object->GetClass(), TEXT("PCGPin"))) Pins.Add(Object);
+            else if (ClassIsOrDerivedFromName(Object->GetClass(), TEXT("PCGEdge"))) Edges.Add(Object);
+        }
+
+        const TSharedRef<FJsonObject> GraphJson = MakeShared<FJsonObject>();
+        GraphJson->SetStringField(TEXT("pcg_path"), AssetPath);
+        GraphJson->SetStringField(TEXT("class_path"), Graph->GetClass()->GetPathName());
+        UObject* ParentGraph = FindOuterPCGGraph(Graph);
+        GraphJson->SetStringField(TEXT("parent_graph_path"), ParentGraph ? ParentGraph->GetPathName() : TEXT(""));
+        GraphJson->SetBoolField(TEXT("embedded"), ParentGraph != nullptr);
+        TArray<TSharedPtr<FJsonValue>> EmbeddedJson;
+        for (UObject* Embedded : EmbeddedGraphs)
+        {
+            EmbeddedJson.Add(MakeShared<FJsonValueString>(Embedded->GetPathName()));
+        }
+        GraphJson->SetArrayField(TEXT("embedded_subgraphs"), EmbeddedJson);
+        GraphJson->SetNumberField(TEXT("node_count"), Nodes.Num());
+        GraphJson->SetNumberField(TEXT("pin_count"), Pins.Num());
+        GraphJson->SetNumberField(TEXT("edge_count"), Edges.Num());
+        GraphJson->SetStringField(TEXT("user_parameters"), ExportObjectPropertyByName(Graph, TEXT("UserParameters"), 32768));
+        GraphJson->SetStringField(TEXT("default_grid"), ExportObjectPropertyByName(Graph, TEXT("DefaultGrid")));
+        if (!GraphsWriter.Write(GraphJson)) return false;
+        ++Counts.PCGGraphs;
+        if (!ScanVisualObjectProperties(Graph, AssetPath, TEXT("pcg"), TEXT("graph"), AssetPath, PropertiesWriter, Counts.PCGProperties)) return false;
+
+        TMap<FString, FString> PinDirections;
+        TMap<FString, int32> PinIndices;
+        for (UObject* Node : Nodes)
+        {
+            const FString NodeId = Node->GetPathName();
+            UObject* Settings = PCGNodeSettingsObject(Node);
+            const TSharedRef<FJsonObject> NodeJson = MakeShared<FJsonObject>();
+            NodeJson->SetStringField(TEXT("pcg_path"), AssetPath);
+            NodeJson->SetStringField(TEXT("node_id"), NodeId);
+            NodeJson->SetStringField(TEXT("node_class"), Node->GetClass()->GetPathName());
+            NodeJson->SetStringField(TEXT("node_name"), Node->GetName());
+            NodeJson->SetStringField(TEXT("node_title"), ExportObjectPropertyByName(Node, TEXT("NodeTitle")));
+            NodeJson->SetStringField(TEXT("position_x"), ExportObjectPropertyByName(Node, TEXT("PositionX")));
+            NodeJson->SetStringField(TEXT("position_y"), ExportObjectPropertyByName(Node, TEXT("PositionY")));
+            NodeJson->SetStringField(TEXT("settings_path"), Settings ? Settings->GetPathName() : TEXT(""));
+            NodeJson->SetStringField(TEXT("settings_class"), Settings ? Settings->GetClass()->GetPathName() : TEXT(""));
+            NodeJson->SetStringField(TEXT("settings_name"), Settings ? Settings->GetName() : TEXT(""));
+            NodeJson->SetStringField(TEXT("enabled"), ExportObjectPropertyByName(Node, TEXT("bEnabled")));
+            if (!NodesWriter.Write(NodeJson)) return false;
+            ++Counts.PCGNodes;
+            if (!ScanVisualObjectProperties(Node, AssetPath, TEXT("pcg"), TEXT("node"), NodeId, PropertiesWriter, Counts.PCGProperties)) return false;
+            if (Settings && !ScanVisualObjectProperties(Settings, AssetPath, TEXT("pcg"), TEXT("settings"), Settings->GetPathName(), PropertiesWriter, Counts.PCGProperties)) return false;
+
+            const FString PinDirectionNames[] = { TEXT("input"), TEXT("output") };
+            for (int32 DirectionIndex = 0; DirectionIndex < 2; ++DirectionIndex)
+            {
+                TArray<UObject*> NodePins;
+                GetPCGNodePinsByDirection(Node, PinDirectionNames[DirectionIndex], NodePins);
+                for (int32 Index = 0; Index < NodePins.Num(); ++Index)
+                {
+                    if (NodePins[Index])
+                    {
+                        PinDirections.Add(NodePins[Index]->GetPathName(), PinDirectionNames[DirectionIndex]);
+                        PinIndices.Add(NodePins[Index]->GetPathName(), Index);
+                    }
+                }
+            }
+        }
+
+        // Connected pins can still be classified even if a future UE version renames
+        // the node's serialized input/output arrays. UPCGEdge names are historical:
+        // InputPin is the upstream/source pin and OutputPin is downstream/target.
+        for (UObject* Edge : Edges)
+        {
+            UObject* SourcePin = GetReflectedObjectProperty(Edge, TEXT("InputPin"));
+            UObject* TargetPin = GetReflectedObjectProperty(Edge, TEXT("OutputPin"));
+            if (SourcePin && !PinDirections.Contains(SourcePin->GetPathName()))
+            {
+                PinDirections.Add(SourcePin->GetPathName(), TEXT("output"));
+            }
+            if (TargetPin && !PinDirections.Contains(TargetPin->GetPathName()))
+            {
+                PinDirections.Add(TargetPin->GetPathName(), TEXT("input"));
+            }
+        }
+
+        for (UObject* Pin : Pins)
+        {
+            const FString PinId = Pin->GetPathName();
+            UObject* Node = GetReflectedObjectProperty(Pin, TEXT("Node"));
+            const FString PropertiesRaw = ExportObjectPropertyByName(Pin, TEXT("Properties"), 32768);
+            FString Label;
+            FString AllowedTypes;
+            FString Status;
+            FString AllowMultiple;
+            FString Invisible;
+            if (FStructProperty* PinProps = CastField<FStructProperty>(Pin->GetClass()->FindPropertyByName(TEXT("Properties"))))
+            {
+                const void* Value = PinProps->ContainerPtrToValuePtr<void>(Pin);
+                if (Value)
+                {
+                    Label = ExportStructFieldTextByName(PinProps->Struct, Value, TEXT("Label"), Pin);
+                    AllowedTypes = ExportStructFieldTextByName(PinProps->Struct, Value, TEXT("AllowedTypes"), Pin);
+                    Status = ExportStructFieldTextByName(PinProps->Struct, Value, TEXT("PinStatus"), Pin);
+                    AllowMultiple = ExportStructFieldTextByName(PinProps->Struct, Value, TEXT("bAllowMultipleData"), Pin);
+                    Invisible = ExportStructFieldTextByName(PinProps->Struct, Value, TEXT("bInvisiblePin"), Pin);
+                }
+            }
+            const TSharedRef<FJsonObject> PinJson = MakeShared<FJsonObject>();
+            PinJson->SetStringField(TEXT("pcg_path"), AssetPath);
+            PinJson->SetStringField(TEXT("pin_id"), PinId);
+            PinJson->SetStringField(TEXT("node_id"), Node ? Node->GetPathName() : TEXT(""));
+            PinJson->SetStringField(TEXT("direction"), PinDirections.FindRef(PinId));
+            PinJson->SetNumberField(TEXT("pin_index"), PinIndices.Contains(PinId) ? PinIndices.FindRef(PinId) : -1);
+            PinJson->SetStringField(TEXT("label"), Label);
+            PinJson->SetStringField(TEXT("allowed_types"), AllowedTypes);
+            PinJson->SetStringField(TEXT("pin_status"), Status);
+            PinJson->SetStringField(TEXT("allow_multiple_data"), AllowMultiple);
+            PinJson->SetStringField(TEXT("invisible"), Invisible);
+            PinJson->SetStringField(TEXT("raw_properties"), PropertiesRaw);
+            if (!PinsWriter.Write(PinJson)) return false;
+            ++Counts.PCGPins;
+        }
+
+        for (UObject* Edge : Edges)
+        {
+            UObject* SourcePin = GetReflectedObjectProperty(Edge, TEXT("InputPin"));
+            UObject* TargetPin = GetReflectedObjectProperty(Edge, TEXT("OutputPin"));
+            UObject* SourceNode = SourcePin ? GetReflectedObjectProperty(SourcePin, TEXT("Node")) : nullptr;
+            UObject* TargetNode = TargetPin ? GetReflectedObjectProperty(TargetPin, TEXT("Node")) : nullptr;
+            const TSharedRef<FJsonObject> EdgeJson = MakeShared<FJsonObject>();
+            EdgeJson->SetStringField(TEXT("pcg_path"), AssetPath);
+            EdgeJson->SetStringField(TEXT("edge_id"), Edge->GetPathName());
+            EdgeJson->SetStringField(TEXT("source_pin_id"), SourcePin ? SourcePin->GetPathName() : TEXT(""));
+            EdgeJson->SetStringField(TEXT("target_pin_id"), TargetPin ? TargetPin->GetPathName() : TEXT(""));
+            EdgeJson->SetStringField(TEXT("source_node_id"), SourceNode ? SourceNode->GetPathName() : TEXT(""));
+            EdgeJson->SetStringField(TEXT("target_node_id"), TargetNode ? TargetNode->GetPathName() : TEXT(""));
+            if (!EdgesWriter.Write(EdgeJson)) return false;
+            ++Counts.PCGEdges;
+        }
+        for (UObject* Embedded : EmbeddedGraphs)
+        {
+            if (!ScanPCGGraphAsset(Embedded, Embedded->GetPathName(), GraphsWriter, NodesWriter, PinsWriter, EdgesWriter, PropertiesWriter, Counts)) return false;
+        }
+        return true;
+    }
+
+    static bool IsExpressionInputStruct(const UScriptStruct* Struct)
+    {
+        if (!Struct) return false;
+        for (const UStruct* Current = Struct; Current; Current = Current->GetSuperStruct())
+        {
+            const FString Name = Current->GetName();
+            if (Name == TEXT("ExpressionInput") || Name.EndsWith(TEXT("MaterialInput")))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    static bool WriteMaterialInputEdge(
+        UScriptStruct* Struct,
+        const void* StructValue,
+        UObject* Owner,
+        const FString& AssetPath,
+        const FString& TargetId,
+        const FString& TargetInput,
+        int32 InputIndex,
+        FJsonlWriter& EdgesWriter,
+        FScanCounts& Counts)
+    {
+        if (!Struct || !StructValue || !IsExpressionInputStruct(Struct))
+        {
+            return true;
+        }
+        UObject* Expression = GetStructObjectField(Struct, StructValue, TEXT("Expression"));
+        if (!Expression)
+        {
+            return true;
+        }
+        const FString OutputIndex = ExportStructFieldTextByName(Struct, StructValue, TEXT("OutputIndex"), Owner);
+        const FString InputName = ExportStructFieldTextByName(Struct, StructValue, TEXT("InputName"), Owner);
+        const TSharedRef<FJsonObject> Json = MakeShared<FJsonObject>();
+        Json->SetStringField(TEXT("material_path"), AssetPath);
+        Json->SetStringField(TEXT("source_expression_id"), Expression->GetPathName());
+        Json->SetStringField(TEXT("source_output_index"), OutputIndex);
+        Json->SetStringField(TEXT("source_output_name"), InputName);
+        Json->SetStringField(TEXT("target_expression_id"), TargetId);
+        Json->SetStringField(TEXT("target_input_name"), TargetInput);
+        Json->SetNumberField(TEXT("target_input_index"), InputIndex);
+        Json->SetStringField(TEXT("edge_kind"), TargetId.StartsWith(TEXT("$output:")) ? TEXT("material_output") : TEXT("expression"));
+        if (!EdgesWriter.Write(Json)) return false;
+        ++Counts.MaterialEdges;
+        return true;
+    }
+
+    static bool ScanMaterialInputValueRecursive(
+        FProperty* Property,
+        const void* Value,
+        UObject* Owner,
+        const FString& AssetPath,
+        const FString& TargetId,
+        const FString& PropertyPath,
+        int32& InputIndex,
+        int32 Depth,
+        FJsonlWriter& EdgesWriter,
+        FScanCounts& Counts)
+    {
+        if (!Property || !Value || Depth > 4)
+        {
+            return true;
+        }
+        if (FStructProperty* StructProperty = CastField<FStructProperty>(Property))
+        {
+            if (IsExpressionInputStruct(StructProperty->Struct))
+            {
+                return WriteMaterialInputEdge(
+                    StructProperty->Struct,
+                    Value,
+                    Owner,
+                    AssetPath,
+                    TargetId,
+                    PropertyPath,
+                    InputIndex++,
+                    EdgesWriter,
+                    Counts);
+            }
+            if (!StructProperty->Struct)
+            {
+                return true;
+            }
+            for (TFieldIterator<FProperty> It(StructProperty->Struct, EFieldIterationFlags::Default); It; ++It)
+            {
+                FProperty* Child = *It;
+                for (int32 ArrayIndex = 0; ArrayIndex < Child->ArrayDim; ++ArrayIndex)
+                {
+                    const void* ChildValue = Child->ContainerPtrToValuePtr<void>(Value, ArrayIndex);
+                    FString ChildPath = PropertyPath + TEXT(".") + Child->GetName();
+                    if (Child->ArrayDim > 1) ChildPath += FString::Printf(TEXT("[%d]"), ArrayIndex);
+                    if (!ScanMaterialInputValueRecursive(Child, ChildValue, Owner, AssetPath, TargetId, ChildPath, InputIndex, Depth + 1, EdgesWriter, Counts)) return false;
+                }
+            }
+        }
+        else if (FArrayProperty* ArrayProperty = CastField<FArrayProperty>(Property))
+        {
+            if (!ArrayProperty->Inner) return true;
+            FScriptArrayHelper Helper(ArrayProperty, Value);
+            const int32 MaxElements = FMath::Min(Helper.Num(), 256);
+            for (int32 Index = 0; Index < MaxElements; ++Index)
+            {
+                if (!ScanMaterialInputValueRecursive(
+                        ArrayProperty->Inner,
+                        Helper.GetRawPtr(Index),
+                        Owner,
+                        AssetPath,
+                        TargetId,
+                        FString::Printf(TEXT("%s[%d]"), *PropertyPath, Index),
+                        InputIndex,
+                        Depth + 1,
+                        EdgesWriter,
+                        Counts)) return false;
+            }
+        }
+        return true;
+    }
+
+    static bool ScanMaterialExpressionInputs(
+        UObject* Expression,
+        const FString& AssetPath,
+        FJsonlWriter& EdgesWriter,
+        FScanCounts& Counts)
+    {
+        if (!Expression) return true;
+        int32 InputIndex = 0;
+        for (UClass* Class = Expression->GetClass(); Class && Class != UObject::StaticClass(); Class = Class->GetSuperClass())
+        {
+            for (TFieldIterator<FProperty> It(Class, EFieldIterationFlags::None); It; ++It)
+            {
+                FProperty* Property = *It;
+                for (int32 ArrayIndex = 0; ArrayIndex < Property->ArrayDim; ++ArrayIndex)
+                {
+                    const void* Value = Property->ContainerPtrToValuePtr<void>(Expression, ArrayIndex);
+                    FString PropertyPath = Property->GetName();
+                    if (Property->ArrayDim > 1) PropertyPath += FString::Printf(TEXT("[%d]"), ArrayIndex);
+                    if (!ScanMaterialInputValueRecursive(Property, Value, Expression, AssetPath, Expression->GetPathName(), PropertyPath, InputIndex, 0, EdgesWriter, Counts)) return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    static bool ScanMaterialAsset(
+        UObject* MaterialAsset,
+        const FString& AssetPath,
+        const FString& AssetKind,
+        FJsonlWriter& MaterialsWriter,
+        FJsonlWriter& ExpressionsWriter,
+        FJsonlWriter& EdgesWriter,
+        FJsonlWriter& PropertiesWriter,
+        FScanCounts& Counts)
+    {
+        if (!MaterialAsset) return true;
+        TArray<UObject*> OwnedObjects;
+        GetObjectsWithOuter(MaterialAsset, OwnedObjects, true);
+        OwnedObjects.Sort([](const UObject& A, const UObject& B) { return A.GetPathName() < B.GetPathName(); });
+        TArray<UObject*> Expressions;
+        TArray<UObject*> EditorDataObjects;
+        for (UObject* Object : OwnedObjects)
+        {
+            if (!Object) continue;
+            if (ClassIsOrDerivedFromName(Object->GetClass(), TEXT("MaterialExpression"))) Expressions.Add(Object);
+            if (Object->GetClass()->GetName().Contains(TEXT("MaterialEditorOnlyData")) || Object->GetClass()->GetName().Contains(TEXT("MaterialFunctionEditorOnlyData"))) EditorDataObjects.Add(Object);
+        }
+
+        const TSharedRef<FJsonObject> AssetJson = MakeShared<FJsonObject>();
+        AssetJson->SetStringField(TEXT("material_path"), AssetPath);
+        AssetJson->SetStringField(TEXT("material_kind"), AssetKind);
+        AssetJson->SetStringField(TEXT("class_path"), MaterialAsset->GetClass()->GetPathName());
+        AssetJson->SetNumberField(TEXT("expression_count"), Expressions.Num());
+        UObject* Parent = GetReflectedObjectProperty(MaterialAsset, TEXT("Parent"));
+        AssetJson->SetStringField(TEXT("parent_path"), Parent ? Parent->GetPathName() : TEXT(""));
+        AssetJson->SetStringField(TEXT("material_domain"), ExportObjectPropertyByName(MaterialAsset, TEXT("MaterialDomain")));
+        AssetJson->SetStringField(TEXT("blend_mode"), ExportObjectPropertyByName(MaterialAsset, TEXT("BlendMode")));
+        AssetJson->SetStringField(TEXT("shading_model"), ExportObjectPropertyByName(MaterialAsset, TEXT("ShadingModel")));
+        if (!MaterialsWriter.Write(AssetJson)) return false;
+        ++Counts.Materials;
+        if (!ScanVisualObjectProperties(MaterialAsset, AssetPath, TEXT("material"), AssetKind, AssetPath, PropertiesWriter, Counts.MaterialProperties)) return false;
+
+        for (UObject* Expression : Expressions)
+        {
+            const TSharedRef<FJsonObject> Json = MakeShared<FJsonObject>();
+            Json->SetStringField(TEXT("material_path"), AssetPath);
+            Json->SetStringField(TEXT("expression_id"), Expression->GetPathName());
+            Json->SetStringField(TEXT("expression_class"), Expression->GetClass()->GetPathName());
+            Json->SetStringField(TEXT("expression_name"), Expression->GetName());
+            Json->SetStringField(TEXT("editor_x"), ExportObjectPropertyByName(Expression, TEXT("MaterialExpressionEditorX")));
+            Json->SetStringField(TEXT("editor_y"), ExportObjectPropertyByName(Expression, TEXT("MaterialExpressionEditorY")));
+            Json->SetStringField(TEXT("description"), ExportObjectPropertyByName(Expression, TEXT("Desc")));
+            Json->SetStringField(TEXT("parameter_name"), ExportObjectPropertyByName(Expression, TEXT("ParameterName")));
+            UObject* Function = GetReflectedObjectProperty(Expression, TEXT("MaterialFunction"));
+            Json->SetStringField(TEXT("function_path"), Function ? Function->GetPathName() : TEXT(""));
+            UObject* Texture = GetReflectedObjectProperty(Expression, TEXT("Texture"));
+            Json->SetStringField(TEXT("texture_path"), Texture ? Texture->GetPathName() : TEXT(""));
+            Json->SetStringField(TEXT("default_value"), ExportObjectPropertyByName(Expression, TEXT("DefaultValue"), 32768));
+            Json->SetStringField(TEXT("value"), ExportObjectPropertyByName(Expression, TEXT("Value"), 32768));
+            if (!ExpressionsWriter.Write(Json)) return false;
+            ++Counts.MaterialExpressions;
+            if (!ScanVisualObjectProperties(Expression, AssetPath, TEXT("material"), TEXT("expression"), Expression->GetPathName(), PropertiesWriter, Counts.MaterialProperties)) return false;
+            if (!ScanMaterialExpressionInputs(Expression, AssetPath, EdgesWriter, Counts)) return false;
+        }
+
+        for (UObject* EditorData : EditorDataObjects)
+        {
+            if (!EditorData) continue;
+            for (UClass* Class = EditorData->GetClass(); Class && Class != UObject::StaticClass(); Class = Class->GetSuperClass())
+            {
+                for (TFieldIterator<FProperty> It(Class, EFieldIterationFlags::None); It; ++It)
+                {
+                    FStructProperty* StructProperty = CastField<FStructProperty>(*It);
+                    if (!StructProperty || !IsExpressionInputStruct(StructProperty->Struct)) continue;
+                    const void* Value = StructProperty->ContainerPtrToValuePtr<void>(EditorData);
+                    if (!WriteMaterialInputEdge(StructProperty->Struct, Value, EditorData, AssetPath, TEXT("$output:") + StructProperty->GetName(), StructProperty->GetName(), 0, EdgesWriter, Counts)) return false;
+                }
+            }
+            if (!ScanVisualObjectProperties(EditorData, AssetPath, TEXT("material"), TEXT("editor_data"), EditorData->GetPathName(), PropertiesWriter, Counts.MaterialProperties)) return false;
+        }
+        return true;
+    }
+
     static bool ScanAssets(
         const FString& ProjectDir,
         const FString& ToolPluginDir,
@@ -5269,6 +5917,15 @@ namespace UnrealAssetTool
         FJsonlWriter& StateTreeTransitionsWriter,
         FJsonlWriter& StateTreeBindingsWriter,
         FJsonlWriter& AIPropertiesWriter,
+        FJsonlWriter& PCGGraphsWriter,
+        FJsonlWriter& PCGNodesWriter,
+        FJsonlWriter& PCGPinsWriter,
+        FJsonlWriter& PCGEdgesWriter,
+        FJsonlWriter& PCGPropertiesWriter,
+        FJsonlWriter& MaterialsWriter,
+        FJsonlWriter& MaterialExpressionsWriter,
+        FJsonlWriter& MaterialEdgesWriter,
+        FJsonlWriter& MaterialPropertiesWriter,
         bool bIncludeRawRigVMProperties,
         FScanCounts& Counts)
     {
@@ -5348,6 +6005,28 @@ namespace UnrealAssetTool
             ++Counts.Assets;
 
             const FString AssetClassPath = Asset.AssetClassPath.ToString();
+            if (AssetClassPath == TEXT("/Script/PCG.PCGGraph"))
+            {
+                if (UObject* PCGAsset = Asset.GetAsset())
+                {
+                    if (!ScanPCGGraphAsset(PCGAsset, ObjectPath, PCGGraphsWriter, PCGNodesWriter, PCGPinsWriter, PCGEdgesWriter, PCGPropertiesWriter, Counts)) return false;
+                }
+            }
+            else if (AssetClassPath == TEXT("/Script/Engine.Material") ||
+                     AssetClassPath == TEXT("/Script/Engine.MaterialFunction") ||
+                     AssetClassPath == TEXT("/Script/Engine.MaterialInstanceConstant") ||
+                     AssetClassPath == TEXT("/Script/Engine.MaterialFunctionInstance"))
+            {
+                if (UObject* MaterialAsset = Asset.GetAsset())
+                {
+                    FString Kind = TEXT("material");
+                    if (AssetClassPath.Contains(TEXT("MaterialFunctionInstance"))) Kind = TEXT("function_instance");
+                    else if (AssetClassPath.Contains(TEXT("MaterialFunction"))) Kind = TEXT("function");
+                    else if (AssetClassPath.Contains(TEXT("MaterialInstance"))) Kind = TEXT("instance");
+                    if (!ScanMaterialAsset(MaterialAsset, ObjectPath, Kind, MaterialsWriter, MaterialExpressionsWriter, MaterialEdgesWriter, MaterialPropertiesWriter, Counts)) return false;
+                }
+            }
+
             if (AssetClassPath == TEXT("/Script/AIModule.BehaviorTree") ||
                 AssetClassPath == TEXT("/Script/AIModule.BlackboardData") ||
                 AssetClassPath == TEXT("/Script/AIModule.EnvQuery") ||
@@ -5512,6 +6191,15 @@ int32 UUnrealAssetToolCommandlet::Main(const FString& Params)
     FJsonlWriter StateTreeTransitionsWriter(FPaths::Combine(OutputDir, TEXT("statetree_transitions.jsonl")));
     FJsonlWriter StateTreeBindingsWriter(FPaths::Combine(OutputDir, TEXT("statetree_bindings.jsonl")));
     FJsonlWriter AIPropertiesWriter(FPaths::Combine(OutputDir, TEXT("ai_properties.jsonl")));
+    FJsonlWriter PCGGraphsWriter(FPaths::Combine(OutputDir, TEXT("pcg_graphs.jsonl")));
+    FJsonlWriter PCGNodesWriter(FPaths::Combine(OutputDir, TEXT("pcg_nodes.jsonl")));
+    FJsonlWriter PCGPinsWriter(FPaths::Combine(OutputDir, TEXT("pcg_pins.jsonl")));
+    FJsonlWriter PCGEdgesWriter(FPaths::Combine(OutputDir, TEXT("pcg_edges.jsonl")));
+    FJsonlWriter PCGPropertiesWriter(FPaths::Combine(OutputDir, TEXT("pcg_properties.jsonl")));
+    FJsonlWriter MaterialsWriter(FPaths::Combine(OutputDir, TEXT("materials.jsonl")));
+    FJsonlWriter MaterialExpressionsWriter(FPaths::Combine(OutputDir, TEXT("material_expressions.jsonl")));
+    FJsonlWriter MaterialEdgesWriter(FPaths::Combine(OutputDir, TEXT("material_edges.jsonl")));
+    FJsonlWriter MaterialPropertiesWriter(FPaths::Combine(OutputDir, TEXT("material_properties.jsonl")));
 
     if (!FilesWriter.IsValid() || !SourceWriter.IsValid() || !AssetsWriter.IsValid() ||
         !DependenciesWriter.IsValid() || !BlueprintsWriter.IsValid() || !GraphsWriter.IsValid() ||
@@ -5528,7 +6216,10 @@ int32 UUnrealAssetToolCommandlet::Main(const FString& Params)
         !EQSQueriesWriter.IsValid() || !EQSOptionsWriter.IsValid() || !EQSGeneratorsWriter.IsValid() ||
         !EQSTestsWriter.IsValid() || !StateTreesWriter.IsValid() || !StateTreeStatesWriter.IsValid() ||
         !StateTreeNodesWriter.IsValid() || !StateTreeTransitionsWriter.IsValid() || !StateTreeBindingsWriter.IsValid() ||
-        !AIPropertiesWriter.IsValid())
+        !AIPropertiesWriter.IsValid() || !PCGGraphsWriter.IsValid() || !PCGNodesWriter.IsValid() ||
+        !PCGPinsWriter.IsValid() || !PCGEdgesWriter.IsValid() || !PCGPropertiesWriter.IsValid() ||
+        !MaterialsWriter.IsValid() || !MaterialExpressionsWriter.IsValid() || !MaterialEdgesWriter.IsValid() ||
+        !MaterialPropertiesWriter.IsValid())
     {
         UE_LOG(LogTemp, Error, TEXT("UnrealAssetTool: could not create one or more output files under %s"), *OutputDir);
         return 2;
@@ -5588,6 +6279,15 @@ int32 UUnrealAssetToolCommandlet::Main(const FString& Params)
             StateTreeTransitionsWriter,
             StateTreeBindingsWriter,
             AIPropertiesWriter,
+            PCGGraphsWriter,
+            PCGNodesWriter,
+            PCGPinsWriter,
+            PCGEdgesWriter,
+            PCGPropertiesWriter,
+            MaterialsWriter,
+            MaterialExpressionsWriter,
+            MaterialEdgesWriter,
+            MaterialPropertiesWriter,
             bIncludeRawRigVMProperties,
             Counts))
     {
@@ -5657,6 +6357,15 @@ int32 UUnrealAssetToolCommandlet::Main(const FString& Params)
     CountsJson->SetNumberField(TEXT("statetree_transitions"), static_cast<double>(Counts.StateTreeTransitions));
     CountsJson->SetNumberField(TEXT("statetree_bindings"), static_cast<double>(Counts.StateTreeBindings));
     CountsJson->SetNumberField(TEXT("ai_properties"), static_cast<double>(Counts.AIProperties));
+    CountsJson->SetNumberField(TEXT("pcg_graphs"), static_cast<double>(Counts.PCGGraphs));
+    CountsJson->SetNumberField(TEXT("pcg_nodes"), static_cast<double>(Counts.PCGNodes));
+    CountsJson->SetNumberField(TEXT("pcg_pins"), static_cast<double>(Counts.PCGPins));
+    CountsJson->SetNumberField(TEXT("pcg_edges"), static_cast<double>(Counts.PCGEdges));
+    CountsJson->SetNumberField(TEXT("pcg_properties"), static_cast<double>(Counts.PCGProperties));
+    CountsJson->SetNumberField(TEXT("materials"), static_cast<double>(Counts.Materials));
+    CountsJson->SetNumberField(TEXT("material_expressions"), static_cast<double>(Counts.MaterialExpressions));
+    CountsJson->SetNumberField(TEXT("material_edges"), static_cast<double>(Counts.MaterialEdges));
+    CountsJson->SetNumberField(TEXT("material_properties"), static_cast<double>(Counts.MaterialProperties));
     Manifest->SetObjectField(TEXT("counts"), CountsJson);
 
     if (!SaveJsonObject(FPaths::Combine(OutputDir, TEXT("manifest.json")), Manifest))
@@ -5669,6 +6378,8 @@ int32 UUnrealAssetToolCommandlet::Main(const FString& Params)
         Counts.Files, Counts.Assets, Counts.Blueprints, Counts.BlueprintNodes);
     UE_LOG(LogTemp, Display, TEXT("UnrealAssetTool: AI assets: %lld behavior trees, %lld blackboards, %lld EQS queries, %lld StateTrees."),
         Counts.BehaviorTrees, Counts.Blackboards, Counts.EQSQueries, Counts.StateTrees);
+    UE_LOG(LogTemp, Display, TEXT("UnrealAssetTool: visual assets: %lld PCG graphs, %lld materials/functions, %lld material expressions."),
+        Counts.PCGGraphs, Counts.Materials, Counts.MaterialExpressions);
     UE_LOG(LogTemp, Display, TEXT("UnrealAssetTool: output: %s"), *OutputDir);
     return 0;
 }

@@ -894,6 +894,86 @@ def create_schema(conn: sqlite3.Connection) -> None:
             json TEXT NOT NULL
         );
 
+        CREATE TABLE pcg_graphs (
+            pcg_path TEXT PRIMARY KEY, class_path TEXT NOT NULL, parent_graph_path TEXT NOT NULL, embedded INTEGER NOT NULL,
+            embedded_subgraphs_json TEXT NOT NULL, node_count INTEGER NOT NULL, pin_count INTEGER NOT NULL, edge_count INTEGER NOT NULL,
+            user_parameters TEXT NOT NULL, default_grid TEXT NOT NULL, json TEXT NOT NULL
+        );
+        CREATE TABLE pcg_nodes (
+            node_id TEXT PRIMARY KEY, pcg_path TEXT NOT NULL, node_class TEXT NOT NULL, node_name TEXT NOT NULL,
+            node_title TEXT NOT NULL, position_x TEXT NOT NULL, position_y TEXT NOT NULL, settings_path TEXT NOT NULL,
+            settings_class TEXT NOT NULL, settings_name TEXT NOT NULL, enabled TEXT NOT NULL, json TEXT NOT NULL
+        );
+        CREATE INDEX pcg_nodes_graph_idx ON pcg_nodes(pcg_path, settings_class);
+        CREATE TABLE pcg_pins (
+            pin_id TEXT PRIMARY KEY, pcg_path TEXT NOT NULL, node_id TEXT NOT NULL, direction TEXT NOT NULL,
+            pin_index INTEGER NOT NULL, label TEXT NOT NULL, allowed_types TEXT NOT NULL, pin_status TEXT NOT NULL,
+            allow_multiple_data TEXT NOT NULL, invisible TEXT NOT NULL, raw_properties TEXT NOT NULL, json TEXT NOT NULL
+        );
+        CREATE INDEX pcg_pins_node_idx ON pcg_pins(node_id, direction, pin_index);
+        CREATE TABLE pcg_edges (
+            edge_id TEXT PRIMARY KEY, pcg_path TEXT NOT NULL, source_pin_id TEXT NOT NULL, target_pin_id TEXT NOT NULL,
+            source_node_id TEXT NOT NULL, target_node_id TEXT NOT NULL, json TEXT NOT NULL
+        );
+        CREATE INDEX pcg_edges_source_idx ON pcg_edges(pcg_path, source_node_id);
+        CREATE TABLE pcg_properties (
+            asset_path TEXT NOT NULL, system TEXT NOT NULL, owner_kind TEXT NOT NULL, owner_id TEXT NOT NULL,
+            owner_class TEXT NOT NULL, declaring_type TEXT NOT NULL, property_name TEXT NOT NULL, property_type TEXT NOT NULL,
+            cpp_type TEXT NOT NULL, value TEXT NOT NULL, object_path TEXT NOT NULL, object_class TEXT NOT NULL,
+            property_flags INTEGER NOT NULL, truncated INTEGER NOT NULL,
+            PRIMARY KEY(asset_path, owner_id, declaring_type, property_name)
+        );
+        CREATE INDEX pcg_properties_object_idx ON pcg_properties(object_path);
+        CREATE TABLE pcg_parameters (
+            parameter_id TEXT PRIMARY KEY, pcg_path TEXT NOT NULL, owner_kind TEXT NOT NULL, owner_id TEXT NOT NULL,
+            property_name TEXT NOT NULL, value TEXT NOT NULL, object_path TEXT NOT NULL, json TEXT NOT NULL
+        );
+
+        CREATE TABLE materials (
+            material_path TEXT PRIMARY KEY, material_kind TEXT NOT NULL, class_path TEXT NOT NULL, expression_count INTEGER NOT NULL,
+            parent_path TEXT NOT NULL, material_domain TEXT NOT NULL, blend_mode TEXT NOT NULL, shading_model TEXT NOT NULL, json TEXT NOT NULL
+        );
+        CREATE INDEX materials_parent_idx ON materials(parent_path);
+        CREATE TABLE material_expressions (
+            expression_id TEXT PRIMARY KEY, material_path TEXT NOT NULL, expression_class TEXT NOT NULL, expression_name TEXT NOT NULL,
+            editor_x TEXT NOT NULL, editor_y TEXT NOT NULL, description TEXT NOT NULL, parameter_name TEXT NOT NULL,
+            function_path TEXT NOT NULL, texture_path TEXT NOT NULL, default_value TEXT NOT NULL, value TEXT NOT NULL, json TEXT NOT NULL
+        );
+        CREATE INDEX material_expr_asset_idx ON material_expressions(material_path, expression_class);
+        CREATE INDEX material_expr_parameter_idx ON material_expressions(parameter_name);
+        CREATE TABLE material_edges (
+            material_path TEXT NOT NULL, source_expression_id TEXT NOT NULL, source_output_index TEXT NOT NULL, source_output_name TEXT NOT NULL,
+            target_expression_id TEXT NOT NULL, target_input_name TEXT NOT NULL, target_input_index INTEGER NOT NULL, edge_kind TEXT NOT NULL,
+            PRIMARY KEY(material_path, source_expression_id, target_expression_id, target_input_name, target_input_index)
+        );
+        CREATE INDEX material_edges_target_idx ON material_edges(material_path, target_expression_id);
+        CREATE TABLE material_properties (
+            asset_path TEXT NOT NULL, system TEXT NOT NULL, owner_kind TEXT NOT NULL, owner_id TEXT NOT NULL,
+            owner_class TEXT NOT NULL, declaring_type TEXT NOT NULL, property_name TEXT NOT NULL, property_type TEXT NOT NULL,
+            cpp_type TEXT NOT NULL, value TEXT NOT NULL, object_path TEXT NOT NULL, object_class TEXT NOT NULL,
+            property_flags INTEGER NOT NULL, truncated INTEGER NOT NULL,
+            PRIMARY KEY(asset_path, owner_id, declaring_type, property_name)
+        );
+        CREATE INDEX material_properties_object_idx ON material_properties(object_path);
+        CREATE TABLE material_parameters (
+            parameter_id TEXT PRIMARY KEY, material_path TEXT NOT NULL, expression_id TEXT NOT NULL, parameter_name TEXT NOT NULL,
+            parameter_kind TEXT NOT NULL, default_value TEXT NOT NULL, value TEXT NOT NULL, object_path TEXT NOT NULL, json TEXT NOT NULL
+        );
+        CREATE INDEX material_parameters_asset_idx ON material_parameters(material_path, parameter_name);
+
+        CREATE TABLE visual_relations (
+            relation_id TEXT PRIMARY KEY, system TEXT NOT NULL, asset_path TEXT NOT NULL, source_kind TEXT NOT NULL, source_id TEXT NOT NULL,
+            relation TEXT NOT NULL, target_kind TEXT NOT NULL, target TEXT NOT NULL, detail_json TEXT NOT NULL
+        );
+        CREATE INDEX visual_relations_source_idx ON visual_relations(source_id, relation);
+        CREATE INDEX visual_relations_target_idx ON visual_relations(target, relation);
+        CREATE TABLE pcg_graph_context (pcg_path TEXT PRIMARY KEY, text TEXT NOT NULL, json TEXT NOT NULL);
+        CREATE TABLE material_graph_context (material_path TEXT PRIMARY KEY, text TEXT NOT NULL, json TEXT NOT NULL);
+        CREATE TABLE visual_summaries (
+            asset_path TEXT PRIMARY KEY, system TEXT NOT NULL, asset_class TEXT NOT NULL, node_count INTEGER NOT NULL,
+            relation_count INTEGER NOT NULL, text TEXT NOT NULL, json TEXT NOT NULL
+        );
+
         CREATE TABLE blueprint_functions (
             function_id TEXT PRIMARY KEY,
             blueprint_path TEXT NOT NULL,
@@ -1221,7 +1301,7 @@ def iter_blueprint_pin_rows(output: Path) -> Iterator[dict]:
 
 
 
-DERIVED_SCHEMA_VERSION = 3
+DERIVED_SCHEMA_VERSION = 4
 
 
 def _write_jsonl(path: Path, rows: Iterable[dict]) -> int:
@@ -2513,6 +2593,192 @@ def derive_ai_summaries(output: Path, relations: list[dict]) -> list[dict]:
                           "relation_count":len(rels),"text":"\n".join(lines)})
     return summaries
 
+
+def _extract_unreal_object_paths(text: str) -> list[str]:
+    if not text:
+        return []
+    out = []
+    seen = set()
+    for match in re.finditer(r"(/[A-Za-z0-9_./-]+\.[A-Za-z0-9_]+)", text):
+        value = match.group(1).rstrip("'\")]}>,;")
+        if value not in seen:
+            seen.add(value)
+            out.append(value)
+    return out
+
+
+def _asset_class_maps(output: Path) -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
+    classes = {}
+    package_to_object = {}
+    for row in iter_jsonl(output / "assets.jsonl"):
+        obj = row.get("object_path", "")
+        cls = row.get("class_path", "")
+        pkg = row.get("package_name", "")
+        if obj:
+            classes[obj] = cls
+        if pkg and obj:
+            package_to_object[pkg] = obj
+    generated_to_bp = {}
+    for row in iter_jsonl(output / "blueprints.jsonl"):
+        bp = row.get("object_path", "") or row.get("blueprint_path", "")
+        gen = row.get("generated_class", "")
+        if bp and gen:
+            generated_to_bp[gen] = bp
+    return classes, package_to_object, generated_to_bp
+
+
+def derive_visual(output: Path) -> tuple[list[dict], list[dict], list[dict], list[dict], list[dict], list[dict]]:
+    classes, package_to_object, generated_to_bp = _asset_class_maps(output)
+    relations = []
+    seen = set()
+    def add(system, asset, sk, sid, rel, tk, target, detail=None):
+        if not target:
+            return
+        key=(system,asset,sk,sid,rel,tk,target,json.dumps(detail or {},sort_keys=True,separators=(",",":")))
+        if key in seen:
+            return
+        seen.add(key)
+        relations.append({"relation_id": hashlib.sha1("|".join(map(str,key)).encode()).hexdigest(), "system":system,
+                          "asset_path":asset,"source_kind":sk,"source_id":sid,"relation":rel,"target_kind":tk,
+                          "target":target,"detail":detail or {}})
+
+    pcg_nodes = list(iter_jsonl(output / "pcg_nodes.jsonl"))
+    pcg_pins = list(iter_jsonl(output / "pcg_pins.jsonl"))
+    pcg_edges = list(iter_jsonl(output / "pcg_edges.jsonl"))
+    pcg_props = list(iter_jsonl(output / "pcg_properties.jsonl"))
+    pcg_params=[]
+    for g in iter_jsonl(output / "pcg_graphs.jsonl"):
+        asset=g.get("pcg_path","")
+        if g.get("parent_graph_path"):
+            add("pcg",g.get("parent_graph_path",""),"pcg_graph",g.get("parent_graph_path",""),"contains_embedded_graph","pcg_graph",asset)
+    for n in pcg_nodes:
+        asset=n.get("pcg_path",""); nid=n.get("node_id","")
+        add("pcg",asset,"pcg_graph",asset,"contains_node","pcg_node",nid)
+        if n.get("settings_path"):
+            add("pcg",asset,"pcg_node",nid,"uses_settings","pcg_settings",n["settings_path"],{"class":n.get("settings_class","")})
+    pin_by_id={p.get("pin_id",""):p for p in pcg_pins}
+    for e in pcg_edges:
+        asset=e.get("pcg_path",""); src=e.get("source_node_id",""); dst=e.get("target_node_id","")
+        sp=pin_by_id.get(e.get("source_pin_id",""),{}); tp=pin_by_id.get(e.get("target_pin_id",""),{})
+        add("pcg",asset,"pcg_node",src,"data_flows_to","pcg_node",dst,{"source_pin":sp.get("label",""),"target_pin":tp.get("label","")})
+    for p in pcg_props:
+        asset=p.get("asset_path",""); owner=p.get("owner_id",""); obj=p.get("object_path",""); prop=p.get("property_name","")
+        if "parameter" in prop.lower() and p.get("value",""):
+            pid=hashlib.sha1(f"{asset}|{owner}|{prop}".encode()).hexdigest()
+            pcg_params.append({"parameter_id":pid,"pcg_path":asset,"owner_kind":p.get("owner_kind",""),"owner_id":owner,
+                               "property_name":prop,"value":p.get("value",""),"object_path":obj})
+        targets = [obj] if obj else []
+        targets.extend(_extract_unreal_object_paths(p.get("value","")))
+        for raw_target in dict.fromkeys(t for t in targets if t):
+            target = generated_to_bp.get(raw_target,raw_target)
+            target_cls=classes.get(target, classes.get(raw_target, p.get("object_class","") if raw_target == obj else ""))
+            if target_cls == "/Script/PCG.PCGGraph":
+                add("pcg",asset,p.get("owner_kind","pcg_object"),owner,"uses_subgraph","pcg_graph",target,{"property":prop})
+            elif target in generated_to_bp.values() or raw_target in generated_to_bp:
+                add("pcg",asset,p.get("owner_kind","pcg_object"),owner,"uses_blueprint","blueprint",target,{"property":prop})
+            elif target_cls.startswith("/Script/Engine.Material"):
+                add("pcg",asset,p.get("owner_kind","pcg_object"),owner,"uses_material","material",target,{"property":prop})
+
+    materials=list(iter_jsonl(output / "materials.jsonl"))
+    exprs=list(iter_jsonl(output / "material_expressions.jsonl"))
+    medges=list(iter_jsonl(output / "material_edges.jsonl"))
+    mprops=list(iter_jsonl(output / "material_properties.jsonl"))
+    mparams=[]
+    for m in materials:
+        asset=m.get("material_path","")
+        if m.get("parent_path"):
+            add("material",asset,"material",asset,"inherits_from","material",m["parent_path"])
+    for e in exprs:
+        asset=e.get("material_path",""); eid=e.get("expression_id",""); cls=e.get("expression_class","")
+        add("material",asset,"material",asset,"contains_expression","material_expression",eid,{"class":cls})
+        if e.get("function_path"):
+            add("material",asset,"material_expression",eid,"calls_material_function","material_function",e["function_path"])
+        if e.get("texture_path"):
+            add("material",asset,"material_expression",eid,"uses_texture","asset",e["texture_path"])
+        pname=e.get("parameter_name","")
+        if pname:
+            kind=cls.rsplit('.',1)[-1].replace('MaterialExpression','')
+            obj=e.get("texture_path","") or e.get("function_path","")
+            pid=hashlib.sha1(f"{asset}|{eid}|{pname}".encode()).hexdigest()
+            mparams.append({"parameter_id":pid,"material_path":asset,"expression_id":eid,"parameter_name":pname,
+                            "parameter_kind":kind,"default_value":e.get("default_value",""),"value":e.get("value",""),"object_path":obj})
+    for e in medges:
+        asset=e.get("material_path",""); src=e.get("source_expression_id",""); dst=e.get("target_expression_id","")
+        rel="feeds_material_output" if e.get("edge_kind")=="material_output" or dst.startswith("$output:") else "feeds_expression"
+        tk="material_output" if dst.startswith("$output:") else "material_expression"
+        add("material",asset,"material_expression",src,rel,tk,dst,{"target_input":e.get("target_input_name",""),"source_output_index":e.get("source_output_index","")})
+    for p in mprops:
+        asset=p.get("asset_path",""); owner=p.get("owner_id",""); prop=p.get("property_name",""); obj=p.get("object_path","")
+        if p.get("owner_kind") in ("instance","function_instance") and "parameter" in prop.lower() and p.get("value",""):
+            pid=hashlib.sha1(f"{asset}|{owner}|{prop}".encode()).hexdigest()
+            mparams.append({"parameter_id":pid,"material_path":asset,"expression_id":"","parameter_name":prop,
+                            "parameter_kind":"instance_override_group","default_value":"","value":p.get("value",""),"object_path":obj})
+        targets = [obj] if obj else []
+        targets.extend(_extract_unreal_object_paths(p.get("value","")))
+        for target in dict.fromkeys(t for t in targets if t):
+            cls=classes.get(target,p.get("object_class","") if target == obj else "")
+            if cls in ("/Script/Engine.MaterialFunction","/Script/Engine.MaterialFunctionInstance"):
+                relation="references_material_function"
+                low=prop.lower()
+                if "blend" in low: relation="uses_material_blend"
+                elif "layer" in low: relation="uses_material_layer"
+                add("material",asset,p.get("owner_kind","material_object"),owner,relation,"material_function",target,{"property":prop})
+            elif "Texture" in cls:
+                add("material",asset,p.get("owner_kind","material_object"),owner,"references_texture","asset",target,{"property":prop})
+
+    # Promote Blueprint -> visual assets from existing factual BP relations.
+    for r in iter_jsonl(output / "blueprint_relations.jsonl"):
+        target=r.get("target",""); cls=classes.get(target,"")
+        if cls == "/Script/PCG.PCGGraph":
+            add("blueprint",r.get("blueprint_path",r.get("asset_path","")),r.get("source_kind","blueprint_node"),r.get("source_id",""),"uses_pcg_graph","pcg_graph",target,{"via":r.get("relation","")})
+        elif cls.startswith("/Script/Engine.Material"):
+            add("blueprint",r.get("blueprint_path",r.get("asset_path","")),r.get("source_kind","blueprint_node"),r.get("source_id",""),"uses_material","material",target,{"via":r.get("relation","")})
+
+    # Contexts.
+    node_by_asset=collections.defaultdict(list)
+    for n in pcg_nodes: node_by_asset[n.get("pcg_path","")].append(n)
+    edge_by_asset=collections.defaultdict(list)
+    for e in pcg_edges: edge_by_asset[e.get("pcg_path","")].append(e)
+    pcg_context=[]
+    for g in iter_jsonl(output / "pcg_graphs.jsonl"):
+        asset=g.get("pcg_path",""); lines=[f"PCG: {asset}",f"Nodes: {len(node_by_asset[asset])} Edges: {len(edge_by_asset[asset])}"]
+        for n in node_by_asset[asset][:160]:
+            lines.append(f"node {n.get('node_id','')} settings={n.get('settings_class','')} title={n.get('node_title','')}")
+        for e in edge_by_asset[asset][:240]:
+            sp=pin_by_id.get(e.get('source_pin_id',''),{}); tp=pin_by_id.get(e.get('target_pin_id',''),{})
+            lines.append(f"flow {e.get('source_node_id','')}[{sp.get('label','')}] -> {e.get('target_node_id','')}[{tp.get('label','')}]")
+        pcg_context.append({"pcg_path":asset,"text":"\n".join(lines)})
+
+    expr_by_asset=collections.defaultdict(list)
+    for e in exprs: expr_by_asset[e.get("material_path","")].append(e)
+    medge_by_asset=collections.defaultdict(list)
+    for e in medges: medge_by_asset[e.get("material_path","")].append(e)
+    material_context=[]
+    for m in materials:
+        asset=m.get("material_path",""); lines=[f"Material: {asset}",f"Kind: {m.get('material_kind','')} Expressions: {len(expr_by_asset[asset])}"]
+        if m.get('parent_path'): lines.append(f"Parent: {m['parent_path']}")
+        for e in expr_by_asset[asset][:200]:
+            extra=[]
+            if e.get('parameter_name'): extra.append(f"param={e['parameter_name']}")
+            if e.get('function_path'): extra.append(f"function={e['function_path']}")
+            if e.get('texture_path'): extra.append(f"texture={e['texture_path']}")
+            lines.append(f"expr {e.get('expression_id','')} class={e.get('expression_class','')} {' '.join(extra)}")
+        for e in medge_by_asset[asset][:320]:
+            lines.append(f"wire {e.get('source_expression_id','')}:{e.get('source_output_index','')} -> {e.get('target_expression_id','')}.{e.get('target_input_name','')}")
+        material_context.append({"material_path":asset,"text":"\n".join(lines)})
+
+    rel_by_asset=collections.defaultdict(list)
+    for r in relations: rel_by_asset[r.get("asset_path","")].append(r)
+    visual_summaries=[]
+    all_assets={g.get("pcg_path",""):("pcg","/Script/PCG.PCGGraph",len(node_by_asset[g.get("pcg_path","")])) for g in iter_jsonl(output / "pcg_graphs.jsonl")}
+    all_assets.update({m.get("material_path",""):("material",m.get("class_path",""),len(expr_by_asset[m.get("material_path","")])) for m in materials})
+    for asset,(system,cls,ncount) in all_assets.items():
+        rels=rel_by_asset[asset]
+        lines=[f"{system}: {asset}",f"class: {cls}",f"nodes: {ncount}",f"relations: {len(rels)}"]
+        for r in rels[:120]: lines.append(f"{r['source_kind']} {r['source_id']} --{r['relation']}--> {r['target_kind']} {r['target']}")
+        visual_summaries.append({"asset_path":asset,"system":system,"asset_class":cls,"node_count":ncount,"relation_count":len(rels),"text":"\n".join(lines)})
+    return relations, pcg_params, mparams, pcg_context, material_context, visual_summaries
+
 def derive_output(output: Path) -> dict[str, int]:
     output = output.resolve()
     rigvm_links = derive_rigvm_editor_links(output)
@@ -2523,6 +2789,7 @@ def derive_output(output: Path) -> dict[str, int]:
     summaries = derive_blueprint_summaries(output, relations, functions, events)
     ai_relations = derive_ai_relations(output)
     ai_summaries = derive_ai_summaries(output, ai_relations)
+    visual_relations, pcg_parameters, material_parameters, pcg_context, material_context, visual_summaries = derive_visual(output)
     counts = {
         "rigvm_editor_links": _write_jsonl(output / "rigvm_editor_links.jsonl", rigvm_links),
         "blueprint_functions": _write_jsonl(output / "blueprint_functions.jsonl", functions),
@@ -2532,6 +2799,12 @@ def derive_output(output: Path) -> dict[str, int]:
         "blueprint_summaries": _write_jsonl(output / "blueprint_summaries.jsonl", summaries),
         "ai_relations": _write_jsonl(output / "ai_relations.jsonl", ai_relations),
         "ai_summaries": _write_jsonl(output / "ai_summaries.jsonl", ai_summaries),
+        "pcg_parameters": _write_jsonl(output / "pcg_parameters.jsonl", pcg_parameters),
+        "material_parameters": _write_jsonl(output / "material_parameters.jsonl", material_parameters),
+        "visual_relations": _write_jsonl(output / "visual_relations.jsonl", visual_relations),
+        "pcg_graph_context": _write_jsonl(output / "pcg_graph_context.jsonl", pcg_context),
+        "material_graph_context": _write_jsonl(output / "material_graph_context.jsonl", material_context),
+        "visual_summaries": _write_jsonl(output / "visual_summaries.jsonl", visual_summaries),
     }
     manifest_path = output / "manifest.json"
     if manifest_path.is_file():
@@ -3033,6 +3306,66 @@ def build_database(output: Path) -> Path:
                          (row.get("asset_path", ""), row.get("system", ""), row.get("asset_class", ""), int(row.get("node_count", 0)),
                           int(row.get("relation_count", 0)), row.get("text", ""), json.dumps(row, ensure_ascii=False, separators=(",", ":"))))
 
+
+        for row in iter_jsonl(output / "pcg_graphs.jsonl"):
+            conn.execute("INSERT OR REPLACE INTO pcg_graphs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                         (row.get("pcg_path",""),row.get("class_path",""),row.get("parent_graph_path",""),1 if row.get("embedded",False) else 0,
+                          json.dumps(row.get("embedded_subgraphs",[]),ensure_ascii=False,separators=(",",":")),int(row.get("node_count",0)),int(row.get("pin_count",0)),
+                          int(row.get("edge_count",0)),row.get("user_parameters",""),row.get("default_grid",""),json.dumps(row,ensure_ascii=False,separators=(",",":"))))
+        for row in iter_jsonl(output / "pcg_nodes.jsonl"):
+            conn.execute("INSERT OR REPLACE INTO pcg_nodes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                         (row.get("node_id",""),row.get("pcg_path",""),row.get("node_class",""),row.get("node_name",""),row.get("node_title",""),
+                          row.get("position_x",""),row.get("position_y",""),row.get("settings_path",""),row.get("settings_class",""),row.get("settings_name",""),
+                          row.get("enabled",""),json.dumps(row,ensure_ascii=False,separators=(",",":"))))
+        for row in iter_jsonl(output / "pcg_pins.jsonl"):
+            conn.execute("INSERT OR REPLACE INTO pcg_pins VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                         (row.get("pin_id",""),row.get("pcg_path",""),row.get("node_id",""),row.get("direction",""),int(row.get("pin_index",-1)),
+                          row.get("label",""),row.get("allowed_types",""),row.get("pin_status",""),row.get("allow_multiple_data",""),row.get("invisible",""),
+                          row.get("raw_properties",""),json.dumps(row,ensure_ascii=False,separators=(",",":"))))
+        for row in iter_jsonl(output / "pcg_edges.jsonl"):
+            conn.execute("INSERT OR REPLACE INTO pcg_edges VALUES (?, ?, ?, ?, ?, ?, ?)",
+                         (row.get("edge_id",""),row.get("pcg_path",""),row.get("source_pin_id",""),row.get("target_pin_id",""),row.get("source_node_id",""),
+                          row.get("target_node_id",""),json.dumps(row,ensure_ascii=False,separators=(",",":"))))
+        for filename,table in (("pcg_properties.jsonl","pcg_properties"),("material_properties.jsonl","material_properties")):
+            for row in iter_jsonl(output / filename):
+                conn.execute(f"INSERT OR REPLACE INTO {table} VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                             (row.get("asset_path",""),row.get("system",""),row.get("owner_kind",""),row.get("owner_id",""),row.get("owner_class",""),
+                              row.get("declaring_type",""),row.get("property_name",""),row.get("property_type",""),row.get("cpp_type",""),row.get("value",""),
+                              row.get("object_path",""),row.get("object_class",""),int(row.get("property_flags",0)),1 if row.get("truncated",False) else 0))
+        for row in iter_jsonl(output / "pcg_parameters.jsonl"):
+            conn.execute("INSERT OR REPLACE INTO pcg_parameters VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                         (row.get("parameter_id",""),row.get("pcg_path",""),row.get("owner_kind",""),row.get("owner_id",""),row.get("property_name",""),
+                          row.get("value",""),row.get("object_path",""),json.dumps(row,ensure_ascii=False,separators=(",",":"))))
+        for row in iter_jsonl(output / "materials.jsonl"):
+            conn.execute("INSERT OR REPLACE INTO materials VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                         (row.get("material_path",""),row.get("material_kind",""),row.get("class_path",""),int(row.get("expression_count",0)),row.get("parent_path",""),
+                          row.get("material_domain",""),row.get("blend_mode",""),row.get("shading_model",""),json.dumps(row,ensure_ascii=False,separators=(",",":"))))
+        for row in iter_jsonl(output / "material_expressions.jsonl"):
+            conn.execute("INSERT OR REPLACE INTO material_expressions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                         (row.get("expression_id",""),row.get("material_path",""),row.get("expression_class",""),row.get("expression_name",""),row.get("editor_x",""),
+                          row.get("editor_y",""),row.get("description",""),row.get("parameter_name",""),row.get("function_path",""),row.get("texture_path",""),
+                          row.get("default_value",""),row.get("value",""),json.dumps(row,ensure_ascii=False,separators=(",",":"))))
+        for row in iter_jsonl(output / "material_edges.jsonl"):
+            conn.execute("INSERT OR REPLACE INTO material_edges VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                         (row.get("material_path",""),row.get("source_expression_id",""),row.get("source_output_index",""),row.get("source_output_name",""),
+                          row.get("target_expression_id",""),row.get("target_input_name",""),int(row.get("target_input_index",0)),row.get("edge_kind","")))
+        for row in iter_jsonl(output / "material_parameters.jsonl"):
+            conn.execute("INSERT OR REPLACE INTO material_parameters VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                         (row.get("parameter_id",""),row.get("material_path",""),row.get("expression_id",""),row.get("parameter_name",""),row.get("parameter_kind",""),
+                          row.get("default_value",""),row.get("value",""),row.get("object_path",""),json.dumps(row,ensure_ascii=False,separators=(",",":"))))
+        for row in iter_jsonl(output / "visual_relations.jsonl"):
+            conn.execute("INSERT OR REPLACE INTO visual_relations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                         (row.get("relation_id",""),row.get("system",""),row.get("asset_path",""),row.get("source_kind",""),row.get("source_id",""),row.get("relation",""),
+                          row.get("target_kind",""),row.get("target",""),json.dumps(row.get("detail",{}),ensure_ascii=False,separators=(",",":"))))
+        for row in iter_jsonl(output / "pcg_graph_context.jsonl"):
+            conn.execute("INSERT OR REPLACE INTO pcg_graph_context VALUES (?, ?, ?)",(row.get("pcg_path",""),row.get("text",""),json.dumps(row,ensure_ascii=False,separators=(",",":"))))
+        for row in iter_jsonl(output / "material_graph_context.jsonl"):
+            conn.execute("INSERT OR REPLACE INTO material_graph_context VALUES (?, ?, ?)",(row.get("material_path",""),row.get("text",""),json.dumps(row,ensure_ascii=False,separators=(",",":"))))
+        for row in iter_jsonl(output / "visual_summaries.jsonl"):
+            conn.execute("INSERT OR REPLACE INTO visual_summaries VALUES (?, ?, ?, ?, ?, ?, ?)",
+                         (row.get("asset_path",""),row.get("system",""),row.get("asset_class",""),int(row.get("node_count",0)),int(row.get("relation_count",0)),row.get("text",""),
+                          json.dumps(row,ensure_ascii=False,separators=(",",":"))))
+
         for row in iter_jsonl(output / "blueprint_functions.jsonl"):
             conn.execute(
                 "INSERT OR REPLACE INTO blueprint_functions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -3274,6 +3607,21 @@ DEFAULT_BUNDLE_FILES = (
     "ai_properties.jsonl",
     "ai_relations.jsonl",
     "ai_summaries.jsonl",
+    "pcg_graphs.jsonl",
+    "pcg_nodes.jsonl",
+    "pcg_pins.jsonl",
+    "pcg_edges.jsonl",
+    "pcg_properties.jsonl",
+    "pcg_parameters.jsonl",
+    "materials.jsonl",
+    "material_expressions.jsonl",
+    "material_edges.jsonl",
+    "material_properties.jsonl",
+    "material_parameters.jsonl",
+    "visual_relations.jsonl",
+    "pcg_graph_context.jsonl",
+    "material_graph_context.jsonl",
+    "visual_summaries.jsonl",
     "blueprints.jsonl",
     "blueprint_graphs.jsonl",
     "blueprint_nodes.jsonl",
@@ -3526,6 +3874,51 @@ def query(args: argparse.Namespace) -> int:
                FROM ai_properties WHERE asset_path LIKE ? OR owner_class LIKE ? OR property_name LIKE ? OR value LIKE ? OR object_path LIKE ? LIMIT ?""",
             (f"%{term}%", f"%{term}%", f"%{term}%", f"%{term}%", f"%{term}%", limit))
         _print_rows(rows, ("asset_path", "system", "owner_kind", "property_name", "object_path", "value"))
+
+        print("\n[PCG graphs/nodes]")
+        rows = conn.execute(
+            """SELECT n.pcg_path, n.node_name, n.settings_class, n.node_title, n.node_id
+               FROM pcg_nodes n
+               WHERE n.pcg_path LIKE ? OR n.node_id LIKE ? OR n.node_name LIKE ? OR n.node_title LIKE ? OR n.settings_class LIKE ?
+               LIMIT ?""",
+            (f"%{term}%",)*5 + (limit,))
+        _print_rows(rows, ("pcg_path", "node_name", "settings_class", "node_title", "node_id"))
+
+        print("\n[PCG parameters]")
+        rows = conn.execute(
+            """SELECT pcg_path, owner_kind, property_name, substr(value,1,400) AS value, object_path
+               FROM pcg_parameters WHERE pcg_path LIKE ? OR property_name LIKE ? OR value LIKE ? OR object_path LIKE ? LIMIT ?""",
+            (f"%{term}%", f"%{term}%", f"%{term}%", f"%{term}%", limit))
+        _print_rows(rows, ("pcg_path", "owner_kind", "property_name", "value", "object_path"))
+
+        print("\n[Material expressions/parameters]")
+        rows = conn.execute(
+            """SELECT material_path, expression_class, parameter_name, function_path, texture_path, expression_id
+               FROM material_expressions
+               WHERE material_path LIKE ? OR expression_class LIKE ? OR parameter_name LIKE ? OR function_path LIKE ? OR texture_path LIKE ? OR expression_id LIKE ?
+               LIMIT ?""",
+            (f"%{term}%",)*6 + (limit,))
+        _print_rows(rows, ("material_path", "expression_class", "parameter_name", "function_path", "texture_path", "expression_id"))
+
+        print("\n[Visual relations]")
+        rows = conn.execute(
+            """SELECT system, asset_path, source_kind, relation, target_kind, target
+               FROM visual_relations
+               WHERE system LIKE ? OR asset_path LIKE ? OR source_id LIKE ? OR relation LIKE ? OR target LIKE ? OR detail_json LIKE ?
+               LIMIT ?""",
+            (f"%{term}%",)*6 + (limit,))
+        _print_rows(rows, ("system", "asset_path", "source_kind", "relation", "target_kind", "target"))
+
+        print("\n[PCG/material graph context]")
+        rows = conn.execute(
+            """SELECT pcg_path AS asset_path, 'pcg' AS system, substr(text,1,1200) AS text FROM pcg_graph_context
+               WHERE pcg_path LIKE ? OR text LIKE ?
+               UNION ALL
+               SELECT material_path, 'material', substr(text,1,1200) FROM material_graph_context
+               WHERE material_path LIKE ? OR text LIKE ?
+               LIMIT ?""",
+            (f"%{term}%", f"%{term}%", f"%{term}%", f"%{term}%", limit))
+        _print_rows(rows, ("asset_path", "system", "text"))
 
         print("\n[blueprint summaries]")
         rows = conn.execute(

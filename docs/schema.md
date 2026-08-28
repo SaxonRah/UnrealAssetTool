@@ -468,3 +468,42 @@ Shared reflected-property stream for Behavior Tree nodes, Blackboard key-type ob
 ### Derived `ai_relations.jsonl` and `ai_summaries.jsonl`
 
 `uatool derive`, `pack`, and `bundle` generate reproducible AI-oriented joins including Behavior Tree -> Blackboard, inherited Blackboard-key selectors, BT -> EQS query execution, ordered BT child/service edges, Blackboard inheritance/keys, EQS option/generator/test edges, StateTree hierarchy/node/transition/binding relationships, concrete StateTree `transitions_to` edges, linked StateTrees, top-level AI asset references, and Blueprint implementations of Blueprint-backed AI nodes. Empty StateTree editor-node placeholders are ignored. `ai_summaries.jsonl` renders those facts into bounded per-asset retrieval context.
+
+
+## PCG and material visual systems (schema v10)
+
+### `pcg_graphs.jsonl`
+
+One record per top-level or embedded PCG graph. Records include graph class, parent/embedded relationship, embedded-subgraph paths, node/pin/edge counts, and bounded user-parameter/default-grid state.
+
+### `pcg_nodes.jsonl` / `pcg_pins.jsonl` / `pcg_edges.jsonl`
+
+Canonical PCG topology. Nodes retain concrete settings object/class and editor position/title where reflected. Pins retain input/output direction, order, label, allowed data types, status, multiplicity, visibility, and raw pin properties. Edges use exact pin and node object paths.
+
+### `pcg_properties.jsonl`
+
+Bounded reflected properties for PCG graphs, nodes, and settings objects, including direct UObject/class targets. This is the factual substrate for subgraph, Blueprint element, material, and parameter derivation without a hard PCG module dependency.
+
+### Derived `pcg_parameters.jsonl` and `pcg_graph_context.jsonl`
+
+`pcg_parameters` promotes parameter-bearing graph/settings properties into addressable records. `pcg_graph_context` renders bounded node/settings and pin-to-pin data flow for retrieval while canonical PCG tables remain authoritative.
+
+### `materials.jsonl`
+
+One record per Material, Material Function, Material Instance Constant, or Material Function Instance scanned by schema v10. Records include kind, concrete class, expression count, parent relationship, and material-domain/blend/shading fields where present.
+
+### `material_expressions.jsonl`
+
+One record per owned `UMaterialExpression`, including concrete class, editor position, description, parameter name, called Material Function, referenced Texture, and common default/value fields.
+
+### `material_edges.jsonl`
+
+Canonical material wiring reconstructed from reflected `FExpressionInput`-family structs. The scanner recurses through nested structs and arrays so function-call inputs, layer-blend records, and similar compound expression inputs remain connected. Root `UMaterialEditorOnlyData` inputs are represented as `$output:<Property>` targets.
+
+### `material_properties.jsonl`
+
+Bounded reflected properties for material/function assets, expressions, and editor-only data objects with direct UObject targets.
+
+### Derived `material_parameters.jsonl`, `material_graph_context.jsonl`, `visual_relations.jsonl`, and `visual_summaries.jsonl`
+
+Material parameters promote parameter expressions and instance parameter override groups. Visual relations connect PCG data flow/subgraphs/Blueprint elements and material expression flow/function/texture/parent relationships, plus Blueprint references to PCG/material assets. Graph contexts and summaries are bounded deterministic retrieval views and can be regenerated with `uatool derive` without reopening Unreal.

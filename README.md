@@ -19,7 +19,7 @@ Given a `.uproject`, UnrealAssetTool should answer questions such as:
 
 The output is deliberately **loss-minimizing and sharded**. Raw structural facts are stored first; higher-level summaries can be derived later and regenerated without rescanning Unreal assets.
 
-Schema 9 keeps that boundary explicit: scanner-only facts (designer defaults, Timeline curve keys, widget instance overrides) are canonical JSONL, while function/event normalization, semantic relations, graph-context text, summaries, and Control Rig/RigVM joins are deterministic Python-derived views.
+Schema 10 keeps that boundary explicit: scanner-only facts (designer defaults, Timeline curve keys, widget instance overrides) are canonical JSONL, while function/event normalization, semantic relations, graph-context text, summaries, and Control Rig/RigVM joins are deterministic Python-derived views.
 
 ## Why it runs inside Unreal
 
@@ -36,7 +36,7 @@ The primary scanner is therefore an **Editor Commandlet**. Unreal itself supplie
 
 A small Python launcher invokes the commandlet and converts the JSONL records into `uat.db` for fast retrieval.
 
-## Current milestone (0.5.1)
+## Current milestone (0.6.0)
 
 The first vertical slice indexes:
 
@@ -88,6 +88,18 @@ For Blueprint-family assets the scanner loads the real asset and records:
 - deterministic derived Blueprint relations, per-graph AI context, per-Blueprint summaries, and graph-first Control Rig editor-node to RigVM-model joins that can be regenerated without running Unreal;
 
 This is enough to reconstruct a large portion of Blueprint control/data flow without screenshots or documentation.
+
+### PCG and material graphs
+
+Schema 10 adds first-class visual-authoring extraction beyond Blueprint/AI graphs:
+
+- PCG graphs, embedded subgraphs, nodes, input/output pins, exact edges, node settings objects, graph/user-parameter state, and reflected settings properties;
+- deterministic PCG parameter records, node-to-node data-flow relations, subgraph references, Blueprint-backed PCG element joins, and bounded graph-context text;
+- Materials, Material Functions, and material/function instances with parent relationships and core material mode fields;
+- owned Material expressions, parameter/function/texture references, recursive `FExpressionInput` wiring (including nested structs/arrays), and root material-output connections;
+- derived material parameter records, function/texture relations, expression-flow relations, Blueprint-to-material/PCG joins, and bounded material graph context/summaries.
+
+The PCG extractor remains reflection-first and adds no hard PCG module dependency. Material topology is reconstructed from Unreal-owned expression objects and reflected expression-input structs so the scanner can retain real graph truth without screenshot parsing.
 
 ### AI gameplay graphs
 
@@ -218,6 +230,21 @@ E:\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Cmd.exe MyProject.uproject -run=Unr
   ai_properties.jsonl
   ai_relations.jsonl
   ai_summaries.jsonl
+  pcg_graphs.jsonl
+  pcg_nodes.jsonl
+  pcg_pins.jsonl
+  pcg_edges.jsonl
+  pcg_properties.jsonl
+  pcg_parameters.jsonl
+  materials.jsonl
+  material_expressions.jsonl
+  material_edges.jsonl
+  material_properties.jsonl
+  material_parameters.jsonl
+  visual_relations.jsonl
+  pcg_graph_context.jsonl
+  material_graph_context.jsonl
+  visual_summaries.jsonl
   blueprints.jsonl
   blueprint_graphs.jsonl
   blueprint_nodes.jsonl
@@ -338,4 +365,4 @@ But that summary is derived data. The underlying nodes, pins, defaults, classes,
 
 ## Next implementation phases
 
-Blueprint/visual-program understanding remains the priority. With ordinary K2/AnimGraph node classification and graph topology now well covered, the next useful work is to deepen visual systems that still live outside ordinary Blueprint graphs: Behavior Trees/Blackboards, StateTree, PCG, Sequencer, materials, Niagara, and map/world placement. Native C++ indexing can remain secondary because source text is already directly legible to an AI.
+Blueprint/visual-program understanding remains the priority. Ordinary K2/AnimGraph, Control Rig/RigVM, AI graphs, PCG, and material graphs now have canonical structural coverage. The next useful work is to deepen visual systems that still live outside those graphs: Niagara, Sequencer, MetaSounds, and map/world placement, while continuing cross-system provenance/call-chain reconstruction in the offline derive layer. Native C++ indexing can remain secondary because source text is already directly legible to an AI.
