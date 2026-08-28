@@ -34,7 +34,7 @@ The primary scanner is therefore an **Editor Commandlet**. Unreal itself supplie
 
 A small Python launcher invokes the commandlet and converts the JSONL records into `uat.db` for fast retrieval.
 
-## Current MVP (0.1.6)
+## Current MVP (0.1.7)
 
 The first vertical slice indexes:
 
@@ -169,6 +169,7 @@ E:\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Cmd.exe MyProject.uproject -run=Unr
   asset_dependencies.jsonl
   blueprints.jsonl
   blueprint_nodes.jsonl
+  blueprint_node_properties.jsonl
   blueprint_edges.jsonl
   uat.db
 ```

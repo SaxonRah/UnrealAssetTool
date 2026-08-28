@@ -32,6 +32,7 @@
 #include "Engine/Blueprint.h"
 #include "Engine/SCS_Node.h"
 #include "Engine/SimpleConstructionScript.h"
+#include "K2Node.h"
 #include "K2Node_CallFunction.h"
 #include "K2Node_CustomEvent.h"
 #include "K2Node_DynamicCast.h"
@@ -58,10 +59,11 @@
 #include "Misc/Paths.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
+#include "UObject/UnrealType.h"
 
 namespace UnrealAssetTool
 {
-    static constexpr int32 SchemaVersion = 2;
+    static constexpr int32 SchemaVersion = 3;
     static constexpr int32 SourceChunkLines = 200;
 
     class FJsonlWriter
@@ -113,6 +115,7 @@ namespace UnrealAssetTool
         int64 BlueprintGraphs = 0;
         int64 BlueprintNodes = 0;
         int64 BlueprintSemanticNodes = 0;
+        int64 BlueprintNodeProperties = 0;
         int64 BlueprintEdges = 0;
         int64 BlueprintVariables = 0;
         int64 BlueprintComponents = 0;
@@ -299,6 +302,236 @@ namespace UnrealAssetTool
         }
         OutOwner = ParentClass ? ParentClass->GetPathName() : TEXT("");
         Semantic->SetStringField(TEXT("member_parent_class"), OutOwner);
+    }
+
+    static FString GetPinDefaultObjectPath(const UEdGraphNode* Node, const FName PinName)
+    {
+        if (!Node)
+        {
+            return TEXT("");
+        }
+
+        for (const UEdGraphPin* Pin : Node->Pins)
+        {
+            if (Pin && Pin->PinName == PinName && Pin->DefaultObject)
+            {
+                return Pin->DefaultObject->GetPathName();
+            }
+        }
+        return TEXT("");
+    }
+
+    static void ApplyClassSemanticFallback(
+        UEdGraphNode* Node,
+        const TSharedRef<FJsonObject>& Semantic,
+        FString& OutOperation,
+        FString& OutSymbol,
+        FString& OutOwner)
+    {
+        if (!Node || OutOperation != TEXT("node"))
+        {
+            return;
+        }
+
+        struct FClassSemantic
+        {
+            const TCHAR* ClassName;
+            const TCHAR* Operation;
+        };
+
+        static const FClassSemantic KnownClasses[] =
+        {
+            { TEXT("K2Node_PropertyAccess"), TEXT("property_access") },
+            { TEXT("K2Node_EnumEquality"), TEXT("enum_equal") },
+            { TEXT("K2Node_EnumInequality"), TEXT("enum_not_equal") },
+            { TEXT("K2Node_MakeArray"), TEXT("make_array") },
+            { TEXT("K2Node_GetArrayItem"), TEXT("array_get") },
+            { TEXT("K2Node_AddDelegate"), TEXT("delegate_bind") },
+            { TEXT("K2Node_CreateDelegate"), TEXT("delegate_create") },
+            { TEXT("K2Node_CallDelegate"), TEXT("delegate_call") },
+            { TEXT("K2Node_GetEnumeratorNameAsString"), TEXT("enum_to_string") },
+            { TEXT("K2Node_VariableSetRef"), TEXT("variable_set_ref") },
+            { TEXT("K2Node_InputKey"), TEXT("input_key") },
+            { TEXT("K2Node_EnhancedInputAction"), TEXT("enhanced_input_event") },
+            { TEXT("K2Node_GetInputActionValue"), TEXT("enhanced_input_value") },
+            { TEXT("K2Node_GetSubsystem"), TEXT("get_subsystem") },
+            { TEXT("K2Node_GetEngineSubsystem"), TEXT("get_engine_subsystem") },
+            { TEXT("K2Node_GetEditorSubsystem"), TEXT("get_editor_subsystem") },
+            { TEXT("K2Node_GetSubsystemFromPC"), TEXT("get_subsystem_from_player_controller") },
+            { TEXT("K2Node_FormatText"), TEXT("format_text") },
+            { TEXT("K2Node_ConvertAsset"), TEXT("convert_asset") },
+            { TEXT("K2Node_GetClassDefaults"), TEXT("get_class_defaults") },
+            { TEXT("K2Node_Timeline"), TEXT("timeline") },
+            { TEXT("K2Node_LoadAssetClass"), TEXT("load_asset_class") },
+            { TEXT("K2Node_CreateWidget"), TEXT("create_widget") },
+            { TEXT("K2Node_EvaluateChooser2"), TEXT("evaluate_chooser") },
+            { TEXT("K2Node_GetChooserContextParameters"), TEXT("chooser_context_parameters") },
+            { TEXT("K2Node_PlayMontageOnMoverActor"), TEXT("mover_play_montage") },
+            { TEXT("K2Node_PlayMontage"), TEXT("anim_play_montage") },
+            { TEXT("K2Node_AnimNodeReference"), TEXT("anim_node_reference") },
+
+            { TEXT("AnimGraphNode_PoseDriver"), TEXT("anim_pose_driver") },
+            { TEXT("AnimGraphNode_LocalToComponentSpace"), TEXT("anim_local_to_component_space") },
+            { TEXT("AnimGraphNode_ComponentToLocalSpace"), TEXT("anim_component_to_local_space") },
+            { TEXT("AnimGraphNode_ControlRig"), TEXT("anim_control_rig") },
+            { TEXT("AnimGraphNode_ModifyCurve"), TEXT("anim_modify_curve") },
+            { TEXT("AnimGraphNode_ModifyBone"), TEXT("anim_modify_bone") },
+            { TEXT("AnimGraphNode_BlendSpacePlayer"), TEXT("anim_blend_space_player") },
+            { TEXT("AnimGraphNode_SequenceEvaluator"), TEXT("anim_sequence_evaluator") },
+            { TEXT("AnimGraphNode_BlendListByBool"), TEXT("anim_blend_by_bool") },
+            { TEXT("AnimGraphNode_BlendListByEnum"), TEXT("anim_blend_by_enum") },
+            { TEXT("AnimGraphNode_BlendListByInt"), TEXT("anim_blend_by_int") },
+            { TEXT("AnimGraphNode_TwoWayBlend"), TEXT("anim_two_way_blend") },
+            { TEXT("AnimGraphNode_ApplyMeshSpaceAdditive"), TEXT("anim_apply_mesh_space_additive") },
+            { TEXT("AnimGraphNode_RigidBody"), TEXT("anim_rigid_body") },
+            { TEXT("AnimGraphNode_CopyBone"), TEXT("anim_copy_bone") },
+            { TEXT("AnimGraphNode_CopyPoseFromMesh"), TEXT("anim_copy_pose_from_mesh") },
+            { TEXT("AnimGraphNode_TransitionPoseEvaluator"), TEXT("anim_transition_pose_evaluator") },
+            { TEXT("AnimGraphNode_ResetRoot"), TEXT("anim_reset_root") },
+            { TEXT("AnimGraphNode_DeadBlending"), TEXT("anim_dead_blending") },
+            { TEXT("AnimGraphNode_Constraint"), TEXT("anim_constraint") },
+            { TEXT("AnimGraphNode_LegIK"), TEXT("anim_leg_ik") },
+            { TEXT("AnimGraphNode_Inertialization"), TEXT("anim_inertialization") },
+            { TEXT("AnimGraphNode_IdentityPose"), TEXT("anim_identity_pose") },
+
+            { TEXT("AnimGraphNode_Steering"), TEXT("anim_steering") },
+            { TEXT("AnimGraphNode_OrientationWarping"), TEXT("anim_orientation_warping") },
+            { TEXT("AnimGraphNode_OffsetRootBone"), TEXT("anim_offset_root_bone") },
+            { TEXT("AnimGraphNode_BlendStackInput"), TEXT("anim_blend_stack_input") },
+            { TEXT("AnimGraphNode_BlendStack"), TEXT("anim_blend_stack") },
+            { TEXT("AnimGraphNode_RetargetPoseFromMesh"), TEXT("anim_retarget_pose_from_mesh") },
+            { TEXT("AnimGraphNode_PoseSearchHistoryCollector"), TEXT("anim_pose_search_history") },
+            { TEXT("AnimGraphNode_PoseSearchComponentSpaceHistoryCollector"), TEXT("anim_pose_search_component_history") },
+            { TEXT("AnimGraphNode_MotionMatching"), TEXT("anim_motion_matching") },
+            { TEXT("AnimGraphNode_LayeredBoneBlend"), TEXT("anim_layered_bone_blend") },
+            { TEXT("AnimGraphNode_LocalRefPose"), TEXT("anim_local_ref_pose") },
+            { TEXT("AnimGraphNode_PoseBlendNode"), TEXT("anim_pose_blend") },
+            { TEXT("AnimGraphNode_PoseSnapshot"), TEXT("anim_pose_snapshot") },
+            { TEXT("AnimGraphNode_FootPlacement"), TEXT("anim_foot_placement") },
+            { TEXT("AnimGraphNode_StrideWarping"), TEXT("anim_stride_warping") },
+            { TEXT("AnimGraphNode_RemapCurves"), TEXT("anim_remap_curves") },
+            { TEXT("AnimGraphNode_LiveLinkPose"), TEXT("anim_live_link_pose") },
+            { TEXT("AnimGraphNode_RigLogic"), TEXT("anim_rig_logic") },
+
+            { TEXT("K2Node_AddComponentByClass"), TEXT("add_component_by_class") },
+            { TEXT("K2Node_AssignDelegate"), TEXT("delegate_assign") },
+            { TEXT("K2Node_CastByteToEnum"), TEXT("cast_byte_to_enum") },
+            { TEXT("K2Node_GenericCreateObject"), TEXT("create_object") },
+            { TEXT("K2Node_LoadAsset"), TEXT("load_asset") },
+            { TEXT("K2Node_MakeMap"), TEXT("make_map") },
+            { TEXT("K2Node_MapForEach"), TEXT("map_for_each") },
+            { TEXT("K2Node_LatentGameplayTaskCall"), TEXT("gameplay_task_call") },
+            { TEXT("K2Node_InputDebugKey"), TEXT("input_debug_key") },
+            { TEXT("K2Node_EvaluateLiveLinkFrameWithSpecificRole"), TEXT("evaluate_live_link_frame") },
+            { TEXT("K2Node_EvaluateProxy2"), TEXT("evaluate_proxy") }
+        };
+
+        const FString ClassName = Node->GetClass()->GetName();
+        for (const FClassSemantic& Entry : KnownClasses)
+        {
+            if (ClassName == Entry.ClassName)
+            {
+                OutOperation = Entry.Operation;
+                Semantic->SetStringField(TEXT("classification_source"), TEXT("node_class"));
+                Semantic->SetStringField(TEXT("concrete_node_class"), Node->GetClass()->GetPathName());
+                break;
+            }
+        }
+
+        if (OutOperation == TEXT("enhanced_input_event") ||
+            OutOperation == TEXT("enhanced_input_value"))
+        {
+            const FString InputActionPath = GetPinDefaultObjectPath(Node, TEXT("InputAction"));
+            if (!InputActionPath.IsEmpty())
+            {
+                OutOwner = InputActionPath;
+                OutSymbol = FPackageName::ObjectPathToObjectName(InputActionPath);
+                Semantic->SetStringField(TEXT("input_action"), InputActionPath);
+            }
+        }
+    }
+
+    static bool ScanNodeProperties(
+        UEdGraphNode* Node,
+        const FString& NodeId,
+        const FString& BlueprintPath,
+        const FString& GraphName,
+        FJsonlWriter& PropertiesWriter,
+        FScanCounts& Counts)
+    {
+        if (!Node)
+        {
+            return true;
+        }
+
+        static constexpr int32 MaxExportedPropertyChars = 65536;
+
+        for (UClass* Class = Node->GetClass();
+             Class && Class != UEdGraphNode::StaticClass() && Class != UK2Node::StaticClass();
+             Class = Class->GetSuperClass())
+        {
+            for (TFieldIterator<FProperty> It(Class, EFieldIterationFlags::None); It; ++It)
+            {
+                FProperty* Property = *It;
+                if (!Property ||
+                    Property->HasAnyPropertyFlags(
+                        CPF_Transient | CPF_DuplicateTransient | CPF_NonPIEDuplicateTransient))
+                {
+                    continue;
+                }
+
+                FString Value;
+                if (!Property->ExportText_InContainer(
+                        0,
+                        Value,
+                        Node,
+                        nullptr,
+                        Node,
+                        PPF_None,
+                        nullptr))
+                {
+                    continue;
+                }
+
+                bool bTruncated = false;
+                if (Value.Len() > MaxExportedPropertyChars)
+                {
+                    Value = Value.Left(MaxExportedPropertyChars);
+                    bTruncated = true;
+                }
+
+                FString ObjectPath;
+                if (const FObjectPropertyBase* ObjectProperty = CastField<FObjectPropertyBase>(Property))
+                {
+                    if (UObject* ObjectValue = ObjectProperty->GetObjectPropertyValue_InContainer(Node))
+                    {
+                        ObjectPath = ObjectValue->GetPathName();
+                    }
+                }
+
+                const TSharedRef<FJsonObject> PropertyJson = MakeShared<FJsonObject>();
+                PropertyJson->SetStringField(TEXT("node_id"), NodeId);
+                PropertyJson->SetStringField(TEXT("blueprint_path"), BlueprintPath);
+                PropertyJson->SetStringField(TEXT("graph_name"), GraphName);
+                PropertyJson->SetStringField(TEXT("node_class"), Node->GetClass()->GetPathName());
+                PropertyJson->SetStringField(TEXT("property_name"), Property->GetName());
+                PropertyJson->SetStringField(TEXT("owner_class"), Class->GetPathName());
+                PropertyJson->SetStringField(TEXT("property_type"), Property->GetClass()->GetName());
+                PropertyJson->SetStringField(TEXT("cpp_type"), Property->GetCPPType());
+                PropertyJson->SetStringField(TEXT("value"), Value);
+                PropertyJson->SetStringField(TEXT("object_path"), ObjectPath);
+                PropertyJson->SetNumberField(TEXT("property_flags"), static_cast<double>(Property->GetPropertyFlags()));
+                PropertyJson->SetBoolField(TEXT("truncated"), bTruncated);
+
+                if (!PropertiesWriter.Write(PropertyJson))
+                {
+                    return false;
+                }
+                ++Counts.BlueprintNodeProperties;
+            }
+        }
+
+        return true;
     }
 
     static TSharedRef<FJsonObject> BuildNodeSemantic(
@@ -730,6 +963,8 @@ namespace UnrealAssetTool
             }
         }
 
+        ApplyClassSemanticFallback(Node, Semantic, OutOperation, OutSymbol, OutOwner);
+
         Semantic->SetStringField(TEXT("operation"), OutOperation);
         Semantic->SetStringField(TEXT("symbol"), OutSymbol);
         Semantic->SetStringField(TEXT("owner"), OutOwner);
@@ -843,6 +1078,7 @@ namespace UnrealAssetTool
         const FString& ObjectPath,
         FJsonlWriter& BlueprintsWriter,
         FJsonlWriter& NodesWriter,
+        FJsonlWriter& PropertiesWriter,
         FJsonlWriter& EdgesWriter,
         FScanCounts& Counts)
     {
@@ -982,6 +1218,17 @@ namespace UnrealAssetTool
                     return false;
                 }
                 ++Counts.BlueprintNodes;
+
+                if (!ScanNodeProperties(
+                        Node,
+                        NodeId,
+                        ObjectPath,
+                        Graph->GetName(),
+                        PropertiesWriter,
+                        Counts))
+                {
+                    return false;
+                }
             }
 
             for (UEdGraphNode* Node : Graph->Nodes)
@@ -1041,6 +1288,7 @@ namespace UnrealAssetTool
         FJsonlWriter& DependenciesWriter,
         FJsonlWriter& BlueprintsWriter,
         FJsonlWriter& NodesWriter,
+        FJsonlWriter& PropertiesWriter,
         FJsonlWriter& EdgesWriter,
         FScanCounts& Counts)
     {
@@ -1123,7 +1371,7 @@ namespace UnrealAssetTool
             {
                 if (UBlueprint* Blueprint = Cast<UBlueprint>(Asset.GetAsset()))
                 {
-                    if (!ScanBlueprint(Blueprint, ObjectPath, BlueprintsWriter, NodesWriter, EdgesWriter, Counts))
+                    if (!ScanBlueprint(Blueprint, ObjectPath, BlueprintsWriter, NodesWriter, PropertiesWriter, EdgesWriter, Counts))
                     {
                         return false;
                     }
@@ -1187,10 +1435,12 @@ int32 UUnrealAssetToolCommandlet::Main(const FString& Params)
     FJsonlWriter DependenciesWriter(FPaths::Combine(OutputDir, TEXT("asset_dependencies.jsonl")));
     FJsonlWriter BlueprintsWriter(FPaths::Combine(OutputDir, TEXT("blueprints.jsonl")));
     FJsonlWriter NodesWriter(FPaths::Combine(OutputDir, TEXT("blueprint_nodes.jsonl")));
+    FJsonlWriter PropertiesWriter(FPaths::Combine(OutputDir, TEXT("blueprint_node_properties.jsonl")));
     FJsonlWriter EdgesWriter(FPaths::Combine(OutputDir, TEXT("blueprint_edges.jsonl")));
 
     if (!FilesWriter.IsValid() || !SourceWriter.IsValid() || !AssetsWriter.IsValid() ||
-        !DependenciesWriter.IsValid() || !BlueprintsWriter.IsValid() || !NodesWriter.IsValid() || !EdgesWriter.IsValid())
+        !DependenciesWriter.IsValid() || !BlueprintsWriter.IsValid() || !NodesWriter.IsValid() ||
+        !PropertiesWriter.IsValid() || !EdgesWriter.IsValid())
     {
         UE_LOG(LogTemp, Error, TEXT("UnrealAssetTool: could not create one or more output files under %s"), *OutputDir);
         return 2;
@@ -1203,7 +1453,7 @@ int32 UUnrealAssetToolCommandlet::Main(const FString& Params)
         return 3;
     }
 
-    if (!ScanAssets(ProjectDir, ToolPluginDir, bIncludeEngine, bIncludeSelf, AssetsWriter, DependenciesWriter, BlueprintsWriter, NodesWriter, EdgesWriter, Counts))
+    if (!ScanAssets(ProjectDir, ToolPluginDir, bIncludeEngine, bIncludeSelf, AssetsWriter, DependenciesWriter, BlueprintsWriter, NodesWriter, PropertiesWriter, EdgesWriter, Counts))
     {
         UE_LOG(LogTemp, Error, TEXT("UnrealAssetTool: asset scan failed."));
         return 4;
@@ -1231,6 +1481,7 @@ int32 UUnrealAssetToolCommandlet::Main(const FString& Params)
     CountsJson->SetNumberField(TEXT("blueprint_graphs"), static_cast<double>(Counts.BlueprintGraphs));
     CountsJson->SetNumberField(TEXT("blueprint_nodes"), static_cast<double>(Counts.BlueprintNodes));
     CountsJson->SetNumberField(TEXT("blueprint_semantic_nodes"), static_cast<double>(Counts.BlueprintSemanticNodes));
+    CountsJson->SetNumberField(TEXT("blueprint_node_properties"), static_cast<double>(Counts.BlueprintNodeProperties));
     CountsJson->SetNumberField(TEXT("blueprint_edges"), static_cast<double>(Counts.BlueprintEdges));
     CountsJson->SetNumberField(TEXT("blueprint_variables"), static_cast<double>(Counts.BlueprintVariables));
     CountsJson->SetNumberField(TEXT("blueprint_components"), static_cast<double>(Counts.BlueprintComponents));

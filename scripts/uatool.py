@@ -286,6 +286,25 @@ def create_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX bp_nodes_symbol_idx ON blueprint_nodes(symbol);
         CREATE INDEX bp_nodes_owner_idx ON blueprint_nodes(owner);
 
+        CREATE TABLE blueprint_node_properties (
+            node_id TEXT NOT NULL,
+            blueprint_path TEXT NOT NULL,
+            graph_name TEXT NOT NULL,
+            node_class TEXT NOT NULL,
+            property_name TEXT NOT NULL,
+            owner_class TEXT NOT NULL,
+            property_type TEXT NOT NULL,
+            cpp_type TEXT NOT NULL,
+            value TEXT NOT NULL,
+            object_path TEXT NOT NULL,
+            property_flags INTEGER NOT NULL,
+            truncated INTEGER NOT NULL,
+            PRIMARY KEY(node_id, owner_class, property_name)
+        );
+        CREATE INDEX bp_node_props_node_idx ON blueprint_node_properties(node_id);
+        CREATE INDEX bp_node_props_name_idx ON blueprint_node_properties(property_name);
+        CREATE INDEX bp_node_props_object_idx ON blueprint_node_properties(object_path);
+
         CREATE TABLE blueprint_edges (
             blueprint_path TEXT NOT NULL,
             graph_name TEXT NOT NULL,
@@ -421,6 +440,25 @@ def build_database(output: Path) -> Path:
                 ),
             )
 
+        for row in iter_jsonl(output / "blueprint_node_properties.jsonl"):
+            conn.execute(
+                "INSERT OR REPLACE INTO blueprint_node_properties VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    row.get("node_id", ""),
+                    row.get("blueprint_path", ""),
+                    row.get("graph_name", ""),
+                    row.get("node_class", ""),
+                    row.get("property_name", ""),
+                    row.get("owner_class", ""),
+                    row.get("property_type", ""),
+                    row.get("cpp_type", ""),
+                    row.get("value", ""),
+                    row.get("object_path", ""),
+                    int(row.get("property_flags", 0)),
+                    1 if row.get("truncated", False) else 0,
+                ),
+            )
+
         for row in iter_jsonl(output / "blueprint_edges.jsonl"):
             conn.execute(
                 "INSERT OR IGNORE INTO blueprint_edges VALUES (?, ?, ?, ?, ?)",
@@ -523,6 +561,26 @@ def query(args: argparse.Namespace) -> int:
             ),
         )
         _print_rows(rows, ("blueprint_path", "graph_name", "operation", "symbol", "owner", "title"))
+
+        print("\n[blueprint node properties]")
+        rows = conn.execute(
+            """
+            SELECT blueprint_path, graph_name, property_name, cpp_type, object_path,
+                   substr(value, 1, 240) AS value
+            FROM blueprint_node_properties
+            WHERE property_name LIKE ? OR cpp_type LIKE ? OR value LIKE ?
+               OR object_path LIKE ? OR owner_class LIKE ? OR node_class LIKE ?
+            LIMIT ?
+            """,
+            (
+                f"%{term}%", f"%{term}%", f"%{term}%",
+                f"%{term}%", f"%{term}%", f"%{term}%", limit,
+            ),
+        )
+        _print_rows(
+            rows,
+            ("blueprint_path", "graph_name", "property_name", "cpp_type", "object_path", "value"),
+        )
 
         print("\n[assets]")
         rows = conn.execute(

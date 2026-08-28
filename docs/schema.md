@@ -1,4 +1,4 @@
-# UnrealAssetTool schema v2
+# UnrealAssetTool schema v3
 
 The scan format is line-oriented so individual records can be streamed, indexed, diffed, embedded, or retrieved without parsing a monolithic project document.
 
@@ -147,6 +147,28 @@ For Animation Blueprints, `graph_kind` distinguishes the editor graph class rath
 - `anim_conduit`
 
 Animation state/transition node semantics include exact state names, rule graph paths, previous/next states, transition priority, crossfade duration, automatic-rule settings, shared-rule/crossfade metadata, and state reset/type settings when Unreal exposes them.
+
+
+## `blueprint_node_properties.jsonl`
+
+One record per node-specific reflected Unreal property. This stream captures serialized/editor configuration that is not represented by pins or by a dedicated semantic decoder. UATool walks each node's concrete class hierarchy down to (but not including) the generic `UK2Node`/`UEdGraphNode` storage and exports non-transient `FProperty` values through Unreal's reflection system.
+
+Important fields:
+
+- `node_id`
+- `blueprint_path`
+- `graph_name`
+- `node_class`
+- `property_name`
+- `owner_class`: the class that declared the property;
+- `property_type`: Unreal reflection property class;
+- `cpp_type`
+- `value`: Unreal's text export of the property value;
+- `object_path`: direct UObject reference when the property is an object property;
+- `property_flags`
+- `truncated`: true only when an individual exported value exceeded the safety cap.
+
+This is intentionally a raw-facts layer. For example, plugin-specific nodes such as Property Access, Motion Matching, Chooser, or Control Rig can expose their serialized settings here before UATool has a hand-written semantic decoder for that node type.
 
 ## `blueprint_edges.jsonl`
 
