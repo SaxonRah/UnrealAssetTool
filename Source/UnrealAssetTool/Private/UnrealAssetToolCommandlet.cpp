@@ -11,6 +11,7 @@
 #include "Engine/SCS_Node.h"
 #include "Engine/SimpleConstructionScript.h"
 #include "HAL/FileManager.h"
+#include "Interfaces/IPluginManager.h"
 #include "Misc/EngineVersion.h"
 #include "Misc/FileHelper.h"
 #include "Misc/PackageName.h"
@@ -229,7 +230,10 @@ namespace UnrealAssetTool
 
     static bool ScanFiles(
         const FString& ProjectDir,
+        const FString& ToolPluginDir,
+        const FString& OutputDir,
         bool bIncludeGenerated,
+        bool bIncludeSelf,
         FJsonlWriter& FilesWriter,
         FJsonlWriter& SourceWriter,
         FScanCounts& Counts)
@@ -244,6 +248,21 @@ namespace UnrealAssetTool
             FString RelativePath = FullPath;
             FPaths::MakePathRelativeTo(RelativePath, *ProjectDir);
             FPaths::NormalizeFilename(RelativePath);
+
+            // The index describes the target project, not UnrealAssetTool itself.
+            // Keep this separate from IncludeGenerated so generated/cache data can
+            // be requested without also polluting the index with the scanner.
+            if (!bIncludeSelf && !ToolPluginDir.IsEmpty() && IsInsideDirectory(FullPath, ToolPluginDir))
+            {
+                continue;
+            }
+
+            // Never index the output currently being produced, even when a custom
+            // output directory name is used and IncludeGenerated is enabled.
+            if (IsInsideDirectory(FullPath, OutputDir))
+            {
+                continue;
+            }
 
             if (!bIncludeGenerated && IsGeneratedPath(RelativePath))
             {
@@ -494,7 +513,9 @@ namespace UnrealAssetTool
 
     static bool ScanAssets(
         const FString& ProjectDir,
+        const FString& ToolPluginDir,
         bool bIncludeEngine,
+        bool bIncludeSelf,
         FJsonlWriter& AssetsWriter,
         FJsonlWriter& DependenciesWriter,
         FJsonlWriter& BlueprintsWriter,
@@ -516,6 +537,12 @@ namespace UnrealAssetTool
         {
             FString PackageFilename;
             const bool bHasDiskPackage = FPackageName::DoesPackageExist(Asset.PackageName.ToString(), &PackageFilename, false);
+
+            if (!bIncludeSelf && bHasDiskPackage && !ToolPluginDir.IsEmpty() && IsInsideDirectory(PackageFilename, ToolPluginDir))
+            {
+                continue;
+            }
+
             if (!bIncludeEngine)
             {
                 if (!bHasDiskPackage || !IsInsideDirectory(PackageFilename, ProjectDir))
@@ -595,7 +622,7 @@ UUnrealAssetToolCommandlet::UUnrealAssetToolCommandlet()
     ShowErrorCount = true;
     UseCommandletResultAsExitCode = true;
     HelpDescription = TEXT("Indexes an Unreal project into AI-friendly JSONL records.");
-    HelpUsage = TEXT("UnrealEditor-Cmd.exe Project.uproject -run=UnrealAssetTool -Output=<dir> [-IncludeGenerated] [-IncludeEngine]");
+    HelpUsage = TEXT("UnrealEditor-Cmd.exe Project.uproject -run=UnrealAssetTool -Output=<dir> [-IncludeGenerated] [-IncludeEngine] [-IncludeSelf]");
 }
 
 int32 UUnrealAssetToolCommandlet::Main(const FString& Params)
@@ -606,6 +633,7 @@ int32 UUnrealAssetToolCommandlet::Main(const FString& Params)
     FParse::Value(*Params, TEXT("Output="), OutputDir);
     const bool bIncludeGenerated = FParse::Param(*Params, TEXT("IncludeGenerated"));
     const bool bIncludeEngine = FParse::Param(*Params, TEXT("IncludeEngine"));
+    const bool bIncludeSelf = FParse::Param(*Params, TEXT("IncludeSelf"));
 
     const FString ProjectDir = NormalizeAbsolutePath(FPaths::ProjectDir());
     if (OutputDir.IsEmpty())
@@ -617,6 +645,18 @@ int32 UUnrealAssetToolCommandlet::Main(const FString& Params)
         OutputDir = FPaths::Combine(ProjectDir, OutputDir);
     }
     OutputDir = NormalizeAbsolutePath(OutputDir);
+
+    FString ToolPluginDir;
+    const TSharedPtr<IPlugin> ToolPlugin = IPluginManager::Get().FindPlugin(TEXT("UnrealAssetTool"));
+    if (ToolPlugin.IsValid())
+    {
+        ToolPluginDir = NormalizeAbsolutePath(ToolPlugin->GetBaseDir());
+    }
+    else
+    {
+        UE_LOG(LogTemp, Warning,
+            TEXT("UnrealAssetTool: could not resolve its plugin root; self-exclusion will only affect the output directory."));
+    }
 
     IFileManager::Get().MakeDirectory(*OutputDir, true);
 
@@ -636,13 +676,13 @@ int32 UUnrealAssetToolCommandlet::Main(const FString& Params)
     }
 
     FScanCounts Counts;
-    if (!ScanFiles(ProjectDir, bIncludeGenerated, FilesWriter, SourceWriter, Counts))
+    if (!ScanFiles(ProjectDir, ToolPluginDir, OutputDir, bIncludeGenerated, bIncludeSelf, FilesWriter, SourceWriter, Counts))
     {
         UE_LOG(LogTemp, Error, TEXT("UnrealAssetTool: file scan failed."));
         return 3;
     }
 
-    if (!ScanAssets(ProjectDir, bIncludeEngine, AssetsWriter, DependenciesWriter, BlueprintsWriter, NodesWriter, EdgesWriter, Counts))
+    if (!ScanAssets(ProjectDir, ToolPluginDir, bIncludeEngine, bIncludeSelf, AssetsWriter, DependenciesWriter, BlueprintsWriter, NodesWriter, EdgesWriter, Counts))
     {
         UE_LOG(LogTemp, Error, TEXT("UnrealAssetTool: asset scan failed."));
         return 4;
@@ -655,8 +695,11 @@ int32 UUnrealAssetToolCommandlet::Main(const FString& Params)
     Manifest->SetStringField(TEXT("engine_version"), FEngineVersion::Current().ToString());
     Manifest->SetStringField(TEXT("project_file"), NormalizeAbsolutePath(FPaths::GetProjectFilePath()));
     Manifest->SetStringField(TEXT("project_dir"), ProjectDir);
+    Manifest->SetStringField(TEXT("output_dir"), OutputDir);
+    Manifest->SetStringField(TEXT("tool_plugin_dir"), ToolPluginDir);
     Manifest->SetBoolField(TEXT("include_generated"), bIncludeGenerated);
     Manifest->SetBoolField(TEXT("include_engine"), bIncludeEngine);
+    Manifest->SetBoolField(TEXT("include_self"), bIncludeSelf);
 
     const TSharedRef<FJsonObject> CountsJson = MakeShared<FJsonObject>();
     CountsJson->SetNumberField(TEXT("files"), static_cast<double>(Counts.Files));

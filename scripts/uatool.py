@@ -457,6 +457,8 @@ def scan(args: argparse.Namespace) -> int:
         command.append("-IncludeGenerated")
     if args.include_engine:
         command.append("-IncludeEngine")
+    if args.include_self:
+        command.append("-IncludeSelf")
 
     print("running:", subprocess.list2cmdline(command))
     result = subprocess.run(command, check=False)
@@ -567,6 +569,7 @@ def make_parser() -> argparse.ArgumentParser:
     p_scan.add_argument("--output", help="output directory; default: <project>/.uatool")
     p_scan.add_argument("--include-generated", action="store_true", help="include Binaries/Intermediate/Saved/etc in filesystem metadata")
     p_scan.add_argument("--include-engine", action="store_true", help="include Engine-owned assets, not only project/plugin assets")
+    p_scan.add_argument("--include-self", action="store_true", help="include the UnrealAssetTool plugin itself (debugging only)")
     p_scan.set_defaults(func=scan)
 
     p_build = sub.add_parser("build", help="build the project's Editor target so UnrealAssetTool can load")

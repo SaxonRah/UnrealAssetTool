@@ -34,7 +34,7 @@ The primary scanner is therefore an **Editor Commandlet**. Unreal itself supplie
 
 A small Python launcher invokes the commandlet and converts the JSONL records into `uat.db` for fast retrieval.
 
-## Current MVP (0.1.3)
+## Current MVP (0.1.4)
 
 The first vertical slice indexes:
 
@@ -44,6 +44,8 @@ The first vertical slice indexes:
 - C/C++, headers, Build.cs, Target.cs, INI, JSON, `.uproject`, `.uplugin`, Python, shader source, Markdown, and text;
 - source text in 200-line chunks suitable for retrieval;
 - generated/cache directories are excluded by default.
+- the active UnrealAssetTool plugin installation is excluded by default so the scanner does not pollute its own project model;
+- the active output directory is always excluded, including when `--output` uses a custom directory name.
 
 ### Unreal assets
 
@@ -83,6 +85,14 @@ UnrealAssetTool/
     uatool.py
   docs/
     schema.md
+```
+
+UnrealAssetTool excludes itself from filesystem, source-text, and asset indexing by default. To deliberately index the scanner while developing/debugging it, use:
+
+```powershell
+python scripts\uatool.py scan MyProject.uproject `
+    --editor "E:\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Cmd.exe" `
+    --include-self
 ```
 
 ## Install in a project
