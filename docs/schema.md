@@ -1,4 +1,4 @@
-# UnrealAssetTool schema v1
+# UnrealAssetTool schema v2
 
 The scan format is line-oriented so individual records can be streamed, indexed, diffed, embedded, or retrieved without parsing a monolithic project document.
 
@@ -93,6 +93,10 @@ Important fields:
 - `graph_class`
 - `schema_class`
 - `node_class`
+- `operation`: normalized factual operation such as `variable_get`, `variable_set`, `function_call`, `event`, `custom_event`, `dynamic_cast`, `macro_instance`, or `branch`;
+- `symbol`: the referenced variable/function/event/macro/type name when Unreal exposes one;
+- `owner`: the owning/source class or Blueprint when Unreal exposes one;
+- `semantic`: node-type-specific structured facts used to derive `operation`, `symbol`, and `owner`;
 - `title`
 - `comment`
 - `x`, `y`
@@ -106,6 +110,30 @@ Each pin includes:
 - `type`
 - default literal/object/text values
 - relevant connection/display flags
+
+For example, a function-call node may contain:
+
+```json
+{
+  "operation": "function_call",
+  "symbol": "GetMover",
+  "owner": "/Script/Mover.MoverComponent",
+  "semantic": {
+    "operation": "function_call",
+    "symbol": "GetMover",
+    "owner": "/Script/Mover.MoverComponent",
+    "member_name": "GetMover",
+    "resolved_function": "/Script/Mover.MoverComponent:GetMover",
+    "function_owner": "/Script/Mover.MoverComponent",
+    "pure": true,
+    "const": true,
+    "interface_call": false,
+    "latent": false
+  }
+}
+```
+
+Unknown or specialized graph-node classes remain `operation: "node"` rather than having behavior inferred from their display title.
 
 ## `blueprint_edges.jsonl`
 

@@ -271,6 +271,9 @@ def create_schema(conn: sqlite3.Connection) -> None:
             graph_name TEXT NOT NULL,
             graph_kind TEXT NOT NULL,
             node_class TEXT NOT NULL,
+            operation TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            owner TEXT NOT NULL,
             title TEXT NOT NULL,
             comment TEXT NOT NULL,
             x INTEGER NOT NULL,
@@ -279,6 +282,9 @@ def create_schema(conn: sqlite3.Connection) -> None:
         );
         CREATE INDEX bp_nodes_blueprint_idx ON blueprint_nodes(blueprint_path, graph_name);
         CREATE INDEX bp_nodes_title_idx ON blueprint_nodes(title);
+        CREATE INDEX bp_nodes_operation_idx ON blueprint_nodes(operation);
+        CREATE INDEX bp_nodes_symbol_idx ON blueprint_nodes(symbol);
+        CREATE INDEX bp_nodes_owner_idx ON blueprint_nodes(owner);
 
         CREATE TABLE blueprint_edges (
             blueprint_path TEXT NOT NULL,
@@ -397,13 +403,16 @@ def build_database(output: Path) -> Path:
 
         for row in iter_jsonl(output / "blueprint_nodes.jsonl"):
             conn.execute(
-                "INSERT INTO blueprint_nodes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO blueprint_nodes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     row.get("node_id", ""),
                     row.get("blueprint_path", ""),
                     row.get("graph_name", ""),
                     row.get("graph_kind", ""),
                     row.get("node_class", ""),
+                    row.get("operation", ""),
+                    row.get("symbol", ""),
+                    row.get("owner", ""),
                     row.get("title", ""),
                     row.get("comment", ""),
                     int(row.get("x", 0)),
@@ -502,14 +511,18 @@ def query(args: argparse.Namespace) -> int:
         print("[blueprint nodes]")
         rows = conn.execute(
             """
-            SELECT blueprint_path, graph_name, title, node_class
+            SELECT blueprint_path, graph_name, operation, symbol, owner, title
             FROM blueprint_nodes
             WHERE title LIKE ? OR comment LIKE ? OR node_class LIKE ?
+               OR operation LIKE ? OR symbol LIKE ? OR owner LIKE ?
             LIMIT ?
             """,
-            (f"%{term}%", f"%{term}%", f"%{term}%", limit),
+            (
+                f"%{term}%", f"%{term}%", f"%{term}%",
+                f"%{term}%", f"%{term}%", f"%{term}%", limit,
+            ),
         )
-        _print_rows(rows, ("blueprint_path", "graph_name", "title", "node_class"))
+        _print_rows(rows, ("blueprint_path", "graph_name", "operation", "symbol", "owner", "title"))
 
         print("\n[assets]")
         rows = conn.execute(

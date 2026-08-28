@@ -10,6 +10,15 @@
 #include "Engine/Blueprint.h"
 #include "Engine/SCS_Node.h"
 #include "Engine/SimpleConstructionScript.h"
+#include "K2Node_CallFunction.h"
+#include "K2Node_CustomEvent.h"
+#include "K2Node_DynamicCast.h"
+#include "K2Node_Event.h"
+#include "K2Node_IfThenElse.h"
+#include "K2Node_MacroInstance.h"
+#include "K2Node_Variable.h"
+#include "K2Node_VariableGet.h"
+#include "K2Node_VariableSet.h"
 #include "HAL/FileManager.h"
 #include "Interfaces/IPluginManager.h"
 #include "Misc/EngineVersion.h"
@@ -21,7 +30,7 @@
 
 namespace UnrealAssetTool
 {
-    static constexpr int32 SchemaVersion = 1;
+    static constexpr int32 SchemaVersion = 2;
     static constexpr int32 SourceChunkLines = 200;
 
     class FJsonlWriter
@@ -228,6 +237,160 @@ namespace UnrealAssetTool
         return FFileHelper::SaveStringToFile(JsonText, *Filename, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
     }
 
+    static void AddMemberReferenceFields(
+        FMemberReference& Reference,
+        UClass* SelfScope,
+        const TSharedRef<FJsonObject>& Semantic,
+        FString& OutSymbol,
+        FString& OutOwner)
+    {
+        OutSymbol = Reference.GetMemberName().ToString();
+        Semantic->SetStringField(TEXT("member_name"), OutSymbol);
+        Semantic->SetStringField(TEXT("member_guid"), Reference.GetMemberGuid().ToString(EGuidFormats::DigitsWithHyphensLower));
+        Semantic->SetStringField(TEXT("member_scope"), Reference.GetMemberScopeName());
+        Semantic->SetBoolField(TEXT("self_context"), Reference.IsSelfContext());
+        Semantic->SetBoolField(TEXT("local_scope"), Reference.IsLocalScope());
+
+        UClass* ParentClass = Reference.GetMemberParentClass(SelfScope);
+        if (!ParentClass)
+        {
+            ParentClass = Reference.GetScope(SelfScope);
+        }
+        OutOwner = ParentClass ? ParentClass->GetPathName() : TEXT("");
+        Semantic->SetStringField(TEXT("member_parent_class"), OutOwner);
+    }
+
+    static TSharedRef<FJsonObject> BuildNodeSemantic(
+        UBlueprint* Blueprint,
+        UEdGraphNode* Node,
+        FString& OutOperation,
+        FString& OutSymbol,
+        FString& OutOwner)
+    {
+        const TSharedRef<FJsonObject> Semantic = MakeShared<FJsonObject>();
+        OutOperation = TEXT("node");
+        OutSymbol.Reset();
+        OutOwner.Reset();
+
+        UClass* SelfScope = Blueprint
+            ? (Blueprint->SkeletonGeneratedClass ? Blueprint->SkeletonGeneratedClass : Blueprint->GeneratedClass)
+            : nullptr;
+
+        // Check the concrete variable read/write classes before the shared
+        // UK2Node_Variable base class so the operation is explicit.
+        if (UK2Node_VariableGet* VariableGet = Cast<UK2Node_VariableGet>(Node))
+        {
+            OutOperation = TEXT("variable_get");
+            AddMemberReferenceFields(VariableGet->VariableReference, SelfScope, Semantic, OutSymbol, OutOwner);
+            if (UClass* SourceClass = VariableGet->GetVariableSourceClass())
+            {
+                OutOwner = SourceClass->GetPathName();
+                Semantic->SetStringField(TEXT("variable_source_class"), OutOwner);
+            }
+        }
+        else if (UK2Node_VariableSet* VariableSet = Cast<UK2Node_VariableSet>(Node))
+        {
+            OutOperation = TEXT("variable_set");
+            AddMemberReferenceFields(VariableSet->VariableReference, SelfScope, Semantic, OutSymbol, OutOwner);
+            if (UClass* SourceClass = VariableSet->GetVariableSourceClass())
+            {
+                OutOwner = SourceClass->GetPathName();
+                Semantic->SetStringField(TEXT("variable_source_class"), OutOwner);
+            }
+        }
+        else if (UK2Node_CallFunction* Call = Cast<UK2Node_CallFunction>(Node))
+        {
+            OutOperation = TEXT("function_call");
+            AddMemberReferenceFields(Call->FunctionReference, SelfScope, Semantic, OutSymbol, OutOwner);
+            Semantic->SetBoolField(TEXT("pure"), Call->bIsPureFunc);
+            Semantic->SetBoolField(TEXT("const"), Call->bIsConstFunc);
+            Semantic->SetBoolField(TEXT("interface_call"), Call->bIsInterfaceCall);
+
+            if (UFunction* Function = Call->GetTargetFunction())
+            {
+                OutSymbol = Function->GetName();
+                if (UClass* OwnerClass = Function->GetOwnerClass())
+                {
+                    OutOwner = OwnerClass->GetPathName();
+                }
+                Semantic->SetStringField(TEXT("resolved_function"), Function->GetPathName());
+                Semantic->SetStringField(TEXT("function_name"), OutSymbol);
+                Semantic->SetStringField(TEXT("function_owner"), OutOwner);
+                Semantic->SetNumberField(TEXT("function_flags"), static_cast<double>(Function->FunctionFlags));
+                Semantic->SetBoolField(TEXT("latent"), Call->IsLatentFunction());
+            }
+        }
+        else if (UK2Node_CustomEvent* CustomEvent = Cast<UK2Node_CustomEvent>(Node))
+        {
+            OutOperation = TEXT("custom_event");
+            OutSymbol = CustomEvent->CustomFunctionName.ToString();
+            if (OutSymbol.IsEmpty())
+            {
+                AddMemberReferenceFields(CustomEvent->EventReference, SelfScope, Semantic, OutSymbol, OutOwner);
+            }
+            Semantic->SetStringField(TEXT("event_name"), OutSymbol);
+            Semantic->SetBoolField(TEXT("call_in_editor"), CustomEvent->bCallInEditor);
+            Semantic->SetBoolField(TEXT("deprecated"), CustomEvent->bIsDeprecated);
+            Semantic->SetNumberField(TEXT("function_flags"), static_cast<double>(CustomEvent->FunctionFlags));
+        }
+        else if (UK2Node_Event* Event = Cast<UK2Node_Event>(Node))
+        {
+            OutOperation = TEXT("event");
+            AddMemberReferenceFields(Event->EventReference, SelfScope, Semantic, OutSymbol, OutOwner);
+            if (OutSymbol.IsEmpty())
+            {
+                OutSymbol = Event->CustomFunctionName.ToString();
+            }
+            Semantic->SetStringField(TEXT("event_name"), OutSymbol);
+            Semantic->SetBoolField(TEXT("override_function"), Event->bOverrideFunction);
+            Semantic->SetBoolField(TEXT("internal_event"), Event->bInternalEvent);
+            Semantic->SetNumberField(TEXT("function_flags"), static_cast<double>(Event->FunctionFlags));
+        }
+        else if (UK2Node_DynamicCast* DynamicCast = Cast<UK2Node_DynamicCast>(Node))
+        {
+            OutOperation = TEXT("dynamic_cast");
+            if (UClass* TargetClass = DynamicCast->TargetType.Get())
+            {
+                OutSymbol = TargetClass->GetName();
+                OutOwner = TargetClass->GetPathName();
+                Semantic->SetStringField(TEXT("target_class"), OutOwner);
+            }
+        }
+        else if (UK2Node_MacroInstance* Macro = Cast<UK2Node_MacroInstance>(Node))
+        {
+            OutOperation = TEXT("macro_instance");
+            if (UEdGraph* MacroGraph = Macro->GetMacroGraph())
+            {
+                OutSymbol = MacroGraph->GetName();
+                Semantic->SetStringField(TEXT("macro_graph"), MacroGraph->GetPathName());
+            }
+            if (UBlueprint* SourceBlueprint = Macro->GetSourceBlueprint())
+            {
+                OutOwner = SourceBlueprint->GetPathName();
+                Semantic->SetStringField(TEXT("source_blueprint"), OutOwner);
+            }
+        }
+        else if (Cast<UK2Node_IfThenElse>(Node))
+        {
+            OutOperation = TEXT("branch");
+        }
+        else if (UK2Node_Variable* Variable = Cast<UK2Node_Variable>(Node))
+        {
+            OutOperation = TEXT("variable_reference");
+            AddMemberReferenceFields(Variable->VariableReference, SelfScope, Semantic, OutSymbol, OutOwner);
+            if (UClass* SourceClass = Variable->GetVariableSourceClass())
+            {
+                OutOwner = SourceClass->GetPathName();
+                Semantic->SetStringField(TEXT("variable_source_class"), OutOwner);
+            }
+        }
+
+        Semantic->SetStringField(TEXT("operation"), OutOperation);
+        Semantic->SetStringField(TEXT("symbol"), OutSymbol);
+        Semantic->SetStringField(TEXT("owner"), OutOwner);
+        return Semantic;
+    }
+
     static bool ScanFiles(
         const FString& ProjectDir,
         const FString& ToolPluginDir,
@@ -430,6 +593,15 @@ namespace UnrealAssetTool
                 NodeJson->SetStringField(TEXT("comment"), Node->NodeComment);
                 NodeJson->SetNumberField(TEXT("x"), Node->NodePosX);
                 NodeJson->SetNumberField(TEXT("y"), Node->NodePosY);
+
+                FString Operation;
+                FString Symbol;
+                FString Owner;
+                const TSharedRef<FJsonObject> Semantic = BuildNodeSemantic(Blueprint, Node, Operation, Symbol, Owner);
+                NodeJson->SetStringField(TEXT("operation"), Operation);
+                NodeJson->SetStringField(TEXT("symbol"), Symbol);
+                NodeJson->SetStringField(TEXT("owner"), Owner);
+                NodeJson->SetObjectField(TEXT("semantic"), Semantic);
 
                 TArray<TSharedPtr<FJsonValue>> PinsJson;
                 for (int32 PinIndex = 0; PinIndex < Node->Pins.Num(); ++PinIndex)
