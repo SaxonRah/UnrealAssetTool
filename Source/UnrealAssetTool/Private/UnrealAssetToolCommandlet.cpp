@@ -2,11 +2,33 @@
 
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
+#include "AnimationConduitGraphSchema.h"
+#include "AnimationGraph.h"
+#include "AnimationStateGraph.h"
+#include "AnimationStateMachineGraph.h"
+#include "AnimationTransitionGraph.h"
+#include "AnimGraphNode_LinkedAnimLayer.h"
+#include "AnimGraphNode_LinkedInputPose.h"
+#include "AnimGraphNode_Root.h"
+#include "AnimGraphNode_SaveCachedPose.h"
+#include "AnimGraphNode_SequencePlayer.h"
+#include "AnimGraphNode_Slot.h"
+#include "AnimGraphNode_StateMachineBase.h"
+#include "AnimGraphNode_StateResult.h"
+#include "AnimGraphNode_TransitionResult.h"
+#include "AnimGraphNode_UseCachedPose.h"
+#include "AnimStateAliasNode.h"
+#include "AnimStateConduitNode.h"
+#include "AnimStateEntryNode.h"
+#include "AnimStateNode.h"
+#include "AnimStateNodeBase.h"
+#include "AnimStateTransitionNode.h"
 #include "Dom/JsonObject.h"
 #include "EdGraph/EdGraph.h"
 #include "EdGraph/EdGraphNode.h"
 #include "EdGraph/EdGraphPin.h"
 #include "EdGraph/EdGraphSchema.h"
+#include "EdGraphNode_Comment.h"
 #include "Engine/Blueprint.h"
 #include "Engine/SCS_Node.h"
 #include "Engine/SimpleConstructionScript.h"
@@ -14,8 +36,17 @@
 #include "K2Node_CustomEvent.h"
 #include "K2Node_DynamicCast.h"
 #include "K2Node_Event.h"
+#include "K2Node_ExecutionSequence.h"
+#include "K2Node_FunctionEntry.h"
+#include "K2Node_FunctionResult.h"
 #include "K2Node_IfThenElse.h"
+#include "K2Node_Knot.h"
 #include "K2Node_MacroInstance.h"
+#include "K2Node_Select.h"
+#include "K2Node_Self.h"
+#include "K2Node_SpawnActorFromClass.h"
+#include "K2Node_Switch.h"
+#include "K2Node_Tunnel.h"
 #include "K2Node_Variable.h"
 #include "K2Node_VariableGet.h"
 #include "K2Node_VariableSet.h"
@@ -81,6 +112,7 @@ namespace UnrealAssetTool
         int64 Blueprints = 0;
         int64 BlueprintGraphs = 0;
         int64 BlueprintNodes = 0;
+        int64 BlueprintSemanticNodes = 0;
         int64 BlueprintEdges = 0;
         int64 BlueprintVariables = 0;
         int64 BlueprintComponents = 0;
@@ -196,6 +228,15 @@ namespace UnrealAssetTool
 
     static FString GraphKind(const UBlueprint* Blueprint, const UEdGraph* Graph)
     {
+        // Prefer concrete animation graph classes over the generic Blueprint
+        // graph arrays. This tells retrieval whether a graph is an AnimGraph,
+        // state machine, state body, transition rule, or conduit rule.
+        if (Graph->IsA<UAnimationStateMachineGraph>()) return TEXT("anim_state_machine");
+        if (Graph->IsA<UAnimationStateGraph>()) return TEXT("anim_state");
+        if (Graph->IsA<UAnimationTransitionGraph>()) return TEXT("anim_transition");
+        if (Graph->GetSchema() && Graph->GetSchema()->IsA<UAnimationConduitGraphSchema>()) return TEXT("anim_conduit");
+        if (Graph->IsA<UAnimationGraph>()) return TEXT("anim_graph");
+
         if (Blueprint->UbergraphPages.Contains(Graph)) return TEXT("ubergraph");
         if (Blueprint->FunctionGraphs.Contains(Graph)) return TEXT("function");
         if (Blueprint->MacroGraphs.Contains(Graph)) return TEXT("macro");
@@ -276,9 +317,232 @@ namespace UnrealAssetTool
             ? (Blueprint->SkeletonGeneratedClass ? Blueprint->SkeletonGeneratedClass : Blueprint->GeneratedClass)
             : nullptr;
 
-        // Check the concrete variable read/write classes before the shared
-        // UK2Node_Variable base class so the operation is explicit.
-        if (UK2Node_VariableGet* VariableGet = Cast<UK2Node_VariableGet>(Node))
+        const auto SetBoundGraph = [&Semantic](const TCHAR* FieldName, UEdGraph* BoundGraph)
+        {
+            Semantic->SetStringField(FieldName, BoundGraph ? BoundGraph->GetPathName() : TEXT(""));
+        };
+
+        // -----------------------------------------------------------------
+        // Animation Blueprint semantics
+        // -----------------------------------------------------------------
+        if (UAnimGraphNode_StateMachineBase* StateMachine = Cast<UAnimGraphNode_StateMachineBase>(Node))
+        {
+            OutOperation = TEXT("anim_state_machine");
+            OutSymbol = StateMachine->GetStateMachineName();
+            OutOwner = Blueprint ? Blueprint->GetPathName() : TEXT("");
+            Semantic->SetStringField(TEXT("state_machine_name"), OutSymbol);
+            SetBoundGraph(TEXT("editor_state_machine_graph"), StateMachine->EditorStateMachineGraph.Get());
+        }
+        else if (UAnimStateEntryNode* Entry = Cast<UAnimStateEntryNode>(Node))
+        {
+            OutOperation = TEXT("anim_state_entry");
+            if (UAnimStateNodeBase* TargetState = Cast<UAnimStateNodeBase>(Entry->GetOutputNode()))
+            {
+                OutSymbol = TargetState->GetStateName();
+                Semantic->SetStringField(TEXT("target_state"), OutSymbol);
+                Semantic->SetStringField(TEXT("target_node_guid"),
+                    TargetState->NodeGuid.ToString(EGuidFormats::DigitsWithHyphensLower));
+            }
+        }
+        else if (UAnimStateTransitionNode* Transition = Cast<UAnimStateTransitionNode>(Node))
+        {
+            OutOperation = TEXT("anim_transition");
+
+            UAnimStateNodeBase* PreviousState = Transition->GetPreviousState();
+            UAnimStateNodeBase* NextState = Transition->GetNextState();
+            const FString PreviousName = PreviousState ? PreviousState->GetStateName() : TEXT("");
+            const FString NextName = NextState ? NextState->GetStateName() : TEXT("");
+
+            if (!PreviousName.IsEmpty() || !NextName.IsEmpty())
+            {
+                OutSymbol = FString::Printf(TEXT("%s -> %s"), *PreviousName, *NextName);
+            }
+            OutOwner = Transition->GetGraph() ? Transition->GetGraph()->GetPathName() : TEXT("");
+
+            Semantic->SetStringField(TEXT("previous_state"), PreviousName);
+            Semantic->SetStringField(TEXT("next_state"), NextName);
+            Semantic->SetBoolField(TEXT("bidirectional"), Transition->Bidirectional);
+            Semantic->SetBoolField(TEXT("disabled"), Transition->bDisabled);
+            Semantic->SetBoolField(TEXT("automatic_rule"),
+                Transition->bAutomaticRuleBasedOnSequencePlayerInState);
+            Semantic->SetNumberField(TEXT("automatic_rule_trigger_time"),
+                Transition->AutomaticRuleTriggerTime);
+            Semantic->SetNumberField(TEXT("crossfade_duration"), Transition->CrossfadeDuration);
+            Semantic->SetNumberField(TEXT("priority_order"), Transition->PriorityOrder);
+            Semantic->SetNumberField(TEXT("logic_type"), static_cast<int32>(Transition->LogicType));
+            Semantic->SetNumberField(TEXT("min_time_before_reentry"), Transition->MinTimeBeforeReentry);
+            Semantic->SetBoolField(TEXT("only_evaluate_when_active"), Transition->bOnlyEvaluateWhenActive);
+            Semantic->SetBoolField(TEXT("allow_inertialization_for_self_transitions"),
+                Transition->bAllowInertializationForSelfTransitions);
+            Semantic->SetBoolField(TEXT("shared_rules"), Transition->bSharedRules);
+            Semantic->SetStringField(TEXT("shared_rules_name"), Transition->SharedRulesName);
+            Semantic->SetBoolField(TEXT("shared_crossfade"), Transition->bSharedCrossfade);
+            Semantic->SetStringField(TEXT("shared_crossfade_name"), Transition->SharedCrossfadeName);
+            SetBoundGraph(TEXT("rule_graph"), Transition->BoundGraph.Get());
+            SetBoundGraph(TEXT("custom_transition_graph"), Transition->CustomTransitionGraph.Get());
+        }
+        else if (UAnimStateNode* State = Cast<UAnimStateNode>(Node))
+        {
+            OutOperation = TEXT("anim_state");
+            OutSymbol = State->GetStateName();
+            OutOwner = State->GetGraph() ? State->GetGraph()->GetPathName() : TEXT("");
+            Semantic->SetStringField(TEXT("state_name"), OutSymbol);
+            Semantic->SetBoolField(TEXT("always_reset_on_entry"), State->bAlwaysResetOnEntry);
+            Semantic->SetNumberField(TEXT("state_type"), static_cast<int32>(State->StateType));
+            SetBoundGraph(TEXT("bound_graph"), State->GetBoundGraph());
+        }
+        else if (UAnimStateConduitNode* Conduit = Cast<UAnimStateConduitNode>(Node))
+        {
+            OutOperation = TEXT("anim_conduit");
+            OutSymbol = Conduit->GetStateName();
+            OutOwner = Conduit->GetGraph() ? Conduit->GetGraph()->GetPathName() : TEXT("");
+            Semantic->SetStringField(TEXT("conduit_name"), OutSymbol);
+            SetBoundGraph(TEXT("bound_graph"), Conduit->GetBoundGraph());
+        }
+        else if (UAnimStateAliasNode* Alias = Cast<UAnimStateAliasNode>(Node))
+        {
+            OutOperation = TEXT("anim_state_alias");
+            OutSymbol = Alias->StateAliasName;
+            OutOwner = Alias->GetGraph() ? Alias->GetGraph()->GetPathName() : TEXT("");
+            Semantic->SetStringField(TEXT("alias_name"), OutSymbol);
+            Semantic->SetBoolField(TEXT("global_alias"), Alias->bGlobalAlias);
+
+            TArray<TSharedPtr<FJsonValue>> AliasedStates;
+            for (const TWeakObjectPtr<UAnimStateNodeBase>& AliasedWeak : Alias->GetAliasedStates())
+            {
+                if (UAnimStateNodeBase* AliasedState = AliasedWeak.Get())
+                {
+                    AliasedStates.Add(MakeShared<FJsonValueString>(AliasedState->GetStateName()));
+                }
+            }
+            Semantic->SetArrayField(TEXT("aliased_states"), AliasedStates);
+        }
+        else if (UAnimGraphNode_SaveCachedPose* SavePose = Cast<UAnimGraphNode_SaveCachedPose>(Node))
+        {
+            OutOperation = TEXT("anim_save_cached_pose");
+            OutSymbol = SavePose->CacheName;
+            OutOwner = Blueprint ? Blueprint->GetPathName() : TEXT("");
+            Semantic->SetStringField(TEXT("cache_name"), OutSymbol);
+        }
+        else if (UAnimGraphNode_UseCachedPose* UsePose = Cast<UAnimGraphNode_UseCachedPose>(Node))
+        {
+            OutOperation = TEXT("anim_use_cached_pose");
+            OutOwner = Blueprint ? Blueprint->GetPathName() : TEXT("");
+            if (UAnimGraphNode_SaveCachedPose* SavePose = UsePose->SaveCachedPoseNode.Get())
+            {
+                OutSymbol = SavePose->CacheName;
+                Semantic->SetStringField(TEXT("cache_name"), OutSymbol);
+                Semantic->SetStringField(TEXT("save_node_guid"),
+                    SavePose->NodeGuid.ToString(EGuidFormats::DigitsWithHyphensLower));
+            }
+        }
+        else if (UAnimGraphNode_LinkedAnimLayer* LinkedLayer = Cast<UAnimGraphNode_LinkedAnimLayer>(Node))
+        {
+            OutOperation = TEXT("anim_linked_layer");
+            OutSymbol = LinkedLayer->GetLayerName().ToString();
+            OutOwner = Blueprint ? Blueprint->GetPathName() : TEXT("");
+            Semantic->SetStringField(TEXT("layer_name"), OutSymbol);
+            Semantic->SetStringField(TEXT("interface_guid"),
+                LinkedLayer->InterfaceGuid.ToString(EGuidFormats::DigitsWithHyphensLower));
+        }
+        else if (UAnimGraphNode_LinkedInputPose* LinkedInput = Cast<UAnimGraphNode_LinkedInputPose>(Node))
+        {
+            OutOperation = TEXT("anim_linked_input_pose");
+            OutSymbol = LinkedInput->Node.Name.ToString();
+            Semantic->SetStringField(TEXT("pose_name"), OutSymbol);
+            Semantic->SetNumberField(TEXT("input_pose_index"), LinkedInput->InputPoseIndex);
+
+            FString ReferenceSymbol;
+            FString ReferenceOwner;
+            AddMemberReferenceFields(
+                LinkedInput->FunctionReference,
+                SelfScope,
+                Semantic,
+                ReferenceSymbol,
+                ReferenceOwner);
+            OutOwner = ReferenceOwner;
+            Semantic->SetStringField(TEXT("function_reference_name"), ReferenceSymbol);
+        }
+        else if (UAnimGraphNode_Slot* Slot = Cast<UAnimGraphNode_Slot>(Node))
+        {
+            OutOperation = TEXT("anim_slot");
+            OutSymbol = Slot->Node.SlotName.ToString();
+            OutOwner = Blueprint ? Blueprint->GetPathName() : TEXT("");
+            Semantic->SetStringField(TEXT("slot_name"), OutSymbol);
+            Semantic->SetBoolField(TEXT("always_update_source_pose"), Slot->Node.bAlwaysUpdateSourcePose);
+        }
+        else if (UAnimGraphNode_SequencePlayer* SequencePlayer = Cast<UAnimGraphNode_SequencePlayer>(Node))
+        {
+            OutOperation = TEXT("anim_sequence_player");
+            if (UAnimationAsset* AnimationAsset = SequencePlayer->GetAnimationAsset())
+            {
+                OutSymbol = AnimationAsset->GetName();
+                Semantic->SetStringField(TEXT("animation_asset"), AnimationAsset->GetPathName());
+                Semantic->SetStringField(TEXT("animation_asset_class"),
+                    AnimationAsset->GetClass()->GetPathName());
+            }
+        }
+        else if (Cast<UAnimGraphNode_Root>(Node))
+        {
+            OutOperation = TEXT("anim_graph_root");
+        }
+        else if (Cast<UAnimGraphNode_TransitionResult>(Node))
+        {
+            OutOperation = TEXT("anim_transition_result");
+        }
+        else if (Cast<UAnimGraphNode_StateResult>(Node))
+        {
+            OutOperation = TEXT("anim_state_result");
+        }
+
+        // -----------------------------------------------------------------
+        // Generic K2 graph semantics
+        // -----------------------------------------------------------------
+        else if (UK2Node_FunctionEntry* FunctionEntry = Cast<UK2Node_FunctionEntry>(Node))
+        {
+            OutOperation = TEXT("function_entry");
+            AddMemberReferenceFields(
+                FunctionEntry->FunctionReference,
+                SelfScope,
+                Semantic,
+                OutSymbol,
+                OutOwner);
+
+            if (UFunction* SignatureFunction = FunctionEntry->FindSignatureFunction())
+            {
+                OutSymbol = SignatureFunction->GetName();
+                if (UClass* OwnerClass = SignatureFunction->GetOwnerClass())
+                {
+                    OutOwner = OwnerClass->GetPathName();
+                }
+                Semantic->SetStringField(TEXT("resolved_function"), SignatureFunction->GetPathName());
+            }
+            Semantic->SetNumberField(TEXT("function_flags"), FunctionEntry->GetFunctionFlags());
+            Semantic->SetNumberField(TEXT("local_variable_count"), FunctionEntry->LocalVariables.Num());
+            Semantic->SetStringField(TEXT("custom_generated_function_name"),
+                FunctionEntry->CustomGeneratedFunctionName.ToString());
+        }
+        else if (UK2Node_FunctionResult* FunctionResult = Cast<UK2Node_FunctionResult>(Node))
+        {
+            OutOperation = TEXT("function_result");
+            AddMemberReferenceFields(
+                FunctionResult->FunctionReference,
+                SelfScope,
+                Semantic,
+                OutSymbol,
+                OutOwner);
+
+            if (UFunction* SignatureFunction = FunctionResult->FindSignatureFunction())
+            {
+                OutSymbol = SignatureFunction->GetName();
+                if (UClass* OwnerClass = SignatureFunction->GetOwnerClass())
+                {
+                    OutOwner = OwnerClass->GetPathName();
+                }
+                Semantic->SetStringField(TEXT("resolved_function"), SignatureFunction->GetPathName());
+            }
+        }
+        else if (UK2Node_VariableGet* VariableGet = Cast<UK2Node_VariableGet>(Node))
         {
             OutOperation = TEXT("variable_get");
             AddMemberReferenceFields(VariableGet->VariableReference, SelfScope, Semantic, OutSymbol, OutOwner);
@@ -302,9 +566,15 @@ namespace UnrealAssetTool
         {
             OutOperation = TEXT("function_call");
             AddMemberReferenceFields(Call->FunctionReference, SelfScope, Semantic, OutSymbol, OutOwner);
-            Semantic->SetBoolField(TEXT("pure"), Call->bIsPureFunc);
-            Semantic->SetBoolField(TEXT("const"), Call->bIsConstFunc);
-            Semantic->SetBoolField(TEXT("interface_call"), Call->bIsInterfaceCall);
+
+            // UE 5.8 deprecates bIsPureFunc/bIsConstFunc/bIsInterfaceCall.
+            // Query the compiler-facing API and resolved reflection metadata instead.
+            Semantic->SetBoolField(TEXT("pure"), Call->IsNodePure());
+
+            UClass* ReferenceOwner = Call->FunctionReference.GetMemberParentClass(SelfScope);
+            Semantic->SetBoolField(
+                TEXT("interface_call"),
+                ReferenceOwner && ReferenceOwner->HasAnyClassFlags(CLASS_Interface));
 
             if (UFunction* Function = Call->GetTargetFunction())
             {
@@ -317,7 +587,13 @@ namespace UnrealAssetTool
                 Semantic->SetStringField(TEXT("function_name"), OutSymbol);
                 Semantic->SetStringField(TEXT("function_owner"), OutOwner);
                 Semantic->SetNumberField(TEXT("function_flags"), static_cast<double>(Function->FunctionFlags));
+                Semantic->SetBoolField(TEXT("const"), Function->HasAnyFunctionFlags(FUNC_Const));
                 Semantic->SetBoolField(TEXT("latent"), Call->IsLatentFunction());
+            }
+            else
+            {
+                Semantic->SetBoolField(TEXT("const"), false);
+                Semantic->SetBoolField(TEXT("latent"), false);
             }
         }
         else if (UK2Node_CustomEvent* CustomEvent = Cast<UK2Node_CustomEvent>(Node))
@@ -356,6 +632,21 @@ namespace UnrealAssetTool
                 Semantic->SetStringField(TEXT("target_class"), OutOwner);
             }
         }
+        else if (UK2Node_SpawnActorFromClass* SpawnActor = Cast<UK2Node_SpawnActorFromClass>(Node))
+        {
+            OutOperation = TEXT("spawn_actor");
+            if (UClass* SpawnClass = SpawnActor->GetClassToSpawn())
+            {
+                OutSymbol = SpawnClass->GetName();
+                OutOwner = SpawnClass->GetPathName();
+                Semantic->SetStringField(TEXT("spawn_class"), OutOwner);
+                Semantic->SetBoolField(TEXT("dynamic_class"), false);
+            }
+            else
+            {
+                Semantic->SetBoolField(TEXT("dynamic_class"), true);
+            }
+        }
         else if (UK2Node_MacroInstance* Macro = Cast<UK2Node_MacroInstance>(Node))
         {
             OutOperation = TEXT("macro_instance");
@@ -370,9 +661,63 @@ namespace UnrealAssetTool
                 Semantic->SetStringField(TEXT("source_blueprint"), OutOwner);
             }
         }
+        else if (UK2Node_Switch* SwitchNode = Cast<UK2Node_Switch>(Node))
+        {
+            OutOperation = TEXT("switch");
+            OutSymbol = SwitchNode->GetClass()->GetName();
+            Semantic->SetBoolField(TEXT("has_default_pin"), SwitchNode->bHasDefaultPin);
+            Semantic->SetStringField(TEXT("function_name"), SwitchNode->FunctionName.ToString());
+            if (UClass* FunctionOwner = SwitchNode->FunctionClass.Get())
+            {
+                Semantic->SetStringField(TEXT("function_class"), FunctionOwner->GetPathName());
+            }
+            if (UEdGraphPin* SelectionPin = SwitchNode->GetSelectionPin())
+            {
+                Semantic->SetObjectField(TEXT("selection_type"), PinTypeToJson(SelectionPin->PinType));
+            }
+        }
+        else if (UK2Node_Select* Select = Cast<UK2Node_Select>(Node))
+        {
+            OutOperation = TEXT("select");
+            Semantic->SetBoolField(TEXT("pure"), Select->IsNodePure());
+        }
+        else if (UK2Node_ExecutionSequence* Sequence = Cast<UK2Node_ExecutionSequence>(Node))
+        {
+            OutOperation = TEXT("execution_sequence");
+            int32 OutputExecPins = 0;
+            for (const UEdGraphPin* Pin : Sequence->Pins)
+            {
+                if (Pin && Pin->Direction == EGPD_Output && Pin->PinType.PinCategory == FName(TEXT("exec")))
+                {
+                    ++OutputExecPins;
+                }
+            }
+            Semantic->SetNumberField(TEXT("output_exec_pins"), OutputExecPins);
+        }
+        else if (Cast<UK2Node_Knot>(Node))
+        {
+            OutOperation = TEXT("reroute");
+        }
         else if (Cast<UK2Node_IfThenElse>(Node))
         {
             OutOperation = TEXT("branch");
+        }
+        else if (Cast<UK2Node_Tunnel>(Node))
+        {
+            OutOperation = TEXT("tunnel");
+        }
+        else if (Cast<UK2Node_Self>(Node))
+        {
+            OutOperation = TEXT("self");
+            OutSymbol = TEXT("self");
+            OutOwner = SelfScope ? SelfScope->GetPathName() : TEXT("");
+        }
+        else if (UEdGraphNode_Comment* Comment = Cast<UEdGraphNode_Comment>(Node))
+        {
+            OutOperation = TEXT("comment");
+            OutSymbol = Comment->NodeComment;
+            Semantic->SetStringField(TEXT("details"), Comment->NodeDetails.ToString());
+            Semantic->SetNumberField(TEXT("font_size"), Comment->FontSize);
         }
         else if (UK2Node_Variable* Variable = Cast<UK2Node_Variable>(Node))
         {
@@ -602,6 +947,10 @@ namespace UnrealAssetTool
                 NodeJson->SetStringField(TEXT("symbol"), Symbol);
                 NodeJson->SetStringField(TEXT("owner"), Owner);
                 NodeJson->SetObjectField(TEXT("semantic"), Semantic);
+                if (Operation != TEXT("node"))
+                {
+                    ++Counts.BlueprintSemanticNodes;
+                }
 
                 TArray<TSharedPtr<FJsonValue>> PinsJson;
                 for (int32 PinIndex = 0; PinIndex < Node->Pins.Num(); ++PinIndex)
@@ -881,6 +1230,7 @@ int32 UUnrealAssetToolCommandlet::Main(const FString& Params)
     CountsJson->SetNumberField(TEXT("blueprints"), static_cast<double>(Counts.Blueprints));
     CountsJson->SetNumberField(TEXT("blueprint_graphs"), static_cast<double>(Counts.BlueprintGraphs));
     CountsJson->SetNumberField(TEXT("blueprint_nodes"), static_cast<double>(Counts.BlueprintNodes));
+    CountsJson->SetNumberField(TEXT("blueprint_semantic_nodes"), static_cast<double>(Counts.BlueprintSemanticNodes));
     CountsJson->SetNumberField(TEXT("blueprint_edges"), static_cast<double>(Counts.BlueprintEdges));
     CountsJson->SetNumberField(TEXT("blueprint_variables"), static_cast<double>(Counts.BlueprintVariables));
     CountsJson->SetNumberField(TEXT("blueprint_components"), static_cast<double>(Counts.BlueprintComponents));

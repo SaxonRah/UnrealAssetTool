@@ -34,7 +34,7 @@ The primary scanner is therefore an **Editor Commandlet**. Unreal itself supplie
 
 A small Python launcher invokes the commandlet and converts the JSONL records into `uat.db` for fast retrieval.
 
-## Current MVP (0.1.5)
+## Current MVP (0.1.6)
 
 The first vertical slice indexes:
 
@@ -64,7 +64,8 @@ For Blueprint-family assets the scanner loads the real asset and records:
 - every graph;
 - every graph node, node class, title, comment, and editor position;
 - normalized semantic operation/symbol/owner fields for core K2 node types;
-- structured semantic metadata for variable accesses, calls, events, casts, macros, and branches;
+- structured semantic metadata for variable accesses, calls, events, casts, macros, branches, function boundaries, switches, selects, sequences, reroutes, self references, and actor spawning;
+- Animation Blueprint graph kinds, state machines, states, transitions, conduits, aliases, cached poses, linked layers/input poses, slots, sequence players, and graph/state/transition result nodes;
 - every pin, direction, type, defaults, and flags;
 - every pin-to-pin graph edge.
 

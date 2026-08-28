@@ -15,6 +15,7 @@ public class UnrealAssetTool : ModuleRules
 
         PrivateDependencyModuleNames.AddRange(new[]
         {
+            "AnimGraph",
             "AssetRegistry",
             "BlueprintGraph",
             "Json",

@@ -93,7 +93,7 @@ Important fields:
 - `graph_class`
 - `schema_class`
 - `node_class`
-- `operation`: normalized factual operation such as `variable_get`, `variable_set`, `function_call`, `event`, `custom_event`, `dynamic_cast`, `macro_instance`, or `branch`;
+- `operation`: normalized factual operation. Core K2 examples include `variable_get`, `variable_set`, `function_call`, `function_entry`, `function_result`, `event`, `custom_event`, `dynamic_cast`, `spawn_actor`, `macro_instance`, `switch`, `select`, `execution_sequence`, `reroute`, `branch`, `tunnel`, and `self`. AnimBP examples include `anim_state_machine`, `anim_state`, `anim_transition`, `anim_conduit`, `anim_state_alias`, `anim_state_entry`, `anim_save_cached_pose`, `anim_use_cached_pose`, `anim_linked_layer`, `anim_linked_input_pose`, `anim_slot`, `anim_sequence_player`, `anim_graph_root`, `anim_state_result`, and `anim_transition_result`;
 - `symbol`: the referenced variable/function/event/macro/type name when Unreal exposes one;
 - `owner`: the owning/source class or Blueprint when Unreal exposes one;
 - `semantic`: node-type-specific structured facts used to derive `operation`, `symbol`, and `owner`;
@@ -134,6 +134,19 @@ For example, a function-call node may contain:
 ```
 
 Unknown or specialized graph-node classes remain `operation: "node"` rather than having behavior inferred from their display title.
+
+
+### Animation Blueprint graph kinds
+
+For Animation Blueprints, `graph_kind` distinguishes the editor graph class rather than treating every nested graph as generic Blueprint logic:
+
+- `anim_graph`
+- `anim_state_machine`
+- `anim_state`
+- `anim_transition`
+- `anim_conduit`
+
+Animation state/transition node semantics include exact state names, rule graph paths, previous/next states, transition priority, crossfade duration, automatic-rule settings, shared-rule/crossfade metadata, and state reset/type settings when Unreal exposes them.
 
 ## `blueprint_edges.jsonl`
 
