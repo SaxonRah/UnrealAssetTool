@@ -1,14 +1,14 @@
 {
   "FileVersion": 3,
-  "Version": 9,
-  "VersionName": "0.1.9",
+  "Version": 10,
+  "VersionName": "0.1.10",
   "FriendlyName": "Unreal Asset Tool",
   "Description": "AI-oriented structural indexer for Unreal Engine projects.",
   "Category": "Developer Tools",
   "CreatedBy": "SaxonRah",
   "EnabledByDefault": true,
   "CanContainContent": false,
-  "IsBetaVersion": true,
+  "IsBetaVersion": false,
   "Modules": [
     {
       "Name": "UnrealAssetTool",

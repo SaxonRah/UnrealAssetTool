@@ -59,6 +59,7 @@
 #include "Misc/Paths.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
+#include "UObject/FindObjectFlags.h"
 #include "UObject/UnrealType.h"
 #include "UObject/UObjectGlobals.h"
 
@@ -2081,7 +2082,7 @@ namespace UnrealAssetTool
         }
 
         TArray<UObject*> OwnedObjects;
-        GetObjectsWithOuter(Blueprint, OwnedObjects, true);
+        GetObjectsWithOuter(Blueprint, OwnedObjects, EGetObjectsFlags::IncludeNestedObjects);
 
         for (UObject* Object : OwnedObjects)
         {
@@ -2491,6 +2492,8 @@ UUnrealAssetToolCommandlet::UUnrealAssetToolCommandlet()
 int32 UUnrealAssetToolCommandlet::Main(const FString& Params)
 {
     using namespace UnrealAssetTool;
+
+    UE_LOG(LogTemp, Display, TEXT("UnrealAssetTool: commandlet starting."));
 
     FString OutputDir;
     FParse::Value(*Params, TEXT("Output="), OutputDir);

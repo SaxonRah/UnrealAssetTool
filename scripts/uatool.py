@@ -661,6 +661,29 @@ def build_database(output: Path) -> Path:
     return db_path
 
 
+def newest_project_log(project: Path) -> Path | None:
+    logs_dir = project.parent / "Saved" / "Logs"
+    if not logs_dir.is_dir():
+        return None
+    logs = [path for path in logs_dir.glob("*.log") if path.is_file()]
+    if not logs:
+        return None
+    try:
+        return max(logs, key=lambda path: path.stat().st_mtime_ns)
+    except OSError:
+        return None
+
+
+def report_editor_failure(project: Path, returncode: int) -> None:
+    print(
+        f"ERROR: Unreal editor exited with code {returncode} before UnrealAssetTool completed.",
+        file=sys.stderr,
+    )
+    latest_log = newest_project_log(project)
+    if latest_log is not None:
+        print(f"latest Unreal log: {latest_log}", file=sys.stderr)
+
+
 def scan(args: argparse.Namespace) -> int:
     project = Path(args.project).expanduser().resolve()
     if not project.is_file() or project.suffix.lower() != ".uproject":
@@ -679,10 +702,15 @@ def scan(args: argparse.Namespace) -> int:
         str(project),
         "-run=UnrealAssetTool",
         f"-Output={output}",
+        f"-EnablePlugins={MODULE_NAME}",
         "-unattended",
+        "-RUNNINGUNATTENDEDSCRIPT",
         "-nop4",
         "-nosplash",
         "-NoShaderCompile",
+        "-stdout",
+        "-FullStdOutLogOutput",
+        "-forcelogflush",
     ]
     if args.include_generated:
         command.append("-IncludeGenerated")
@@ -694,7 +722,20 @@ def scan(args: argparse.Namespace) -> int:
     print("running:", subprocess.list2cmdline(command))
     result = subprocess.run(command, check=False)
     if result.returncode != 0:
+        report_editor_failure(project, result.returncode)
         return result.returncode
+
+    manifest_path = output / "manifest.json"
+    if not manifest_path.is_file():
+        print(
+            "ERROR: Unreal exited successfully but UnrealAssetTool did not write manifest.json. "
+            "The commandlet was not completed, so no database will be packed.",
+            file=sys.stderr,
+        )
+        latest_log = newest_project_log(project)
+        if latest_log is not None:
+            print(f"latest Unreal log: {latest_log}", file=sys.stderr)
+        return 20
 
     db_path = build_database(output)
     print(f"database: {db_path}")
