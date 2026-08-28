@@ -127,9 +127,20 @@ def editor_configuration(editor: Path) -> str:
     return "Development"
 
 
+def editor_module_configuration(editor: Path) -> str:
+    """Return the configuration used to name Editor/plugin module binaries.
+
+    DebugGame builds game modules with debug settings while Editor/plugin
+    modules retain Development-style binary names. UnrealAssetTool is an Editor
+    module, so DebugGame uses the normal unsuffixed module DLL/manifest names.
+    """
+    configuration = editor_configuration(editor)
+    return "Development" if configuration == "DebugGame" else configuration
+
+
 def expected_plugin_binary(editor: Path) -> Path:
     binaries = plugin_root() / "Binaries" / "Win64"
-    configuration = editor_configuration(editor)
+    configuration = editor_module_configuration(editor)
     if configuration == "Development":
         filename = f"UnrealEditor-{MODULE_NAME}.dll"
     else:
@@ -139,7 +150,7 @@ def expected_plugin_binary(editor: Path) -> Path:
 
 def expected_module_manifest(editor: Path) -> Path:
     binaries = plugin_root() / "Binaries" / "Win64"
-    configuration = editor_configuration(editor)
+    configuration = editor_module_configuration(editor)
     if configuration == "Development":
         filename = "UnrealEditor.modules"
     else:
