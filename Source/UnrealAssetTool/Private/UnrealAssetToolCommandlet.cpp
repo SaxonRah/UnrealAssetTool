@@ -417,15 +417,14 @@ namespace UnrealAssetTool
             return TEXT("");
         }
 
+        const void* ValuePtr = Property->ContainerPtrToValuePtr<void>(Object);
+        if (!ValuePtr)
+        {
+            return TEXT("");
+        }
+
         FString Value;
-        Property->ExportText_InContainer(
-            0,
-            Value,
-            Object,
-            nullptr,
-            Object,
-            PPF_None,
-            nullptr);
+        Property->ExportTextItem_Direct(Value, ValuePtr, nullptr, Object, PPF_None, nullptr);
         return Value;
     }
 
@@ -4986,6 +4985,14 @@ namespace UnrealAssetTool
         UObject* InstanceObject = GetStructObjectField(NodeStruct, NodeValue, TEXT("InstanceObject"));
         const FString RawNode = ExportStructFieldTextByName(NodeStruct, NodeValue, TEXT("Node"), Owner, 32768);
         const FString RawInstance = ExportStructFieldTextByName(NodeStruct, NodeValue, TEXT("Instance"), Owner, 32768);
+        const bool bEmptyNode = !InstanceObject
+            && (RawNode.IsEmpty() || RawNode == TEXT("None"))
+            && (RawInstance.IsEmpty() || RawInstance == TEXT("None"));
+        if (bEmptyNode)
+        {
+            return true;
+        }
+
         const FString NodeId = !Guid.IsEmpty()
             ? FString::Printf(TEXT("%s#node:%s"), *AssetPath, *Guid)
             : FString::Printf(TEXT("%s#%s:%s:%d"), *AssetPath, *Role, *StateId, NodeIndex);
@@ -5154,8 +5161,8 @@ namespace UnrealAssetTool
             Json->SetStringField(TEXT("statetree_path"), AssetPath);
             Json->SetNumberField(TEXT("binding_index"), Index);
             Json->SetStringField(TEXT("binding_struct"), BindingStruct->Struct->GetPathName());
-            Json->SetStringField(TEXT("source_path"), ExportStructFieldTextByName(BindingStruct->Struct, Value, TEXT("SourcePath"), EditorData));
-            Json->SetStringField(TEXT("target_path"), ExportStructFieldTextByName(BindingStruct->Struct, Value, TEXT("TargetPath"), EditorData));
+            Json->SetStringField(TEXT("source_path"), ExportStructFieldTextByName(BindingStruct->Struct, Value, TEXT("SourcePropertyPath"), EditorData));
+            Json->SetStringField(TEXT("target_path"), ExportStructFieldTextByName(BindingStruct->Struct, Value, TEXT("TargetPropertyPath"), EditorData));
             Json->SetStringField(TEXT("output_binding"), ExportStructFieldTextByName(BindingStruct->Struct, Value, TEXT("bIsOutputBinding"), EditorData));
             FString Raw;
             BindingStruct->ExportTextItem_Direct(Raw, Value, nullptr, EditorData, PPF_None, nullptr);

@@ -36,7 +36,7 @@ The primary scanner is therefore an **Editor Commandlet**. Unreal itself supplie
 
 A small Python launcher invokes the commandlet and converts the JSONL records into `uat.db` for fast retrieval.
 
-## Current milestone (0.5.0)
+## Current milestone (0.5.1)
 
 The first vertical slice indexes:
 
@@ -100,6 +100,8 @@ Schema 9 adds first-class extraction for Unreal AI authoring systems:
 - deterministic `ai_relations.jsonl` and `ai_summaries.jsonl` views tying those assets to each other and to Blueprint-backed AI nodes.
 
 The AI scanners are reflection-first and do not add hard AIModule or StateTreeEditorModule link dependencies to UnrealAssetTool.
+
+0.5.1 stabilizes the schema-9 AI layer without changing the schema: UE 5.8 StateTree property bindings use `SourcePropertyPath`/`TargetPropertyPath`, empty StateTree editor-node placeholders are ignored, Blackboard selectors resolve through parent Blackboards, direct BT `EQSRequest.QueryTemplate` values become `runs_eqs_query` relations, and generic AI references are limited to real top-level assets instead of editor/internal subobjects. Existing 0.5.0 bundles can be repaired by rerunning `derive`/`pack`; no Unreal rescan is required.
 
 ## Repository layout
 

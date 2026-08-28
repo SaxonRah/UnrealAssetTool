@@ -459,7 +459,7 @@ One record per editor transition with source state, order, trigger, target state
 
 ### `statetree_bindings.jsonl`
 
-One record per editor property binding, preserving source/target property paths and output-binding direction.
+One record per editor property binding, preserving UE 5.8 `SourcePropertyPath`/`TargetPropertyPath` values and output-binding direction. The 0.5.1 packer can recover these paths from the bounded raw record when packing a 0.5.0 capture.
 
 ### `ai_properties.jsonl`
 
@@ -467,4 +467,4 @@ Shared reflected-property stream for Behavior Tree nodes, Blackboard key-type ob
 
 ### Derived `ai_relations.jsonl` and `ai_summaries.jsonl`
 
-`uatool derive`, `pack`, and `bundle` generate reproducible AI-oriented joins including Behavior Tree -> Blackboard, ordered BT child/service edges, Blackboard inheritance/keys, EQS option/generator/test edges, StateTree hierarchy/node/transition/binding relationships, linked StateTrees, AI UObject references, and Blueprint implementations of Blueprint-backed AI nodes. `ai_summaries.jsonl` renders those facts into bounded per-asset retrieval context.
+`uatool derive`, `pack`, and `bundle` generate reproducible AI-oriented joins including Behavior Tree -> Blackboard, inherited Blackboard-key selectors, BT -> EQS query execution, ordered BT child/service edges, Blackboard inheritance/keys, EQS option/generator/test edges, StateTree hierarchy/node/transition/binding relationships, concrete StateTree `transitions_to` edges, linked StateTrees, top-level AI asset references, and Blueprint implementations of Blueprint-backed AI nodes. Empty StateTree editor-node placeholders are ignored. `ai_summaries.jsonl` renders those facts into bounded per-asset retrieval context.

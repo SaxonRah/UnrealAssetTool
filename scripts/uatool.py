@@ -2159,6 +2159,105 @@ def _ai_relation(asset_path: str, system: str, source_kind: str, source_id: str,
     }
 
 
+_EMPTY_GUID = "00000000000000000000000000000000"
+
+
+def _statetree_node_is_empty(row: dict) -> bool:
+    raw_node = str(row.get("raw_node", "") or "")
+    raw_instance = str(row.get("raw_instance", "") or "")
+    return (
+        not row.get("instance_object_path")
+        and not row.get("instance_object_class")
+        and raw_node in ("", "None")
+        and raw_instance in ("", "None")
+    )
+
+
+def _extract_unreal_assignment(text: str, field: str) -> str:
+    if not text:
+        return ""
+    needle = field + "="
+    start = text.find(needle)
+    if start < 0:
+        return ""
+    i = start + len(needle)
+    while i < len(text) and text[i].isspace():
+        i += 1
+    if i >= len(text):
+        return ""
+
+    if text[i] == '"':
+        j = i + 1
+        escaped = False
+        while j < len(text):
+            ch = text[j]
+            if ch == '"' and not escaped:
+                return text[i:j + 1]
+            if ch == "\\" and not escaped:
+                escaped = True
+            else:
+                escaped = False
+            j += 1
+        return text[i:]
+
+    if text[i] == "(":
+        depth = 0
+        in_quote = False
+        escaped = False
+        j = i
+        while j < len(text):
+            ch = text[j]
+            if in_quote:
+                if ch == '"' and not escaped:
+                    in_quote = False
+                if ch == "\\" and not escaped:
+                    escaped = True
+                else:
+                    escaped = False
+            else:
+                if ch == '"':
+                    in_quote = True
+                elif ch == "(":
+                    depth += 1
+                elif ch == ")":
+                    depth -= 1
+                    if depth == 0:
+                        return text[i:j + 1]
+            j += 1
+        return text[i:]
+
+    j = i
+    while j < len(text) and text[j] not in ",)":
+        j += 1
+    return text[i:j].strip()
+
+
+def _normalize_statetree_binding_row(row: dict) -> dict:
+    normalized = dict(row)
+    raw = str(row.get("raw_value", "") or "")
+    source = _extract_unreal_assignment(raw, "SourcePropertyPath")
+    target = _extract_unreal_assignment(raw, "TargetPropertyPath")
+    if source:
+        normalized["source_path"] = source
+    if target:
+        normalized["target_path"] = target
+    return normalized
+
+
+def _property_path_detail(path: str) -> dict:
+    struct_match = re.search(r"StructID=([0-9A-Fa-f]{32})", path or "")
+    segments = re.findall(r'(?:^|[\(,])Name="([^"]+)"', path or "")
+    return {
+        "struct_id": struct_match.group(1) if struct_match else "",
+        "segments": segments,
+    }
+
+
+def _object_path_from_export(value: str) -> str:
+    match = re.search(r"'([^']+)'", value or "")
+    return match.group(1) if match else ""
+
+
 def derive_ai_relations(output: Path) -> list[dict]:
     relations: list[dict] = []
     generated_to_bp: dict[str, str] = {}
@@ -2170,6 +2269,29 @@ def derive_ai_relations(output: Path) -> list[dict]:
     for asset in iter_jsonl(output / "assets.jsonl"):
         asset_classes[asset.get("object_path", "")] = asset.get("class_path", "")
 
+    tree_blackboard = {
+        row.get("behavior_tree_path", ""): row.get("blackboard_path", "")
+        for row in iter_jsonl(output / "behavior_trees.jsonl")
+    }
+    bb_parent = {
+        row.get("blackboard_path", ""): row.get("parent_blackboard_path", "")
+        for row in iter_jsonl(output / "blackboards.jsonl")
+    }
+    bb_key_lookup: dict[tuple[str, str], str] = {}
+    for key in iter_jsonl(output / "blackboard_keys.jsonl"):
+        bb_key_lookup[(key.get("blackboard_path", ""), key.get("name", ""))] = key.get("key_id", "")
+
+    def resolve_blackboard_key(blackboard: str, key_name: str) -> tuple[str, str]:
+        seen: set[str] = set()
+        current = blackboard
+        while current and current not in seen:
+            seen.add(current)
+            key_id = bb_key_lookup.get((current, key_name), "")
+            if key_id:
+                return key_id, current
+            current = bb_parent.get(current, "")
+        return "", ""
+
     for tree in iter_jsonl(output / "behavior_trees.jsonl"):
         asset = tree.get("behavior_tree_path", "")
         bb = tree.get("blackboard_path", "")
@@ -2178,103 +2300,181 @@ def derive_ai_relations(output: Path) -> list[dict]:
         root = tree.get("root_node_id", "")
         if root:
             relations.append(_ai_relation(asset, "behavior_tree", "behavior_tree", asset, "has_root", "behavior_tree_node", root))
+
     for edge in iter_jsonl(output / "behavior_tree_edges.jsonl"):
         asset = edge.get("behavior_tree_path", "")
-        relations.append(_ai_relation(asset, "behavior_tree", "behavior_tree_node", edge.get("source_node_id", ""),
-                                      edge.get("edge_kind", "child"), "behavior_tree_node", edge.get("target_node_id", ""),
-                                      {"child_index": edge.get("child_index", -1), "decorator_ids": edge.get("decorator_ids", []),
-                                       "decorator_logic": edge.get("decorator_logic", "")}))
+        relations.append(_ai_relation(
+            asset, "behavior_tree", "behavior_tree_node", edge.get("source_node_id", ""),
+            edge.get("edge_kind", "child"), "behavior_tree_node", edge.get("target_node_id", ""),
+            {"child_index": edge.get("child_index", -1), "decorator_ids": edge.get("decorator_ids", []),
+             "decorator_logic": edge.get("decorator_logic", "")},
+        ))
+
     for node in iter_jsonl(output / "behavior_tree_nodes.jsonl"):
         cls = node.get("class_path", "")
         bp = generated_to_bp.get(cls)
         if bp:
-            relations.append(_ai_relation(node.get("behavior_tree_path", ""), "behavior_tree", "behavior_tree_node", node.get("node_id", ""),
-                                          "implemented_by_blueprint", "blueprint", bp, {"class": cls}))
+            relations.append(_ai_relation(
+                node.get("behavior_tree_path", ""), "behavior_tree", "behavior_tree_node", node.get("node_id", ""),
+                "implemented_by_blueprint", "blueprint", bp, {"class": cls},
+            ))
+
     for bb in iter_jsonl(output / "blackboards.jsonl"):
         parent = bb.get("parent_blackboard_path", "")
         if parent:
-            relations.append(_ai_relation(bb.get("blackboard_path", ""), "blackboard", "blackboard", bb.get("blackboard_path", ""),
-                                          "inherits_blackboard", "blackboard", parent))
+            relations.append(_ai_relation(
+                bb.get("blackboard_path", ""), "blackboard", "blackboard", bb.get("blackboard_path", ""),
+                "inherits_blackboard", "blackboard", parent,
+            ))
     for key in iter_jsonl(output / "blackboard_keys.jsonl"):
-        relations.append(_ai_relation(key.get("blackboard_path", ""), "blackboard", "blackboard", key.get("blackboard_path", ""),
-                                      "declares_key", "blackboard_key", key.get("key_id", ""), {"name": key.get("name", ""), "type": key.get("key_type_class", "")}))
+        relations.append(_ai_relation(
+            key.get("blackboard_path", ""), "blackboard", "blackboard", key.get("blackboard_path", ""),
+            "declares_key", "blackboard_key", key.get("key_id", ""),
+            {"name": key.get("name", ""), "type": key.get("key_type_class", "")},
+        ))
+
     for opt in iter_jsonl(output / "eqs_options.jsonl"):
         asset = opt.get("eqs_path", "")
-        relations.append(_ai_relation(asset, "eqs", "eqs_query", asset, "has_option", "eqs_option", opt.get("option_id", ""),
-                                      {"option_index": opt.get("option_index", 0)}))
+        relations.append(_ai_relation(
+            asset, "eqs", "eqs_query", asset, "has_option", "eqs_option", opt.get("option_id", ""),
+            {"option_index": opt.get("option_index", 0)},
+        ))
         if opt.get("generator_id"):
-            relations.append(_ai_relation(asset, "eqs", "eqs_option", opt.get("option_id", ""), "uses_generator", "eqs_generator", opt.get("generator_id", "")))
+            relations.append(_ai_relation(
+                asset, "eqs", "eqs_option", opt.get("option_id", ""),
+                "uses_generator", "eqs_generator", opt.get("generator_id", ""),
+            ))
     for test in iter_jsonl(output / "eqs_tests.jsonl"):
-        relations.append(_ai_relation(test.get("eqs_path", ""), "eqs", "eqs_option", test.get("option_id", ""), "uses_test", "eqs_test", test.get("test_id", ""),
-                                      {"test_index": test.get("test_index", 0)}))
+        relations.append(_ai_relation(
+            test.get("eqs_path", ""), "eqs", "eqs_option", test.get("option_id", ""),
+            "uses_test", "eqs_test", test.get("test_id", ""), {"test_index": test.get("test_index", 0)},
+        ))
+
     for state in iter_jsonl(output / "statetree_states.jsonl"):
         asset = state.get("statetree_path", "")
         sid = state.get("state_id", "")
         parent = state.get("parent_state_id", "")
         if parent:
-            relations.append(_ai_relation(asset, "statetree", "statetree_state", parent, "has_child_state", "statetree_state", sid,
-                                          {"child_index": state.get("child_index", 0)}))
+            relations.append(_ai_relation(
+                asset, "statetree", "statetree_state", parent, "has_child_state", "statetree_state", sid,
+                {"child_index": state.get("child_index", 0)},
+            ))
         else:
-            relations.append(_ai_relation(asset, "statetree", "statetree", asset, "has_root_state", "statetree_state", sid,
-                                          {"child_index": state.get("child_index", 0)}))
+            relations.append(_ai_relation(
+                asset, "statetree", "statetree", asset, "has_root_state", "statetree_state", sid,
+                {"child_index": state.get("child_index", 0)},
+            ))
         if state.get("linked_asset"):
-            relations.append(_ai_relation(asset, "statetree", "statetree_state", sid, "links_statetree", "statetree", state.get("linked_asset", "")))
+            relations.append(_ai_relation(
+                asset, "statetree", "statetree_state", sid, "links_statetree", "statetree", state.get("linked_asset", ""),
+            ))
+
     for node in iter_jsonl(output / "statetree_nodes.jsonl"):
+        if _statetree_node_is_empty(node):
+            continue
         asset = node.get("statetree_path", "")
         sid = node.get("state_id", "")
-        relations.append(_ai_relation(asset, "statetree", "statetree_state" if sid else "statetree", sid or asset,
-                                      "has_" + node.get("role", "node"), "statetree_node", node.get("node_id", "")))
+        relations.append(_ai_relation(
+            asset, "statetree", "statetree_state" if sid else "statetree", sid or asset,
+            "has_" + node.get("role", "node"), "statetree_node", node.get("node_id", ""),
+        ))
         cls = node.get("instance_object_class", "")
         bp = generated_to_bp.get(cls)
         if bp:
-            relations.append(_ai_relation(asset, "statetree", "statetree_node", node.get("node_id", ""),
-                                          "implemented_by_blueprint", "blueprint", bp, {"class": cls}))
+            relations.append(_ai_relation(
+                asset, "statetree", "statetree_node", node.get("node_id", ""),
+                "implemented_by_blueprint", "blueprint", bp, {"class": cls},
+            ))
+
     for tr in iter_jsonl(output / "statetree_transitions.jsonl"):
-        relations.append(_ai_relation(tr.get("statetree_path", ""), "statetree", "statetree_state", tr.get("source_state_id", ""),
-                                      "has_transition", "statetree_transition", tr.get("transition_id", ""),
-                                      {"trigger": tr.get("trigger", ""), "target": tr.get("state", ""), "event_tag": tr.get("event_tag", "")}))
-    for binding in iter_jsonl(output / "statetree_bindings.jsonl"):
-        relations.append(_ai_relation(binding.get("statetree_path", ""), "statetree", "statetree", binding.get("statetree_path", ""),
-                                      "property_binding", "property_path", binding.get("target_path", ""),
-                                      {"source_path": binding.get("source_path", ""), "output_binding": binding.get("output_binding", "")}))
-    # Blackboard key selectors are structs rather than direct UObject refs; normalize the selected key name when exported.
-    tree_blackboard = {row.get("behavior_tree_path", ""): row.get("blackboard_path", "") for row in iter_jsonl(output / "behavior_trees.jsonl")}
-    bb_key_lookup: dict[tuple[str, str], str] = {}
-    for key in iter_jsonl(output / "blackboard_keys.jsonl"):
-        bb_key_lookup[(key.get("blackboard_path", ""), key.get("name", ""))] = key.get("key_id", "")
+        asset = tr.get("statetree_path", "")
+        transition_id = tr.get("transition_id", "")
+        target_spec = tr.get("state", "")
+        link_type = _extract_unreal_assignment(target_spec, "LinkType")
+        target_name = _extract_unreal_assignment(target_spec, "Name").strip('"')
+        target_state_id = _extract_unreal_assignment(target_spec, "ID")
+        relations.append(_ai_relation(
+            asset, "statetree", "statetree_state", tr.get("source_state_id", ""),
+            "has_transition", "statetree_transition", transition_id,
+            {"trigger": tr.get("trigger", ""), "target": target_spec, "target_name": target_name,
+             "target_state_id": target_state_id, "link_type": link_type, "event_tag": tr.get("event_tag", "")},
+        ))
+        if target_state_id and target_state_id != _EMPTY_GUID:
+            relations.append(_ai_relation(
+                asset, "statetree", "statetree_transition", transition_id,
+                "transitions_to", "statetree_state", target_state_id,
+                {"name": target_name, "link_type": link_type, "trigger": tr.get("trigger", "")},
+            ))
+
+    for binding_row in iter_jsonl(output / "statetree_bindings.jsonl"):
+        binding = _normalize_statetree_binding_row(binding_row)
+        source_path = binding.get("source_path", "")
+        target_path = binding.get("target_path", "")
+        source_detail = _property_path_detail(source_path)
+        target_detail = _property_path_detail(target_path)
+        relations.append(_ai_relation(
+            binding.get("statetree_path", ""), "statetree", "statetree", binding.get("statetree_path", ""),
+            "property_binding", "property_path", target_path,
+            {"source_path": source_path, "source_struct_id": source_detail["struct_id"],
+             "source_segments": source_detail["segments"], "target_struct_id": target_detail["struct_id"],
+             "target_segments": target_detail["segments"], "output_binding": binding.get("output_binding", "")},
+        ))
 
     for prop in iter_jsonl(output / "ai_properties.jsonl"):
+        asset = prop.get("asset_path", "")
         target = prop.get("object_path", "")
-        if target:
+        if target and target in asset_classes and target != asset:
             cls = asset_classes.get(target, prop.get("object_class", ""))
-            if any(token in cls for token in ("BehaviorTree", "BlackboardData", "EnvQuery", "StateTree")):
-                relations.append(_ai_relation(prop.get("asset_path", ""), prop.get("system", ""), prop.get("owner_kind", "ai_object"),
-                                              prop.get("owner_id", ""), "references_ai_asset", "ai_asset", target,
-                                              {"property": prop.get("property_name", ""), "class": cls}))
+            skip_generic = (
+                (prop.get("system") == "behavior_tree" and target == tree_blackboard.get(asset, ""))
+                or (prop.get("system") == "blackboard" and prop.get("property_name") == "Parent")
+                or prop.get("property_name") == "LinkedAsset"
+            )
+            if not skip_generic and any(token in cls for token in ("BehaviorTree", "BlackboardData", "EnvQuery", "StateTree")):
+                relations.append(_ai_relation(
+                    asset, prop.get("system", ""), prop.get("owner_kind", "ai_object"), prop.get("owner_id", ""),
+                    "references_ai_asset", "ai_asset", target,
+                    {"property": prop.get("property_name", ""), "class": cls},
+                ))
 
         if prop.get("system") == "behavior_tree":
             value = prop.get("value", "")
-            match = re.search(r'SelectedKeyName=(?:\"([^\"]+)\"|([^,\)]+))', value)
+            match = re.search(r'SelectedKeyName=(?:"([^"]+)"|([^,\)]+))', value)
             if match:
                 key_name = (match.group(1) or match.group(2) or "").strip()
-                bb = tree_blackboard.get(prop.get("asset_path", ""), "")
-                key_id = bb_key_lookup.get((bb, key_name), "")
+                bb = tree_blackboard.get(asset, "")
+                key_id, declaring_bb = resolve_blackboard_key(bb, key_name)
                 if key_id:
-                    relations.append(_ai_relation(prop.get("asset_path", ""), "behavior_tree", prop.get("owner_kind", "behavior_tree_node"),
-                                                  prop.get("owner_id", ""), "references_blackboard_key", "blackboard_key", key_id,
-                                                  {"key_name": key_name, "property": prop.get("property_name", "")}))
+                    relations.append(_ai_relation(
+                        asset, "behavior_tree", prop.get("owner_kind", "behavior_tree_node"), prop.get("owner_id", ""),
+                        "references_blackboard_key", "blackboard_key", key_id,
+                        {"key_name": key_name, "property": prop.get("property_name", ""),
+                         "declaring_blackboard": declaring_bb, "inherited": bool(declaring_bb and declaring_bb != bb)},
+                    ))
 
-    # Join Blueprint graph references/calls to AI assets so controllers/tasks can be expanded into the authored AI graph.
-    ai_asset_paths = {path for path, cls in asset_classes.items() if any(token in cls for token in ("BehaviorTree", "BlackboardData", "EnvQuery", "StateTree"))}
+            if prop.get("property_name") == "EQSRequest" or prop.get("cpp_type") == "FEQSParametrizedQueryExecutionRequest":
+                query_export = _extract_unreal_assignment(value, "QueryTemplate")
+                query_path = _object_path_from_export(query_export)
+                if query_path:
+                    relations.append(_ai_relation(
+                        asset, "behavior_tree", prop.get("owner_kind", "behavior_tree_node"), prop.get("owner_id", ""),
+                        "runs_eqs_query", "eqs_query", query_path, {"property": prop.get("property_name", "")},
+                    ))
+
+    ai_asset_paths = {
+        path for path, cls in asset_classes.items()
+        if any(token in cls for token in ("BehaviorTree", "BlackboardData", "EnvQuery", "StateTree"))
+    }
     for bp_rel in iter_jsonl(output / "blueprint_relations.jsonl"):
         target = bp_rel.get("target", "")
         if target in ai_asset_paths:
             bp = bp_rel.get("blueprint_path", "")
-            relations.append(_ai_relation(target, "cross_system", "blueprint", bp, "references_ai_asset", "ai_asset", target,
-                                          {"blueprint_relation": bp_rel.get("relation", ""), "source_id": bp_rel.get("source_id", "")}))
-    # stable de-dupe
-    return list({r["relation_id"]: r for r in relations}.values())
+            relations.append(_ai_relation(
+                target, "cross_system", "blueprint", bp, "references_ai_asset", "ai_asset", target,
+                {"blueprint_relation": bp_rel.get("relation", ""), "source_id": bp_rel.get("source_id", "")},
+            ))
 
+    return list({r["relation_id"]: r for r in relations}.values())
 
 def derive_ai_summaries(output: Path, relations: list[dict]) -> list[dict]:
     by_asset_rel: dict[str, list[dict]] = collections.defaultdict(list)
@@ -2300,7 +2500,8 @@ def derive_ai_summaries(output: Path, relations: list[dict]) -> list[dict]:
     for row in iter_jsonl(output / "statetree_states.jsonl"):
         node_counts[row.get("statetree_path", "")] += 1
     for row in iter_jsonl(output / "statetree_nodes.jsonl"):
-        node_counts[row.get("statetree_path", "")] += 1
+        if not _statetree_node_is_empty(row):
+            node_counts[row.get("statetree_path", "")] += 1
 
     summaries=[]
     for asset,(system,cls) in sorted(assets.items()):
@@ -2799,6 +3000,8 @@ def build_database(output: Path) -> Path:
                           row.get("required_event", ""), row.get("linked_asset", ""), row.get("linked_subtree", ""),
                           json.dumps(row, ensure_ascii=False, separators=(",", ":"))))
         for row in iter_jsonl(output / "statetree_nodes.jsonl"):
+            if _statetree_node_is_empty(row):
+                continue
             conn.execute("INSERT OR REPLACE INTO statetree_nodes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                          (row.get("node_id", ""), row.get("statetree_path", ""), row.get("state_id", ""), row.get("role", ""), int(row.get("node_index", 0)),
                           row.get("guid", ""), row.get("expression_indent", ""), row.get("expression_operand", ""), row.get("instance_object_path", ""),
@@ -2810,7 +3013,8 @@ def build_database(output: Path) -> Path:
                           row.get("trigger", ""), row.get("event_tag", ""), row.get("state", ""), row.get("priority", ""), row.get("fallback", ""),
                           row.get("enabled", ""), row.get("delay_enabled", ""), row.get("delay", ""), row.get("raw_value", ""),
                           json.dumps(row, ensure_ascii=False, separators=(",", ":"))))
-        for row in iter_jsonl(output / "statetree_bindings.jsonl"):
+        for binding_row in iter_jsonl(output / "statetree_bindings.jsonl"):
+            row = _normalize_statetree_binding_row(binding_row)
             conn.execute("INSERT OR REPLACE INTO statetree_bindings VALUES (?, ?, ?, ?, ?, ?, ?)",
                          (row.get("statetree_path", ""), int(row.get("binding_index", 0)), row.get("binding_struct", ""), row.get("source_path", ""),
                           row.get("target_path", ""), row.get("output_binding", ""), row.get("raw_value", "")))
