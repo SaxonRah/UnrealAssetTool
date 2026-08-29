@@ -21,6 +21,18 @@ from typing import Iterable, Iterator
 DB_NAME = "uat.db"
 MODULE_NAME = "UnrealAssetTool"
 
+WORLD_RAW_FILES = (
+    "world_manifest.json",
+    "worlds.jsonl",
+    "world_levels.jsonl",
+    "world_actors.jsonl",
+    "world_components.jsonl",
+    "world_instance_properties.jsonl",
+    "world_references.jsonl",
+    "world_data_layers.jsonl",
+    "world_partition_actor_descs.jsonl",
+)
+
 
 def iter_jsonl(path: Path) -> Iterator[dict]:
     if not path.exists():
@@ -1585,6 +1597,176 @@ def create_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX bp_edges_source_node_idx ON blueprint_edges(source_node_id);
         CREATE INDEX bp_edges_target_node_idx ON blueprint_edges(target_node_id);
         CREATE INDEX bp_edges_kind_idx ON blueprint_edges(edge_kind, pin_category);
+
+        CREATE TABLE worlds (
+            world_path TEXT PRIMARY KEY,
+            world_name TEXT NOT NULL,
+            package_name TEXT NOT NULL,
+            package_path TEXT NOT NULL,
+            persistent_level_path TEXT NOT NULL,
+            world_partitioned INTEGER NOT NULL,
+            world_partition_path TEXT NOT NULL,
+            json TEXT NOT NULL
+        );
+        CREATE INDEX worlds_package_idx ON worlds(package_name);
+        CREATE INDEX worlds_partitioned_idx ON worlds(world_partitioned);
+
+        CREATE TABLE world_levels (
+            world_path TEXT NOT NULL,
+            level_path TEXT NOT NULL,
+            level_name TEXT NOT NULL,
+            level_package TEXT NOT NULL,
+            level_kind TEXT NOT NULL,
+            streaming_owner_path TEXT NOT NULL,
+            streaming_class TEXT NOT NULL,
+            target_world_package TEXT NOT NULL,
+            json TEXT NOT NULL
+        );
+        CREATE INDEX world_levels_world_idx ON world_levels(world_path, level_kind);
+        CREATE INDEX world_levels_target_idx ON world_levels(target_world_package);
+
+        CREATE TABLE world_actors (
+            actor_path TEXT PRIMARY KEY,
+            world_path TEXT NOT NULL,
+            level_path TEXT NOT NULL,
+            actor_guid TEXT NOT NULL,
+            actor_instance_guid TEXT NOT NULL,
+            actor_name TEXT NOT NULL,
+            actor_label TEXT NOT NULL,
+            actor_class TEXT NOT NULL,
+            archetype_path TEXT NOT NULL,
+            generated_class TEXT NOT NULL,
+            blueprint_asset TEXT NOT NULL,
+            folder TEXT NOT NULL,
+            folder_guid TEXT NOT NULL,
+            attach_parent_actor_path TEXT NOT NULL,
+            attach_parent_socket TEXT NOT NULL,
+            owner_actor_path TEXT NOT NULL,
+            child_actor_parent_path TEXT NOT NULL,
+            tags_json TEXT NOT NULL,
+            transform_json TEXT NOT NULL,
+            spatially_loaded INTEGER NOT NULL,
+            runtime_grid TEXT NOT NULL,
+            data_layer_instance_names_json TEXT NOT NULL,
+            data_layer_assets_json TEXT NOT NULL,
+            json TEXT NOT NULL
+        );
+        CREATE INDEX world_actors_world_idx ON world_actors(world_path, level_path);
+        CREATE INDEX world_actors_guid_idx ON world_actors(world_path, actor_guid);
+        CREATE INDEX world_actors_class_idx ON world_actors(actor_class);
+        CREATE INDEX world_actors_blueprint_idx ON world_actors(blueprint_asset);
+        CREATE INDEX world_actors_parent_idx ON world_actors(attach_parent_actor_path);
+
+        CREATE TABLE world_components (
+            component_path TEXT PRIMARY KEY,
+            world_path TEXT NOT NULL,
+            actor_path TEXT NOT NULL,
+            component_name TEXT NOT NULL,
+            component_class TEXT NOT NULL,
+            archetype_path TEXT NOT NULL,
+            creation_method INTEGER NOT NULL,
+            tags_json TEXT NOT NULL,
+            is_scene_component INTEGER NOT NULL,
+            attach_parent_component_path TEXT NOT NULL,
+            attach_socket TEXT NOT NULL,
+            relative_transform_json TEXT NOT NULL,
+            world_transform_json TEXT NOT NULL,
+            json TEXT NOT NULL
+        );
+        CREATE INDEX world_components_actor_idx ON world_components(actor_path);
+        CREATE INDEX world_components_class_idx ON world_components(component_class);
+        CREATE INDEX world_components_parent_idx ON world_components(attach_parent_component_path);
+
+        CREATE TABLE world_instance_properties (
+            world_path TEXT NOT NULL,
+            actor_path TEXT NOT NULL,
+            owner_kind TEXT NOT NULL,
+            owner_path TEXT NOT NULL,
+            owner_class TEXT NOT NULL,
+            baseline_path TEXT NOT NULL,
+            baseline_class TEXT NOT NULL,
+            property_name TEXT NOT NULL,
+            property_path TEXT NOT NULL,
+            property_type TEXT NOT NULL,
+            cpp_type TEXT NOT NULL,
+            property_flags TEXT NOT NULL,
+            value TEXT NOT NULL,
+            baseline_value TEXT NOT NULL,
+            value_truncated INTEGER NOT NULL,
+            baseline_value_truncated INTEGER NOT NULL,
+            json TEXT NOT NULL,
+            PRIMARY KEY(owner_path, property_path)
+        );
+        CREATE INDEX world_props_actor_idx ON world_instance_properties(actor_path);
+        CREATE INDEX world_props_name_idx ON world_instance_properties(property_name);
+        CREATE INDEX world_props_owner_class_idx ON world_instance_properties(owner_class);
+
+        CREATE TABLE world_references (
+            world_path TEXT NOT NULL,
+            actor_path TEXT NOT NULL,
+            owner_kind TEXT NOT NULL,
+            owner_path TEXT NOT NULL,
+            root_property TEXT NOT NULL,
+            property_path TEXT NOT NULL,
+            reference_kind TEXT NOT NULL,
+            target_path TEXT NOT NULL,
+            target_class TEXT NOT NULL,
+            target_kind TEXT NOT NULL,
+            authored_override INTEGER NOT NULL,
+            json TEXT NOT NULL,
+            PRIMARY KEY(owner_path, property_path, reference_kind, target_path)
+        );
+        CREATE INDEX world_refs_actor_idx ON world_references(actor_path);
+        CREATE INDEX world_refs_target_idx ON world_references(target_path);
+        CREATE INDEX world_refs_kind_idx ON world_references(target_kind, reference_kind);
+
+        CREATE TABLE world_data_layers (
+            instance_path TEXT PRIMARY KEY,
+            world_path TEXT NOT NULL,
+            instance_name TEXT NOT NULL,
+            data_layer_name TEXT NOT NULL,
+            full_name TEXT NOT NULL,
+            short_name TEXT NOT NULL,
+            parent_instance_path TEXT NOT NULL,
+            runtime INTEGER NOT NULL,
+            initially_loaded_in_editor INTEGER NOT NULL,
+            initially_visible INTEGER NOT NULL,
+            asset_path TEXT NOT NULL,
+            asset_class TEXT NOT NULL,
+            json TEXT NOT NULL
+        );
+        CREATE INDEX world_data_layers_world_idx ON world_data_layers(world_path);
+        CREATE INDEX world_data_layers_parent_idx ON world_data_layers(parent_instance_path);
+        CREATE INDEX world_data_layers_asset_idx ON world_data_layers(asset_path);
+
+        CREATE TABLE world_partition_actor_descs (
+            world_path TEXT NOT NULL,
+            actor_guid TEXT NOT NULL,
+            actor_name TEXT NOT NULL,
+            actor_label TEXT NOT NULL,
+            actor_package TEXT NOT NULL,
+            actor_soft_path TEXT NOT NULL,
+            native_class TEXT NOT NULL,
+            folder TEXT NOT NULL,
+            folder_guid TEXT NOT NULL,
+            parent_actor_guid TEXT NOT NULL,
+            transform_json TEXT NOT NULL,
+            editor_bounds_json TEXT NOT NULL,
+            spatially_loaded INTEGER NOT NULL,
+            editor_only INTEGER NOT NULL,
+            runtime_only INTEGER NOT NULL,
+            hlod_relevant INTEGER NOT NULL,
+            data_layer_instance_names_json TEXT NOT NULL,
+            actor_reference_guids_json TEXT NOT NULL,
+            tags_json TEXT NOT NULL,
+            runtime_grid TEXT NOT NULL,
+            runtime_bounds_json TEXT NOT NULL,
+            json TEXT NOT NULL,
+            PRIMARY KEY(world_path, actor_guid)
+        );
+        CREATE INDEX wp_desc_package_idx ON world_partition_actor_descs(actor_package);
+        CREATE INDEX wp_desc_class_idx ON world_partition_actor_descs(native_class);
+        CREATE INDEX wp_desc_parent_idx ON world_partition_actor_descs(world_path, parent_actor_guid);
         """
     )
 
@@ -4146,6 +4328,15 @@ def build_database(output: Path) -> Path:
                     (key, json.dumps(value, ensure_ascii=False)),
                 )
 
+        world_manifest_path = output / "world_manifest.json"
+        if world_manifest_path.exists():
+            world_manifest = json.loads(world_manifest_path.read_text(encoding="utf-8"))
+            for key, value in world_manifest.items():
+                conn.execute(
+                    "INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)",
+                    (f"world.{key}", json.dumps(value, ensure_ascii=False)),
+                )
+
         for row in iter_jsonl(output / "files.jsonl"):
             conn.execute(
                 "INSERT INTO files VALUES (?, ?, ?, ?, ?, ?)",
@@ -4994,6 +5185,119 @@ def build_database(output: Path) -> Path:
                 ),
             )
 
+
+        # Schema 12 world/map canonical facts.
+        def compact_json(value) -> str:
+            return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+        for row in iter_jsonl(output / "worlds.jsonl"):
+            conn.execute(
+                "INSERT OR REPLACE INTO worlds VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    row.get("world_path", ""), row.get("world_name", ""), row.get("package_name", ""),
+                    row.get("package_path", ""), row.get("persistent_level_path", ""),
+                    1 if row.get("world_partitioned", False) else 0, row.get("world_partition_path", ""),
+                    compact_json(row),
+                ),
+            )
+
+        for row in iter_jsonl(output / "world_levels.jsonl"):
+            conn.execute(
+                "INSERT INTO world_levels VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    row.get("world_path", ""), row.get("level_path", ""), row.get("level_name", ""),
+                    row.get("level_package", ""), row.get("level_kind", ""), row.get("streaming_owner_path", ""),
+                    row.get("streaming_class", ""), row.get("target_world_package", ""), compact_json(row),
+                ),
+            )
+
+        for row in iter_jsonl(output / "world_actors.jsonl"):
+            conn.execute(
+                "INSERT OR REPLACE INTO world_actors VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    row.get("actor_path", ""), row.get("world_path", ""), row.get("level_path", ""),
+                    row.get("actor_guid", ""), row.get("actor_instance_guid", ""), row.get("actor_name", ""),
+                    row.get("actor_label", ""), row.get("actor_class", ""), row.get("archetype_path", ""),
+                    row.get("generated_class", ""), row.get("blueprint_asset", ""), row.get("folder", ""),
+                    row.get("folder_guid", ""), row.get("attach_parent_actor_path", ""), row.get("attach_parent_socket", ""),
+                    row.get("owner_actor_path", ""), row.get("child_actor_parent_path", ""),
+                    compact_json(row.get("tags", [])), compact_json(row.get("transform", {})),
+                    1 if row.get("spatially_loaded", False) else 0, row.get("runtime_grid", ""),
+                    compact_json(row.get("data_layer_instance_names", [])), compact_json(row.get("data_layer_assets", [])),
+                    compact_json(row),
+                ),
+            )
+
+        for row in iter_jsonl(output / "world_components.jsonl"):
+            conn.execute(
+                "INSERT OR REPLACE INTO world_components VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    row.get("component_path", ""), row.get("world_path", ""), row.get("actor_path", ""),
+                    row.get("component_name", ""), row.get("component_class", ""), row.get("archetype_path", ""),
+                    int(row.get("creation_method", 0)), compact_json(row.get("tags", [])),
+                    1 if row.get("is_scene_component", False) else 0, row.get("attach_parent_component_path", ""),
+                    row.get("attach_socket", ""), compact_json(row.get("relative_transform", {})),
+                    compact_json(row.get("world_transform", {})), compact_json(row),
+                ),
+            )
+
+        for row in iter_jsonl(output / "world_instance_properties.jsonl"):
+            conn.execute(
+                "INSERT OR REPLACE INTO world_instance_properties VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    row.get("world_path", ""), row.get("actor_path", ""), row.get("owner_kind", ""),
+                    row.get("owner_path", ""), row.get("owner_class", ""), row.get("baseline_path", ""),
+                    row.get("baseline_class", ""), row.get("property_name", ""), row.get("property_path", ""),
+                    row.get("property_type", ""), row.get("cpp_type", ""), str(row.get("property_flags", "")),
+                    row.get("value", ""), row.get("baseline_value", ""),
+                    1 if row.get("value_truncated", False) else 0,
+                    1 if row.get("baseline_value_truncated", False) else 0,
+                    compact_json(row),
+                ),
+            )
+
+        for row in iter_jsonl(output / "world_references.jsonl"):
+            conn.execute(
+                "INSERT OR IGNORE INTO world_references VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    row.get("world_path", ""), row.get("actor_path", ""), row.get("owner_kind", ""),
+                    row.get("owner_path", ""), row.get("root_property", ""), row.get("property_path", ""),
+                    row.get("reference_kind", ""), row.get("target_path", ""), row.get("target_class", ""),
+                    row.get("target_kind", ""), 1 if row.get("authored_override", False) else 0,
+                    compact_json(row),
+                ),
+            )
+
+        for row in iter_jsonl(output / "world_data_layers.jsonl"):
+            conn.execute(
+                "INSERT OR REPLACE INTO world_data_layers VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    row.get("instance_path", ""), row.get("world_path", ""), row.get("instance_name", ""),
+                    row.get("data_layer_name", ""), row.get("full_name", ""), row.get("short_name", ""),
+                    row.get("parent_instance_path", ""), 1 if row.get("runtime", False) else 0,
+                    1 if row.get("initially_loaded_in_editor", False) else 0,
+                    1 if row.get("initially_visible", False) else 0,
+                    row.get("asset_path", ""), row.get("asset_class", ""), compact_json(row),
+                ),
+            )
+
+        for row in iter_jsonl(output / "world_partition_actor_descs.jsonl"):
+            conn.execute(
+                "INSERT OR REPLACE INTO world_partition_actor_descs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    row.get("world_path", ""), row.get("actor_guid", ""), row.get("actor_name", ""),
+                    row.get("actor_label", ""), row.get("actor_package", ""), row.get("actor_soft_path", ""),
+                    row.get("native_class", ""), row.get("folder", ""), row.get("folder_guid", ""),
+                    row.get("parent_actor_guid", ""), compact_json(row.get("transform", {})),
+                    compact_json(row.get("editor_bounds", {})), 1 if row.get("spatially_loaded", False) else 0,
+                    1 if row.get("editor_only", False) else 0, 1 if row.get("runtime_only", False) else 0,
+                    1 if row.get("hlod_relevant", False) else 0,
+                    compact_json(row.get("data_layer_instance_names", [])),
+                    compact_json(row.get("actor_reference_guids", [])), compact_json(row.get("tags", [])),
+                    row.get("runtime_grid", ""), compact_json(row.get("runtime_bounds", {})), compact_json(row),
+                ),
+            )
+
         conn.commit()
     finally:
         conn.close()
@@ -5025,6 +5329,15 @@ def report_editor_failure(project: Path, returncode: int) -> None:
 
 DEFAULT_BUNDLE_FILES = (
     "manifest.json",
+    "world_manifest.json",
+    "worlds.jsonl",
+    "world_levels.jsonl",
+    "world_actors.jsonl",
+    "world_components.jsonl",
+    "world_instance_properties.jsonl",
+    "world_references.jsonl",
+    "world_data_layers.jsonl",
+    "world_partition_actor_descs.jsonl",
     "files.jsonl",
     "source_chunks.jsonl",
     "assets.jsonl",
@@ -5148,8 +5461,10 @@ def scan(args: argparse.Namespace) -> int:
     # A failed run must never be mistaken for a successful fresh scan simply
     # because manifest.json was left behind by an older invocation.
     manifest_path = output / "manifest.json"
-    if manifest_path.exists():
-        manifest_path.unlink()
+    world_manifest_path = output / "world_manifest.json"
+    for stale_manifest in (manifest_path, world_manifest_path):
+        if stale_manifest.exists():
+            stale_manifest.unlink()
 
     editor = require_editor(args.editor)
 
@@ -5177,6 +5492,23 @@ def scan(args: argparse.Namespace) -> int:
     if args.include_raw_rigvm_properties:
         command.append("-IncludeRawRigVMProperties")
 
+    world_command = [
+        str(editor),
+        str(project),
+        "-run=UnrealAssetToolWorld",
+        f"-Output={output}",
+        f"-EnablePlugins={MODULE_NAME}",
+        "-unattended",
+        "-RUNNINGUNATTENDEDSCRIPT",
+        "-nop4",
+        "-nosplash",
+        "-nullrhi",
+        "-NoShaderCompile",
+        "-stdout",
+        "-FullStdOutLogOutput",
+        "-forcelogflush",
+    ]
+
     with stage_invoking_plugin_checkout(project) as active_plugin_root:
         ensure_plugin_binary(
             project,
@@ -5186,11 +5518,21 @@ def scan(args: argparse.Namespace) -> int:
             active_plugin_root,
         )
 
-        print("running:", subprocess.list2cmdline(command))
+        print("running structural pass:", subprocess.list2cmdline(command))
         result = subprocess.run(command, check=False)
         if result.returncode != 0:
             report_editor_failure(project, result.returncode)
             return result.returncode
+
+        print("running world pass:", subprocess.list2cmdline(world_command))
+        world_result = subprocess.run(world_command, check=False)
+        if world_result.returncode != 0:
+            print(
+                f"ERROR: Unreal world pass exited with code {world_result.returncode}.",
+                file=sys.stderr,
+            )
+            report_editor_failure(project, world_result.returncode)
+            return world_result.returncode
 
     if not manifest_path.is_file():
         print(
@@ -5203,10 +5545,51 @@ def scan(args: argparse.Namespace) -> int:
             print(f"latest Unreal log: {latest_log}", file=sys.stderr)
         return 20
 
+    if not world_manifest_path.is_file():
+        print(
+            "ERROR: Unreal exited successfully but UnrealAssetToolWorld did not write world_manifest.json. "
+            "The world pass was not completed, so no database will be packed.",
+            file=sys.stderr,
+        )
+        latest_log = newest_project_log(project)
+        if latest_log is not None:
+            print(f"latest Unreal log: {latest_log}", file=sys.stderr)
+        return 21
+
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        world_manifest = json.loads(world_manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"ERROR: could not read schema manifests: {exc}", file=sys.stderr)
+        return 22
+
+    structural_schema = int(manifest.get("schema_version", 0) or 0)
+    world_schema = int(world_manifest.get("schema_version", 0) or 0)
+    world_structural_baseline = int(world_manifest.get("structural_schema_baseline", 0) or 0)
+    if structural_schema != 12 or world_schema != 12 or world_structural_baseline != structural_schema:
+        print(
+            "ERROR: schema-12 pass mismatch: "
+            f"structural={structural_schema} world={world_schema} "
+            f"world_structural_baseline={world_structural_baseline}",
+            file=sys.stderr,
+        )
+        return 23
+
+    manifest["world_schema_version"] = world_schema
+    manifest["world_counts"] = world_manifest.get("counts", {})
+    manifest["world_files"] = world_manifest.get("files", [])
+    manifest["world_pass"] = world_manifest.get("pass", "UnrealAssetToolWorld")
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+
     derived_counts = derive_output(output)
     print("derived:", ", ".join(f"{key}={value}" for key, value in derived_counts.items()))
     db_path = build_database(output)
     print(f"database: {db_path}")
+    bundle_path = None
     if not args.no_bundle:
         bundle_path = create_upload_bundle(
             output,
@@ -5214,6 +5597,23 @@ def scan(args: argparse.Namespace) -> int:
             include_raw_rigvm=args.bundle_include_raw_rigvm,
         )
         print(f"upload bundle: {bundle_path}")
+
+    structural_counts = manifest.get("counts", {}) if isinstance(manifest, dict) else {}
+    world_counts = world_manifest.get("counts", {}) if isinstance(world_manifest, dict) else {}
+
+    def count_line(counts: dict, names: tuple[str, ...]) -> str:
+        return " ".join(f"{name}={counts.get(name, 0)}" for name in names)
+
+    print()
+    print("=== UATOOL FINAL SUMMARY ===")
+    print("structural scan complete: " + count_line(structural_counts, ("files", "assets", "blueprints", "blueprint_graphs", "blueprint_nodes", "blueprint_pins", "blueprint_edges")))
+    print("world scan complete: " + count_line(world_counts, ("worlds", "levels", "streaming_relationships", "actors", "components", "instance_overrides", "references", "data_layers", "world_partition_worlds", "world_partition_initialized_for_scan", "world_partition_actor_descs")))
+    print("derived complete: " + count_line(derived_counts, ("blueprint_call_bindings", "blueprint_data_dependencies", "blueprint_relations", "ai_relations", "visual_relations")))
+    print(f"schemas: structural={manifest.get('schema_version', 0)} world={world_manifest.get('schema_version', 0)} derived={manifest.get('derived_schema_version', 0)}")
+    print(f"database: {db_path}")
+    if bundle_path is not None:
+        print(f"upload bundle: {bundle_path}")
+    print("============================")
     return 0
 
 

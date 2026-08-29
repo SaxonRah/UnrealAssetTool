@@ -71,7 +71,7 @@
 
 namespace UnrealAssetTool
 {
-    static constexpr int32 SchemaVersion = 11;
+    static constexpr int32 SchemaVersion = 12;
     static constexpr int32 SourceChunkLines = 200;
 
     class FJsonlWriter
@@ -218,6 +218,13 @@ namespace UnrealAssetTool
             }
         }
         return false;
+    }
+
+    static bool IsToolGeneratedPhysicalFile(const FString& RelativePath)
+    {
+        FString P = RelativePath;
+        FPaths::NormalizeFilename(P);
+        return P.EndsWith(TEXT(".uatool.zip"), ESearchCase::IgnoreCase);
     }
 
     static FString FileKind(const FString& RelativePath)
@@ -1981,6 +1988,14 @@ namespace UnrealAssetTool
             // Never index the output currently being produced, even when a custom
             // output directory name is used and IncludeGenerated is enabled.
             if (IsInsideDirectory(FullPath, OutputDir))
+            {
+                continue;
+            }
+
+            // A compact UnrealAssetTool result is scanner output, never project input.
+            // Exclude it even with -IncludeGenerated so a previous scan cannot perturb
+            // the next scan's physical-file count or source corpus.
+            if (IsToolGeneratedPhysicalFile(RelativePath))
             {
                 continue;
             }
