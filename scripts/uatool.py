@@ -127,15 +127,18 @@ def editor_configuration(editor: Path) -> str:
     return "Development"
 
 
-def editor_module_configuration(editor: Path) -> str:
-    """Return the configuration used to name Editor/plugin module binaries.
 
-    DebugGame builds game modules with debug settings while Editor/plugin
-    modules retain Development-style binary names. UnrealAssetTool is an Editor
-    module, so DebugGame uses the normal unsuffixed module DLL name. The\n    runtime manifest remains target-configuration-specific.
+def editor_module_configuration(editor: Path) -> str:
+    """Return the binary naming configuration for Editor/plugin modules.
+
+    A DebugGame Editor target keeps Editor/plugin modules in Development form,
+    so UnrealAssetTool is built as UnrealEditor-UnrealAssetTool.dll while the
+    project's game module remains DebugGame.
     """
     configuration = editor_configuration(editor)
     return "Development" if configuration == "DebugGame" else configuration
+
+
 
 
 def expected_plugin_binary(editor: Path) -> Path:
@@ -148,69 +151,59 @@ def expected_plugin_binary(editor: Path) -> Path:
     return binaries / filename
 
 
-def expected_module_manifest(editor: Path) -> Path:
-    binaries = plugin_root() / "Binaries" / "Win64"
+
+def runtime_manifest_name(editor: Path) -> str:
+    """Return the module-manifest filename consumed by the running Editor."""
     configuration = editor_configuration(editor)
     if configuration == "Development":
-        filename = "UnrealEditor.modules"
-    else:
-        filename = f"UnrealEditor-Win64-{configuration}.modules"
-    return binaries / filename
+        return "UnrealEditor.modules"
+    return f"UnrealEditor-Win64-{configuration}.modules"
 
 
-def module_manifest_binary(editor: Path) -> Path | None:
-    """Return the DLL that Unreal's manifest maps to our module, if valid."""
-    manifest = expected_module_manifest(editor)
-    if not manifest.is_file():
-        return None
-    try:
-        data = json.loads(manifest.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    modules = data.get("Modules")
-    if not isinstance(modules, dict):
-        return None
-    filename = modules.get(MODULE_NAME)
-    if not isinstance(filename, str) or not filename:
-        return None
-    binary = manifest.parent / filename
-    return binary if binary.is_file() else None
+def project_runtime_manifest(project: Path, editor: Path) -> Path:
+    return project.parent / "Binaries" / "Win64" / runtime_manifest_name(editor)
 
 
-def ensure_runtime_module_manifest(editor: Path) -> Path:
-    """Make the plugin manifest match the exact Editor executable being launched.
+def plugin_runtime_manifest(editor: Path) -> Path:
+    return plugin_root() / "Binaries" / "Win64" / runtime_manifest_name(editor)
 
-    DebugGame Editor modules use Development-style DLL names but a
-    DebugGame-specific .modules filename. The manifest BuildId must also match
-    the selected Editor's own manifest or Unreal will ignore the module.
+
+def ensure_plugin_runtime_manifest(project: Path, editor: Path) -> Path:
+    """Ensure Unreal can resolve this plugin's module for the running Editor.
+
+    DebugGame Editor processes look for UnrealEditor-Win64-DebugGame.modules
+    in project/plugin binary folders even though Editor/plugin DLLs retain
+    Development-style unsuffixed filenames. The plugin-local manifest therefore
+    uses the running target's manifest name and the target project's BuildId.
     """
-    plugin_manifest = expected_module_manifest(editor)
-    engine_manifest = editor.parent / plugin_manifest.name
+    source = project_runtime_manifest(project, editor)
+    target = plugin_runtime_manifest(editor)
     binary = expected_plugin_binary(editor)
 
+    if not source.is_file():
+        raise RuntimeError(
+            "The target project's runtime module manifest is missing.\n"
+            f"Expected: {source}\n"
+            "Build the full Editor target for this project once, then rerun the scan."
+        )
     if not binary.is_file():
         raise RuntimeError(
-            "Cannot prepare UnrealAssetTool module manifest because the module "
-            f"binary is missing:\n  {binary}"
-        )
-    if not engine_manifest.is_file():
-        raise RuntimeError(
-            "Cannot determine the selected Editor BuildId because its runtime "
-            f"module manifest is missing:\n  {engine_manifest}"
+            "Cannot prepare the UnrealAssetTool runtime manifest because its DLL is missing.\n"
+            f"Expected: {binary}"
         )
 
     try:
-        engine_data = json.loads(engine_manifest.read_text(encoding="utf-8"))
+        source_data = json.loads(source.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise RuntimeError(
-            f"Could not read selected Editor module manifest:\n  {engine_manifest}"
+            f"Could not read target runtime module manifest:\n  {source}"
         ) from exc
 
-    build_id = engine_data.get("BuildId")
+    build_id = source_data.get("BuildId")
     if not isinstance(build_id, str) or not build_id:
         raise RuntimeError(
-            "Selected Editor module manifest has no usable BuildId:\n"
-            f"  {engine_manifest}"
+            "Target runtime module manifest has no usable BuildId:\n"
+            f"  {source}"
         )
 
     desired = {
@@ -221,24 +214,24 @@ def ensure_runtime_module_manifest(editor: Path) -> Path:
     }
 
     current = None
-    if plugin_manifest.is_file():
+    if target.is_file():
         try:
-            current = json.loads(plugin_manifest.read_text(encoding="utf-8"))
+            current = json.loads(target.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             current = None
 
     if current != desired:
-        plugin_manifest.parent.mkdir(parents=True, exist_ok=True)
-        plugin_manifest.write_text(
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
             json.dumps(desired, indent=2) + "\n",
             encoding="utf-8",
         )
-        print(f"module manifest repaired: {plugin_manifest}")
+        print(f"runtime module manifest repaired: {target}")
     else:
-        print(f"module manifest ready: {plugin_manifest}")
+        print(f"runtime module manifest ready: {target}")
 
-    return plugin_manifest
-
+    print(f"runtime BuildId source: {source}")
+    return target
 
 def plugin_binary_candidates() -> list[Path]:
     binaries = plugin_root() / "Binaries" / "Win64"
@@ -273,40 +266,19 @@ def resolve_build_script(editor: Path, override: str | None) -> Path:
     return build_script
 
 
-def project_target_receipt_candidates(project: Path, editor: Path) -> list[Path]:
-    """Return the normal receipt paths for the selected Editor target/configuration."""
-    target = f"{project.stem}Editor"
-    binaries = project.parent / "Binaries" / "Win64"
-    configuration = editor_configuration(editor)
-    if configuration == "Development":
-        return [
-            binaries / f"{target}.target",
-            binaries / f"{target}-Win64-Development.target",
-        ]
-    return [binaries / f"{target}-Win64-{configuration}.target"]
-
-
-def project_target_receipt(project: Path, editor: Path) -> Path | None:
-    for candidate in project_target_receipt_candidates(project, editor):
-        if candidate.is_file():
-            return candidate
-    return None
-
 
 def build_project(project: Path, editor: Path, build_script_arg: str | None = None) -> int:
-    """Build the complete Editor target, not only the UATool module.
+    """Build target readiness first, then UnrealAssetTool explicitly.
 
-    Commandlet startup loads the project's native game/editor modules before
-    UnrealAssetTool runs. Building only -Module=UnrealAssetTool can therefore
-    produce a perfectly valid plugin DLL while leaving a Blueprint-heavy sample
-    unable to start because its small native project module/target receipt was
-    never built. A full target build is incremental, so UBT also becomes our
-    source-freshness check for UATool.
+    The full Editor target produces the project's native DebugGame modules and
+    matching runtime BuildId. The second incremental UBT invocation explicitly
+    builds UnrealAssetTool from this checkout.
     """
     build_script = resolve_build_script(editor, build_script_arg)
     target = f"{project.stem}Editor"
     configuration = editor_configuration(editor)
-    command = [
+
+    target_command = [
         str(build_script),
         f"-Target={target} Win64 {configuration}",
         f"-Project={project}",
@@ -314,68 +286,80 @@ def build_project(project: Path, editor: Path, build_script_arg: str | None = No
         "-WaitMutex",
         "-NoHotReloadFromIDE",
     ]
-    print("building:", subprocess.list2cmdline(command))
-    return subprocess.run(command, check=False).returncode
+    print("building target:", subprocess.list2cmdline(target_command))
+    result = subprocess.run(target_command, check=False).returncode
+    if result != 0:
+        return result
+
+    module_command = [
+        str(build_script),
+        f"-Target={target} Win64 {configuration}",
+        f"-Module={MODULE_NAME}",
+        f"-Project={project}",
+        f"-Plugin={plugin_descriptor()}",
+        "-WaitMutex",
+        "-NoHotReloadFromIDE",
+    ]
+    print("building module:", subprocess.list2cmdline(module_command))
+    return subprocess.run(module_command, check=False).returncode
 
 
-def ensure_plugin_binary(project: Path, editor: Path, build_script_arg: str | None, no_build: bool) -> None:
+
+
+def ensure_plugin_binary(
+    project: Path,
+    editor: Path,
+    build_script_arg: str | None,
+    no_build: bool,
+) -> None:
     configuration = editor_configuration(editor)
-    expected_binary = expected_plugin_binary(editor)
-    receipt = project_target_receipt(project, editor)
+    module_configuration = editor_module_configuration(editor)
+    expected = expected_plugin_binary(editor)
+
+    print(f"editor target configuration: {configuration}")
+    print(f"Editor-module binary configuration: {module_configuration}")
+    print(f"expected module binary: {expected}")
 
     if no_build:
-        missing = []
-        if not expected_binary.is_file():
-            missing.append(f"UATool module binary: {expected_binary}")
-        if receipt is None:
-            candidates = ", ".join(str(path) for path in project_target_receipt_candidates(project, editor))
-            missing.append(f"project Editor target receipt (expected one of: {candidates})")
-        if missing:
+        if not expected.is_file():
+            existing = plugin_binary_candidates()
+            existing_text = ""
+            if existing:
+                existing_text = (
+                    "\nModule DLLs currently present:\n"
+                    + "\n".join(f"  {path}" for path in existing)
+                )
             raise RuntimeError(
-                "The selected project/editor configuration is not ready for a no-build scan.\n"
-                f"Selected editor configuration: {configuration}\n"
-                + "\n".join(f"Missing: {item}" for item in missing)
-                + "\nRun `uatool.py build ...` first, or omit --no-build."
+                f"{MODULE_NAME} is not built for {configuration}.\n"
+                f"Expected: {expected}{existing_text}\n"
+                "Run without --no-build so UBT can build the explicit module."
             )
-        ensure_runtime_module_manifest(editor)
+        print(f"module ready: {expected}")
+        ensure_plugin_runtime_manifest(project, editor)
         return
 
-    # Always ask UBT to build the complete target. This is normally very cheap
-    # when everything is up to date, while also rebuilding stale UATool source
-    # and creating any missing project game/editor modules and target receipt.
     result = build_project(project, editor, build_script_arg)
     if result != 0:
         raise RuntimeError(f"Unreal build failed with exit code {result}")
 
-    if not expected_binary.is_file():
+    if not expected.is_file():
         existing = plugin_binary_candidates()
         existing_text = ""
         if existing:
-            existing_text = "\nModule DLLs currently present:\n" + "\n".join(f"  {path}" for path in existing)
+            existing_text = (
+                "\nModule DLLs currently present:\n"
+                + "\n".join(f"  {path}" for path in existing)
+            )
         raise RuntimeError(
-            "The full Editor target built successfully, but the exact UATool binary for the selected editor configuration is missing.\n"
-            f"Expected: {expected_binary}"
-            f"{existing_text}"
+            "UBT completed the UnrealAssetTool module build, but the expected "
+            "Editor-module binary is missing.\n"
+            f"Selected editor configuration: {configuration}\n"
+            f"Expected: {expected}{existing_text}"
         )
 
-    receipt = project_target_receipt(project, editor)
-    if receipt is None:
-        candidates = "\n".join(f"  {path}" for path in project_target_receipt_candidates(project, editor))
-        raise RuntimeError(
-            "The full Editor target built successfully, but no project target receipt was produced.\n"
-            "Expected one of:\n"
-            f"{candidates}"
-        )
+    print(f"module ready: {expected}")
+    ensure_plugin_runtime_manifest(project, editor)
 
-    ensure_runtime_module_manifest(editor)
-    manifest_binary = module_manifest_binary(editor)
-    if manifest_binary is not None:
-        print(f"module ready: {manifest_binary}")
-    else:
-        # Project targets can load project-plugin modules through the target
-        # receipt even when UBT does not emit a plugin-local .modules manifest.
-        print(f"module ready: {expected_binary}")
-    print(f"target receipt: {receipt}")
 
 def create_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(
