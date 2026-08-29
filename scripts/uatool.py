@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -51,9 +52,9 @@ def plugin_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
-def plugin_descriptor() -> Path:
-    """Return the exact UnrealAssetTool plugin descriptor for this checkout."""
-    descriptor = plugin_root() / "UnrealAssetTool.uplugin"
+def plugin_descriptor(root: Path | None = None) -> Path:
+    """Return the UnrealAssetTool descriptor for a plugin root."""
+    descriptor = (root or plugin_root()) / "UnrealAssetTool.uplugin"
     if not descriptor.is_file():
         raise FileNotFoundError(
             "UnrealAssetTool.uplugin was not found beside this launcher:\n"
@@ -63,49 +64,94 @@ def plugin_descriptor() -> Path:
 
 
 @contextmanager
-def prefer_invoking_plugin_checkout(project: Path):
-    """Hide same-named project-local UATool descriptors while this checkout runs.
+def stage_invoking_plugin_checkout(project: Path):
+    """Expose this canonical checkout to a target as a temporary project plugin.
 
-    Unreal automatically discovers every *.uplugin below <Project>/Plugins.
-    Passing -Plugin=<this checkout> adds an external plugin, but it does not
-    override an already-discovered project plugin with the same plugin name.
+    UBT reliably discovers module rules for plugins below <Project>/Plugins.
+    Rather than depending on foreign-plugin target modes, cross-project scans
+    stage only this checkout's descriptor and Source tree at the conventional
+    target-project location for the duration of build + commandlet execution.
 
-    If the target project contains an older UnrealAssetTool checkout, temporarily
-    rename only its descriptor so UBT and Unreal can discover exactly one plugin
-    named UnrealAssetTool: the checkout that owns this launcher.
+    If the target already has UnrealAssetTool plugin directories, move them
+    completely outside Plugins first and restore them byte-for-byte afterward.
+    The canonical project itself needs no staging.
     """
-    active = plugin_descriptor().resolve()
-    plugins_root = project.parent / "Plugins"
-    masked: list[tuple[Path, Path]] = []
-
-    if plugins_root.is_dir():
-        for descriptor in sorted(plugins_root.rglob(f"{MODULE_NAME}.uplugin")):
-            try:
-                resolved = descriptor.resolve()
-            except OSError:
-                resolved = descriptor.absolute()
-            if resolved == active:
-                continue
-
-            hidden = descriptor.with_name(
-                descriptor.name + f".uatool-hidden-{os.getpid()}"
-            )
-            if hidden.exists():
-                raise RuntimeError(
-                    "Cannot mask duplicate UnrealAssetTool plugin because the "
-                    f"temporary descriptor already exists:\n  {hidden}"
-                )
-            print(f"temporarily hiding duplicate project plugin: {descriptor}")
-            descriptor.rename(hidden)
-            masked.append((descriptor, hidden))
+    canonical = plugin_root().resolve()
+    project_dir = project.parent.resolve()
+    plugins_root = project_dir / "Plugins"
 
     try:
-        yield
+        canonical.relative_to(plugins_root.resolve())
+        # The invoking checkout is already a project-local plugin for this target.
+        print(f"using project-local canonical plugin: {canonical}")
+        yield canonical
+        return
+    except (ValueError, FileNotFoundError):
+        pass
+
+    plugins_root.mkdir(parents=True, exist_ok=True)
+    stage_root = plugins_root / MODULE_NAME
+    backup_root = project_dir / "Saved" / "UnrealAssetToolCrossProjectBackup" / str(os.getpid())
+    moved: list[tuple[Path, Path]] = []
+
+    # Move every existing same-named plugin directory completely outside Plugins.
+    # Renaming only the descriptor or directory inside Plugins is insufficient
+    # because UBT recursively discovers *.uplugin files below that tree.
+    descriptors = sorted(plugins_root.rglob(f"{MODULE_NAME}.uplugin"))
+    seen_roots: set[Path] = set()
+    for descriptor in descriptors:
+        plugin_dir = descriptor.parent.resolve()
+        if plugin_dir in seen_roots:
+            continue
+        seen_roots.add(plugin_dir)
+
+        relative = plugin_dir.relative_to(plugins_root.resolve())
+        backup = backup_root / relative
+        backup.parent.mkdir(parents=True, exist_ok=True)
+        if backup.exists():
+            raise RuntimeError(
+                "Cannot back up target-project UnrealAssetTool plugin because "
+                f"the temporary backup path already exists:\n  {backup}"
+            )
+        print(f"temporarily moving target plugin out of Plugins: {plugin_dir}")
+        shutil.move(str(plugin_dir), str(backup))
+        moved.append((plugin_dir, backup))
+
+    try:
+        if stage_root.exists():
+            raise RuntimeError(
+                "Cross-project staging path is unexpectedly occupied after "
+                f"duplicate-plugin backup:\n  {stage_root}"
+            )
+
+        stage_root.mkdir(parents=True, exist_ok=False)
+        shutil.copy2(canonical / "UnrealAssetTool.uplugin", stage_root / "UnrealAssetTool.uplugin")
+        shutil.copytree(canonical / "Source", stage_root / "Source")
+
+        print(f"staged canonical plugin for target: {stage_root}")
+        print(f"canonical plugin source: {canonical}")
+        yield stage_root
     finally:
-        for descriptor, hidden in reversed(masked):
-            if hidden.exists():
-                hidden.rename(descriptor)
-                print(f"restored project plugin descriptor: {descriptor}")
+        if stage_root.exists():
+            print(f"removing staged target plugin: {stage_root}")
+            shutil.rmtree(stage_root, ignore_errors=False)
+
+        for original, backup in reversed(moved):
+            if backup.exists():
+                original.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(backup), str(original))
+                print(f"restored target plugin: {original}")
+
+        if backup_root.exists():
+            # Remove only empty scaffolding created by this invocation.
+            current = backup_root
+            saved_boundary = project_dir / "Saved"
+            while current != saved_boundary and current.exists():
+                try:
+                    current.rmdir()
+                except OSError:
+                    break
+                current = current.parent
 
 
 def editor_configuration(editor: Path) -> str:
@@ -141,17 +187,6 @@ def editor_module_configuration(editor: Path) -> str:
 
 
 
-def expected_plugin_binary(editor: Path) -> Path:
-    binaries = plugin_root() / "Binaries" / "Win64"
-    configuration = editor_module_configuration(editor)
-    if configuration == "Development":
-        filename = f"UnrealEditor-{MODULE_NAME}.dll"
-    else:
-        filename = f"UnrealEditor-{MODULE_NAME}-Win64-{configuration}.dll"
-    return binaries / filename
-
-
-
 def runtime_manifest_name(editor: Path) -> str:
     """Return the module-manifest filename consumed by the running Editor."""
     configuration = editor_configuration(editor)
@@ -164,32 +199,100 @@ def project_runtime_manifest(project: Path, editor: Path) -> Path:
     return project.parent / "Binaries" / "Win64" / runtime_manifest_name(editor)
 
 
-def plugin_runtime_manifest(editor: Path) -> Path:
-    return plugin_root() / "Binaries" / "Win64" / runtime_manifest_name(editor)
+def plugin_runtime_manifest(editor: Path, root: Path | None = None) -> Path:
+    return (root or plugin_root()) / "Binaries" / "Win64" / runtime_manifest_name(editor)
 
 
-def ensure_plugin_runtime_manifest(project: Path, editor: Path) -> Path:
-    """Ensure Unreal can resolve this plugin's module for the running Editor.
+def plugin_binary_candidates(root: Path | None = None) -> list[Path]:
+    binaries = (root or plugin_root()) / "Binaries" / "Win64"
+    if not binaries.is_dir():
+        return []
+    return sorted(
+        path
+        for path in binaries.glob(f"UnrealEditor-{MODULE_NAME}*.dll")
+        if path.is_file()
+    )
 
-    DebugGame Editor processes look for UnrealEditor-Win64-DebugGame.modules
-    in project/plugin binary folders even though Editor/plugin DLLs retain
-    Development-style unsuffixed filenames. The plugin-local manifest therefore
-    uses the running target's manifest name and the target project's BuildId.
+
+def _module_from_manifest(manifest: Path, root: Path) -> Path | None:
+    """Resolve UnrealAssetTool's DLL exactly as Unreal recorded it."""
+    if not manifest.is_file():
+        return None
+    try:
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    modules = data.get("Modules")
+    if not isinstance(modules, dict):
+        return None
+
+    filename = modules.get(MODULE_NAME)
+    if not isinstance(filename, str) or not filename:
+        return None
+
+    candidate = root / "Binaries" / "Win64" / filename
+    return candidate if candidate.is_file() else None
+
+
+def resolve_plugin_binary(project: Path, editor: Path, root: Path | None = None) -> Path:
+    """Return the DLL UBT actually produced for UnrealAssetTool.
+
+    Do not infer DebugGame plugin-module naming. UE 5.8 can emit either the
+    unsuffixed Editor-module form or a Win64-DebugGame-suffixed form depending
+    on how the plugin participates in the target. Generated module manifests
+    are authoritative.
     """
+    root = (root or plugin_root()).resolve()
+
+    plugin_manifest = plugin_runtime_manifest(editor, root)
+    from_plugin_manifest = _module_from_manifest(plugin_manifest, root)
+    if from_plugin_manifest is not None:
+        print(f"module resolved from plugin manifest: {from_plugin_manifest}")
+        return from_plugin_manifest
+
+    project_manifest = project_runtime_manifest(project, editor)
+    from_project_manifest = _module_from_manifest(project_manifest, root)
+    if from_project_manifest is not None:
+        print(f"module resolved from project manifest: {from_project_manifest}")
+        return from_project_manifest
+
+    candidates = plugin_binary_candidates(root)
+    if len(candidates) == 1:
+        print(f"module resolved from unique UBT output: {candidates[0]}")
+        return candidates[0]
+
+    if not candidates:
+        raise RuntimeError(
+            "UBT completed, but no UnrealAssetTool Editor DLL was found under:\n"
+            f"  {root / 'Binaries' / 'Win64'}"
+        )
+
+    candidate_text = "\n".join(f"  {path}" for path in candidates)
+    raise RuntimeError(
+        "UBT produced multiple UnrealAssetTool DLLs and no generated module "
+        "manifest identified which one the running Editor should load.\n"
+        f"Candidates:\n{candidate_text}"
+    )
+
+
+def ensure_plugin_runtime_manifest(
+    project: Path,
+    editor: Path,
+    root: Path | None = None,
+    binary: Path | None = None,
+) -> Path:
+    """Make the staged/local plugin manifest agree with target BuildId + real DLL."""
+    root = (root or plugin_root()).resolve()
     source = project_runtime_manifest(project, editor)
-    target = plugin_runtime_manifest(editor)
-    binary = expected_plugin_binary(editor)
+    target = plugin_runtime_manifest(editor, root)
+    binary = binary or resolve_plugin_binary(project, editor, root)
 
     if not source.is_file():
         raise RuntimeError(
             "The target project's runtime module manifest is missing.\n"
             f"Expected: {source}\n"
             "Build the full Editor target for this project once, then rerun the scan."
-        )
-    if not binary.is_file():
-        raise RuntimeError(
-            "Cannot prepare the UnrealAssetTool runtime manifest because its DLL is missing.\n"
-            f"Expected: {binary}"
         )
 
     try:
@@ -230,14 +333,9 @@ def ensure_plugin_runtime_manifest(project: Path, editor: Path) -> Path:
     else:
         print(f"runtime module manifest ready: {target}")
 
+    print(f"runtime module DLL: {binary.name}")
     print(f"runtime BuildId source: {source}")
     return target
-
-def plugin_binary_candidates() -> list[Path]:
-    binaries = plugin_root() / "Binaries" / "Win64"
-    if not binaries.is_dir():
-        return []
-    return sorted(binaries.glob(f"*{MODULE_NAME}*.dll"))
 
 
 def resolve_build_script(editor: Path, override: str | None) -> Path:
@@ -267,7 +365,12 @@ def resolve_build_script(editor: Path, override: str | None) -> Path:
 
 
 
-def build_project(project: Path, editor: Path, build_script_arg: str | None = None) -> int:
+def build_project(
+    project: Path,
+    editor: Path,
+    build_script_arg: str | None = None,
+    active_plugin_root: Path | None = None,
+) -> int:
     """Build target readiness first, then UnrealAssetTool explicitly.
 
     The full Editor target produces the project's native DebugGame modules and
@@ -282,7 +385,6 @@ def build_project(project: Path, editor: Path, build_script_arg: str | None = No
         str(build_script),
         f"-Target={target} Win64 {configuration}",
         f"-Project={project}",
-        f"-Plugin={plugin_descriptor()}",
         "-WaitMutex",
         "-NoHotReloadFromIDE",
     ]
@@ -296,7 +398,6 @@ def build_project(project: Path, editor: Path, build_script_arg: str | None = No
         f"-Target={target} Win64 {configuration}",
         f"-Module={MODULE_NAME}",
         f"-Project={project}",
-        f"-Plugin={plugin_descriptor()}",
         "-WaitMutex",
         "-NoHotReloadFromIDE",
     ]
@@ -311,54 +412,37 @@ def ensure_plugin_binary(
     editor: Path,
     build_script_arg: str | None,
     no_build: bool,
-) -> None:
+    active_plugin_root: Path | None = None,
+) -> Path:
     configuration = editor_configuration(editor)
-    module_configuration = editor_module_configuration(editor)
-    expected = expected_plugin_binary(editor)
+    active_plugin_root = (active_plugin_root or plugin_root()).resolve()
 
     print(f"editor target configuration: {configuration}")
-    print(f"Editor-module binary configuration: {module_configuration}")
-    print(f"expected module binary: {expected}")
+    print(f"active plugin root: {active_plugin_root}")
 
-    if no_build:
-        if not expected.is_file():
-            existing = plugin_binary_candidates()
-            existing_text = ""
-            if existing:
-                existing_text = (
-                    "\nModule DLLs currently present:\n"
-                    + "\n".join(f"  {path}" for path in existing)
-                )
+    if not no_build:
+        result = build_project(project, editor, build_script_arg, active_plugin_root)
+        if result != 0:
+            raise RuntimeError(f"Unreal build failed with exit code {result}")
+
+    try:
+        binary = resolve_plugin_binary(project, editor, active_plugin_root)
+    except RuntimeError:
+        if no_build:
             raise RuntimeError(
-                f"{MODULE_NAME} is not built for {configuration}.\n"
-                f"Expected: {expected}{existing_text}\n"
-                "Run without --no-build so UBT can build the explicit module."
+                f"{MODULE_NAME} is not built for the selected target.\n"
+                "Run without --no-build so UBT can build the staged/project-local module."
             )
-        print(f"module ready: {expected}")
-        ensure_plugin_runtime_manifest(project, editor)
-        return
+        raise
 
-    result = build_project(project, editor, build_script_arg)
-    if result != 0:
-        raise RuntimeError(f"Unreal build failed with exit code {result}")
-
-    if not expected.is_file():
-        existing = plugin_binary_candidates()
-        existing_text = ""
-        if existing:
-            existing_text = (
-                "\nModule DLLs currently present:\n"
-                + "\n".join(f"  {path}" for path in existing)
-            )
-        raise RuntimeError(
-            "UBT completed the UnrealAssetTool module build, but the expected "
-            "Editor-module binary is missing.\n"
-            f"Selected editor configuration: {configuration}\n"
-            f"Expected: {expected}{existing_text}"
-        )
-
-    print(f"module ready: {expected}")
-    ensure_plugin_runtime_manifest(project, editor)
+    print(f"module ready: {binary}")
+    ensure_plugin_runtime_manifest(
+        project,
+        editor,
+        active_plugin_root,
+        binary,
+    )
+    return binary
 
 
 def create_schema(conn: sqlite3.Connection) -> None:
@@ -5073,7 +5157,6 @@ def scan(args: argparse.Namespace) -> int:
         str(editor),
         str(project),
         "-run=UnrealAssetTool",
-        f"-Plugin={plugin_descriptor()}",
         f"-Output={output}",
         f"-EnablePlugins={MODULE_NAME}",
         "-unattended",
@@ -5094,8 +5177,14 @@ def scan(args: argparse.Namespace) -> int:
     if args.include_raw_rigvm_properties:
         command.append("-IncludeRawRigVMProperties")
 
-    with prefer_invoking_plugin_checkout(project):
-        ensure_plugin_binary(project, editor, args.build_script, args.no_build)
+    with stage_invoking_plugin_checkout(project) as active_plugin_root:
+        ensure_plugin_binary(
+            project,
+            editor,
+            args.build_script,
+            args.no_build,
+            active_plugin_root,
+        )
 
         print("running:", subprocess.list2cmdline(command))
         result = subprocess.run(command, check=False)
@@ -5133,8 +5222,8 @@ def build(args: argparse.Namespace) -> int:
     if not project.is_file() or project.suffix.lower() != ".uproject":
         raise FileNotFoundError(f"Not a .uproject file: {project}")
     editor = require_editor(args.editor)
-    with prefer_invoking_plugin_checkout(project):
-        return build_project(project, editor, args.build_script)
+    with stage_invoking_plugin_checkout(project) as active_plugin_root:
+        return build_project(project, editor, args.build_script, active_plugin_root)
 
 
 def pack(args: argparse.Namespace) -> int:
