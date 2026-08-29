@@ -1106,6 +1106,11 @@ def create_schema(conn: sqlite3.Connection) -> None:
             function_flags INTEGER NOT NULL,
             has_exec INTEGER NOT NULL,
             pure_shape INTEGER NOT NULL,
+            blueprint_pure INTEGER NOT NULL,
+            const_function INTEGER NOT NULL,
+            blueprint_callable INTEGER NOT NULL,
+            static_function INTEGER NOT NULL,
+            event_function INTEGER NOT NULL,
             result_node_count INTEGER NOT NULL,
             inputs_json TEXT NOT NULL,
             outputs_json TEXT NOT NULL,
@@ -1114,6 +1119,138 @@ def create_schema(conn: sqlite3.Connection) -> None:
         );
         CREATE INDEX bp_functions_blueprint_idx ON blueprint_functions(blueprint_path, name);
         CREATE INDEX bp_functions_resolved_idx ON blueprint_functions(resolved_function);
+
+        CREATE TABLE blueprint_call_edges (
+            call_id TEXT PRIMARY KEY,
+            blueprint_path TEXT NOT NULL,
+            graph_id TEXT NOT NULL,
+            graph_name TEXT NOT NULL,
+            caller_function_id TEXT NOT NULL,
+            call_node_id TEXT NOT NULL,
+            target_function TEXT NOT NULL,
+            target_name TEXT NOT NULL,
+            target_owner TEXT NOT NULL,
+            target_blueprint_path TEXT NOT NULL,
+            target_function_id TEXT NOT NULL,
+            resolution TEXT NOT NULL,
+            candidate_count INTEGER NOT NULL,
+            candidate_function_ids_json TEXT NOT NULL,
+            pure INTEGER NOT NULL,
+            const_function INTEGER NOT NULL,
+            latent INTEGER NOT NULL,
+            interface_call INTEGER NOT NULL,
+            function_flags INTEGER NOT NULL,
+            json TEXT NOT NULL
+        );
+        CREATE INDEX bp_call_edges_caller_idx ON blueprint_call_edges(blueprint_path, caller_function_id);
+        CREATE INDEX bp_call_edges_target_idx ON blueprint_call_edges(target_blueprint_path, target_function_id);
+        CREATE INDEX bp_call_edges_resolution_idx ON blueprint_call_edges(resolution, target_name);
+
+        CREATE TABLE blueprint_execution_blocks (
+            block_id TEXT PRIMARY KEY,
+            blueprint_path TEXT NOT NULL,
+            graph_id TEXT NOT NULL,
+            graph_name TEXT NOT NULL,
+            block_index INTEGER NOT NULL,
+            entry_node_id TEXT NOT NULL,
+            exit_node_id TEXT NOT NULL,
+            node_count INTEGER NOT NULL,
+            node_ids_json TEXT NOT NULL,
+            operations_json TEXT NOT NULL,
+            labels_json TEXT NOT NULL,
+            text TEXT NOT NULL,
+            json TEXT NOT NULL
+        );
+        CREATE INDEX bp_exec_blocks_graph_idx ON blueprint_execution_blocks(graph_id, block_index);
+
+        CREATE TABLE blueprint_execution_block_edges (
+            edge_id TEXT PRIMARY KEY,
+            blueprint_path TEXT NOT NULL,
+            graph_id TEXT NOT NULL,
+            source_block_id TEXT NOT NULL,
+            target_block_id TEXT NOT NULL,
+            source_node_id TEXT NOT NULL,
+            target_node_id TEXT NOT NULL,
+            source_pin_name TEXT NOT NULL,
+            target_pin_name TEXT NOT NULL,
+            json TEXT NOT NULL
+        );
+        CREATE INDEX bp_exec_block_edges_source_idx ON blueprint_execution_block_edges(source_block_id);
+        CREATE INDEX bp_exec_block_edges_target_idx ON blueprint_execution_block_edges(target_block_id);
+
+        CREATE TABLE blueprint_execution_roots (
+            root_id TEXT PRIMARY KEY,
+            blueprint_path TEXT NOT NULL,
+            graph_id TEXT NOT NULL,
+            graph_name TEXT NOT NULL,
+            root_node_id TEXT NOT NULL,
+            root_kind TEXT NOT NULL,
+            root_name TEXT NOT NULL,
+            block_id TEXT NOT NULL,
+            json TEXT NOT NULL
+        );
+        CREATE INDEX bp_exec_roots_graph_idx ON blueprint_execution_roots(graph_id, root_kind);
+
+        CREATE TABLE anim_state_machines (
+            machine_id TEXT PRIMARY KEY,
+            blueprint_path TEXT NOT NULL,
+            host_graph_id TEXT NOT NULL,
+            host_graph_name TEXT NOT NULL,
+            name TEXT NOT NULL,
+            editor_graph_path TEXT NOT NULL,
+            machine_graph_id TEXT NOT NULL,
+            entry_node_id TEXT NOT NULL,
+            entry_state TEXT NOT NULL,
+            entry_state_id TEXT NOT NULL,
+            state_count INTEGER NOT NULL,
+            transition_count INTEGER NOT NULL,
+            json TEXT NOT NULL
+        );
+        CREATE INDEX anim_state_machines_bp_idx ON anim_state_machines(blueprint_path, name);
+
+        CREATE TABLE anim_states (
+            state_id TEXT PRIMARY KEY,
+            blueprint_path TEXT NOT NULL,
+            machine_graph_id TEXT NOT NULL,
+            machine_name TEXT NOT NULL,
+            state_kind TEXT NOT NULL,
+            name TEXT NOT NULL,
+            bound_graph TEXT NOT NULL,
+            always_reset_on_entry INTEGER NOT NULL,
+            state_type INTEGER NOT NULL,
+            global_alias INTEGER NOT NULL,
+            aliased_states_json TEXT NOT NULL,
+            json TEXT NOT NULL
+        );
+        CREATE INDEX anim_states_machine_idx ON anim_states(machine_graph_id, state_kind, name);
+
+        CREATE TABLE anim_transitions (
+            transition_id TEXT PRIMARY KEY,
+            blueprint_path TEXT NOT NULL,
+            machine_graph_id TEXT NOT NULL,
+            machine_name TEXT NOT NULL,
+            previous_state TEXT NOT NULL,
+            previous_state_id TEXT NOT NULL,
+            next_state TEXT NOT NULL,
+            next_state_id TEXT NOT NULL,
+            bidirectional INTEGER NOT NULL,
+            disabled INTEGER NOT NULL,
+            automatic_rule INTEGER NOT NULL,
+            automatic_rule_trigger_time REAL NOT NULL,
+            crossfade_duration REAL NOT NULL,
+            priority_order INTEGER NOT NULL,
+            logic_type INTEGER NOT NULL,
+            min_time_before_reentry REAL NOT NULL,
+            only_evaluate_when_active INTEGER NOT NULL,
+            shared_rules INTEGER NOT NULL,
+            shared_rules_name TEXT NOT NULL,
+            shared_crossfade INTEGER NOT NULL,
+            shared_crossfade_name TEXT NOT NULL,
+            rule_graph TEXT NOT NULL,
+            custom_transition_graph TEXT NOT NULL,
+            json TEXT NOT NULL
+        );
+        CREATE INDEX anim_transitions_machine_idx ON anim_transitions(machine_graph_id, previous_state, next_state);
 
         CREATE TABLE blueprint_events (
             event_id TEXT PRIMARY KEY,
@@ -1421,7 +1558,7 @@ def iter_blueprint_pin_rows(output: Path) -> Iterator[dict]:
 
 
 
-DERIVED_SCHEMA_VERSION = 4
+DERIVED_SCHEMA_VERSION = 5
 
 
 def _write_jsonl(path: Path, rows: Iterable[dict]) -> int:
@@ -1757,6 +1894,7 @@ def derive_blueprint_functions(output: Path) -> list[dict]:
         locals_value = entry_sem.get("local_variables", [])
         locals_list = locals_value if isinstance(locals_value, list) else []
         name = str(entry.get("symbol", "") or graph.get("graph_name", ""))
+        function_flags = int(entry_sem.get("function_flags", 0) or 0)
         rows.append({
             "function_id": gid,
             "blueprint_path": graph.get("blueprint_path", ""),
@@ -1768,9 +1906,17 @@ def derive_blueprint_functions(output: Path) -> list[dict]:
             "name": name,
             "owner": entry.get("owner", ""),
             "resolved_function": entry_sem.get("resolved_function", ""),
-            "function_flags": int(entry_sem.get("function_flags", 0) or 0),
+            "function_flags": function_flags,
             "has_exec": has_exec,
+            # UE keeps exec pins on function entry/result nodes even for
+            # BlueprintPure functions. Preserve the structural fact separately
+            # from the authoritative UFunction flags.
             "pure_shape": not has_exec,
+            "blueprint_pure": bool(function_flags & 0x10000000),
+            "const_function": bool(function_flags & 0x40000000),
+            "blueprint_callable": bool(function_flags & 0x04000000),
+            "static_function": bool(function_flags & 0x00002000),
+            "event_function": bool(function_flags & 0x08000000),
             "entry_node_id": entry.get("node_id", ""),
             "result_node_ids": [n.get("node_id", "") for n in results],
             "result_node_count": len(results),
@@ -1867,6 +2013,362 @@ def derive_blueprint_events(output: Path) -> list[dict]:
             "override_parent_binding": _property_value(props, "bOverrideParentBinding"),
         })
     return rows
+
+def _blueprint_object_path_from_class_path(class_path: str) -> str:
+    """Best-effort conversion from generated/skeleton class path to Blueprint object path."""
+    if not class_path or not class_path.startswith("/Game/") or "." not in class_path:
+        return ""
+    package, obj = class_path.rsplit(".", 1)
+    if obj.startswith("SKEL_"):
+        obj = obj[5:]
+    elif obj.startswith("REINST_"):
+        obj = obj[7:]
+        obj = re.sub(r"_C_\\d+$", "_C", obj)
+    if obj.endswith("_C"):
+        obj = obj[:-2]
+    return f"{package}.{obj}"
+
+
+def derive_blueprint_call_edges(output: Path, functions: list[dict]) -> list[dict]:
+    """Resolve Blueprint function-call nodes to local definitions where possible.
+
+    Function paths can legitimately collide for interface implementations and
+    overrides.  We therefore preserve all candidates and only report a unique
+    internal target when the owning Blueprint can be resolved unambiguously.
+    """
+    by_resolved: dict[str, list[dict]] = collections.defaultdict(list)
+    by_bp_name: dict[tuple[str, str], list[dict]] = collections.defaultdict(list)
+    caller_by_graph = {row.get("graph_id", ""): row for row in functions}
+    for row in functions:
+        resolved = str(row.get("resolved_function", ""))
+        if resolved:
+            by_resolved[resolved].append(row)
+        by_bp_name[(str(row.get("blueprint_path", "")), str(row.get("name", "")))].append(row)
+
+    rows: list[dict] = []
+    for node in iter_jsonl(output / "blueprint_nodes.jsonl"):
+        if node.get("operation") != "function_call":
+            continue
+        sem = node.get("semantic", {}) if isinstance(node.get("semantic"), dict) else {}
+        resolved = str(sem.get("resolved_function", ""))
+        target_name = str(sem.get("function_name", "") or node.get("symbol", ""))
+        target_owner = str(sem.get("function_owner", "") or node.get("owner", ""))
+        target_bp = _blueprint_object_path_from_class_path(target_owner)
+
+        candidates = list(by_resolved.get(resolved, [])) if resolved else []
+        if target_bp:
+            owner_candidates = [row for row in candidates if row.get("blueprint_path") == target_bp]
+            if owner_candidates:
+                candidates = owner_candidates
+            elif not candidates:
+                candidates = list(by_bp_name.get((target_bp, target_name), []))
+
+        unique = candidates[0] if len(candidates) == 1 else None
+        if unique:
+            resolution = "internal"
+        elif candidates:
+            resolution = "ambiguous_internal"
+        elif resolved:
+            resolution = "external"
+        else:
+            resolution = "unresolved"
+
+        caller = caller_by_graph.get(node.get("graph_id", ""))
+        candidate_ids = [str(row.get("function_id", "")) for row in candidates]
+        rows.append({
+            "call_id": node.get("node_id", ""),
+            "blueprint_path": node.get("blueprint_path", ""),
+            "graph_id": node.get("graph_id", ""),
+            "graph_name": node.get("graph_name", ""),
+            "caller_function_id": caller.get("function_id", "") if caller else "",
+            "call_node_id": node.get("node_id", ""),
+            "target_function": resolved,
+            "target_name": target_name,
+            "target_owner": target_owner,
+            "target_blueprint_path": unique.get("blueprint_path", "") if unique else target_bp,
+            "target_function_id": unique.get("function_id", "") if unique else "",
+            "resolution": resolution,
+            "candidate_count": len(candidates),
+            "candidate_function_ids": candidate_ids,
+            "pure": bool(sem.get("pure", False)),
+            "const_function": bool(sem.get("const", False)),
+            "latent": bool(sem.get("latent", False)),
+            "interface_call": bool(sem.get("interface_call", False)),
+            "function_flags": int(sem.get("function_flags", 0) or 0),
+        })
+    return rows
+
+
+def derive_blueprint_execution_program(
+    output: Path,
+    functions: list[dict],
+    events: list[dict],
+) -> tuple[list[dict], list[dict], list[dict]]:
+    """Collapse raw exec-pin wiring into deterministic Blueprint basic blocks."""
+    nodes: dict[str, dict] = {}
+    nodes_by_graph: dict[str, list[str]] = collections.defaultdict(list)
+    for node in iter_jsonl(output / "blueprint_nodes.jsonl"):
+        node_id = str(node.get("node_id", ""))
+        if not node_id:
+            continue
+        nodes[node_id] = node
+        nodes_by_graph[str(node.get("graph_id", ""))].append(node_id)
+
+    exec_edges_by_graph: dict[str, list[dict]] = collections.defaultdict(list)
+    incoming: dict[str, list[dict]] = collections.defaultdict(list)
+    outgoing: dict[str, list[dict]] = collections.defaultdict(list)
+    for edge in iter_jsonl(output / "blueprint_edges.jsonl"):
+        if edge.get("edge_kind") != "execution":
+            continue
+        gid = str(edge.get("graph_id", ""))
+        exec_edges_by_graph[gid].append(edge)
+        incoming[str(edge.get("target_node_id", ""))].append(edge)
+        outgoing[str(edge.get("source_node_id", ""))].append(edge)
+
+    root_meta: dict[str, tuple[str, str]] = {}
+    for fn in functions:
+        nid = str(fn.get("entry_node_id", ""))
+        if nid:
+            root_meta[nid] = ("pure_function" if fn.get("blueprint_pure", False) else "function", str(fn.get("name", "")))
+    for event in events:
+        nid = str(event.get("event_id", ""))
+        if nid:
+            root_meta[nid] = (str(event.get("event_kind", "event")), str(event.get("name", "")))
+
+    block_rows: list[dict] = []
+    edge_rows: list[dict] = []
+    root_rows: list[dict] = []
+
+    program_graph_ids = set(exec_edges_by_graph)
+    for root_node in root_meta:
+        root_graph = str(nodes.get(root_node, {}).get("graph_id", ""))
+        if root_graph:
+            program_graph_ids.add(root_graph)
+
+    for graph_id in sorted(program_graph_ids):
+        graph_edges = exec_edges_by_graph.get(graph_id, [])
+        exec_nodes: set[str] = set()
+        for edge in graph_edges:
+            exec_nodes.add(str(edge.get("source_node_id", "")))
+            exec_nodes.add(str(edge.get("target_node_id", "")))
+        graph_roots = sorted(nid for nid in root_meta if nodes.get(nid, {}).get("graph_id") == graph_id)
+        exec_nodes.update(graph_roots)
+        if not exec_nodes:
+            continue
+
+        starts: set[str] = set(graph_roots)
+        for nid in exec_nodes:
+            preds = incoming.get(nid, [])
+            if len(preds) != 1:
+                starts.add(nid)
+                continue
+            pred = str(preds[0].get("source_node_id", ""))
+            if len(outgoing.get(pred, [])) != 1:
+                starts.add(nid)
+
+        block_for_node: dict[str, str] = {}
+        blocks: list[tuple[str, list[str]]] = []
+
+        def build_block(start: str) -> None:
+            if start in block_for_node:
+                return
+            members: list[str] = []
+            local_seen: set[str] = set()
+            current = start
+            while current and current not in block_for_node and current not in local_seen:
+                local_seen.add(current)
+                members.append(current)
+                outs = outgoing.get(current, [])
+                if len(outs) != 1:
+                    break
+                nxt = str(outs[0].get("target_node_id", ""))
+                if not nxt or nxt in starts or len(incoming.get(nxt, [])) != 1:
+                    break
+                current = nxt
+            digest = hashlib.sha1(f"{graph_id}|{start}".encode("utf-8")).hexdigest()[:20]
+            block_id = f"block:{digest}"
+            for nid in members:
+                block_for_node[nid] = block_id
+            blocks.append((block_id, members))
+
+        for start in sorted(starts):
+            build_block(start)
+        # Closed cycles can have no natural start. Seed remaining nodes
+        # deterministically so every executable node belongs to exactly one block.
+        for nid in sorted(exec_nodes):
+            build_block(nid)
+
+        block_index = {bid: i for i, (bid, _) in enumerate(blocks)}
+        for block_id, members in blocks:
+            first_node = nodes.get(members[0], {}) if members else {}
+            last_node = nodes.get(members[-1], {}) if members else {}
+            ops = [str(nodes.get(nid, {}).get("operation", "")) for nid in members]
+            labels = [str(nodes.get(nid, {}).get("symbol", "") or nodes.get(nid, {}).get("title", "")) for nid in members]
+            block_rows.append({
+                "block_id": block_id,
+                "blueprint_path": first_node.get("blueprint_path", ""),
+                "graph_id": graph_id,
+                "graph_name": first_node.get("graph_name", ""),
+                "block_index": block_index[block_id],
+                "entry_node_id": members[0] if members else "",
+                "exit_node_id": members[-1] if members else "",
+                "node_count": len(members),
+                "node_ids": members,
+                "operations": ops,
+                "labels": labels,
+                "text": " -> ".join(f"{op}:{label}" if label else op for op, label in zip(ops, labels)),
+            })
+
+        seen_block_edges: set[tuple[str, str, str, str]] = set()
+        for edge in graph_edges:
+            source_node = str(edge.get("source_node_id", ""))
+            target_node = str(edge.get("target_node_id", ""))
+            source_block = block_for_node.get(source_node, "")
+            target_block = block_for_node.get(target_node, "")
+            if not source_block or not target_block or source_block == target_block:
+                continue
+            key = (source_block, target_block, str(edge.get("source_pin_name", "")), str(edge.get("target_pin_name", "")))
+            if key in seen_block_edges:
+                continue
+            seen_block_edges.add(key)
+            digest = hashlib.sha1(("|".join(key)).encode("utf-8")).hexdigest()[:20]
+            source = nodes.get(source_node, {})
+            edge_rows.append({
+                "edge_id": f"block_edge:{digest}",
+                "blueprint_path": source.get("blueprint_path", ""),
+                "graph_id": graph_id,
+                "source_block_id": source_block,
+                "target_block_id": target_block,
+                "source_node_id": source_node,
+                "target_node_id": target_node,
+                "source_pin_name": edge.get("source_pin_name", ""),
+                "target_pin_name": edge.get("target_pin_name", ""),
+            })
+
+        for root_node in graph_roots:
+            root_kind, root_name = root_meta[root_node]
+            block_id = block_for_node.get(root_node, "")
+            digest = hashlib.sha1(f"{graph_id}|{root_node}".encode("utf-8")).hexdigest()[:20]
+            node = nodes.get(root_node, {})
+            root_rows.append({
+                "root_id": f"exec_root:{digest}",
+                "blueprint_path": node.get("blueprint_path", ""),
+                "graph_id": graph_id,
+                "graph_name": node.get("graph_name", ""),
+                "root_node_id": root_node,
+                "root_kind": root_kind,
+                "root_name": root_name,
+                "block_id": block_id,
+            })
+
+    return block_rows, edge_rows, root_rows
+
+
+def derive_anim_state_machines(output: Path) -> tuple[list[dict], list[dict], list[dict]]:
+    """Normalize AnimBP state machines, states/aliases/conduits, and transitions."""
+    graphs = list(iter_blueprint_graph_rows(output))
+    graph_by_path = {str(g.get("graph_path", "")): g for g in graphs}
+    nodes = list(iter_jsonl(output / "blueprint_nodes.jsonl"))
+    nodes_by_graph: dict[str, list[dict]] = collections.defaultdict(list)
+    for node in nodes:
+        nodes_by_graph[str(node.get("graph_id", ""))].append(node)
+
+    machine_rows: list[dict] = []
+    state_rows: list[dict] = []
+    transition_rows: list[dict] = []
+    state_id_by_graph_name: dict[tuple[str, str], str] = {}
+
+    state_ops = {"anim_state": "state", "anim_conduit": "conduit", "anim_state_alias": "alias"}
+    for node in nodes:
+        op = str(node.get("operation", ""))
+        if op not in state_ops:
+            continue
+        sem = node.get("semantic", {}) if isinstance(node.get("semantic"), dict) else {}
+        if op == "anim_state":
+            name = str(sem.get("state_name", "") or node.get("symbol", ""))
+            bound_graph = str(sem.get("bound_graph", ""))
+        elif op == "anim_conduit":
+            name = str(sem.get("conduit_name", "") or node.get("symbol", ""))
+            bound_graph = str(sem.get("bound_graph", ""))
+        else:
+            name = str(sem.get("alias_name", "") or node.get("symbol", ""))
+            bound_graph = ""
+        state_id = str(node.get("node_id", ""))
+        state_id_by_graph_name[(str(node.get("graph_id", "")), name)] = state_id
+        state_rows.append({
+            "state_id": state_id,
+            "blueprint_path": node.get("blueprint_path", ""),
+            "machine_graph_id": node.get("graph_id", ""),
+            "machine_name": node.get("graph_name", ""),
+            "state_kind": state_ops[op],
+            "name": name,
+            "bound_graph": bound_graph,
+            "always_reset_on_entry": bool(sem.get("always_reset_on_entry", False)),
+            "state_type": int(sem.get("state_type", 0) or 0),
+            "global_alias": bool(sem.get("global_alias", False)),
+            "aliased_states": sem.get("aliased_states", []) if isinstance(sem.get("aliased_states", []), list) else [],
+        })
+
+    for node in nodes:
+        if node.get("operation") != "anim_transition":
+            continue
+        sem = node.get("semantic", {}) if isinstance(node.get("semantic"), dict) else {}
+        graph_id = str(node.get("graph_id", ""))
+        previous = str(sem.get("previous_state", ""))
+        nxt = str(sem.get("next_state", ""))
+        transition_rows.append({
+            "transition_id": node.get("node_id", ""),
+            "blueprint_path": node.get("blueprint_path", ""),
+            "machine_graph_id": graph_id,
+            "machine_name": node.get("graph_name", ""),
+            "previous_state": previous,
+            "previous_state_id": state_id_by_graph_name.get((graph_id, previous), ""),
+            "next_state": nxt,
+            "next_state_id": state_id_by_graph_name.get((graph_id, nxt), ""),
+            "bidirectional": bool(sem.get("bidirectional", False)),
+            "disabled": bool(sem.get("disabled", False)),
+            "automatic_rule": bool(sem.get("automatic_rule", False)),
+            "automatic_rule_trigger_time": sem.get("automatic_rule_trigger_time", -1),
+            "crossfade_duration": sem.get("crossfade_duration", 0),
+            "priority_order": int(sem.get("priority_order", 0) or 0),
+            "logic_type": int(sem.get("logic_type", 0) or 0),
+            "min_time_before_reentry": sem.get("min_time_before_reentry", -1),
+            "only_evaluate_when_active": bool(sem.get("only_evaluate_when_active", False)),
+            "shared_rules": bool(sem.get("shared_rules", False)),
+            "shared_rules_name": sem.get("shared_rules_name", ""),
+            "shared_crossfade": bool(sem.get("shared_crossfade", False)),
+            "shared_crossfade_name": sem.get("shared_crossfade_name", ""),
+            "rule_graph": sem.get("rule_graph", ""),
+            "custom_transition_graph": sem.get("custom_transition_graph", ""),
+        })
+
+    for node in nodes:
+        if node.get("operation") != "anim_state_machine":
+            continue
+        sem = node.get("semantic", {}) if isinstance(node.get("semantic"), dict) else {}
+        editor_graph = str(sem.get("editor_state_machine_graph", ""))
+        machine_graph = graph_by_path.get(editor_graph, {})
+        machine_graph_id = str(machine_graph.get("graph_id", ""))
+        entry_nodes = [n for n in nodes_by_graph.get(machine_graph_id, []) if n.get("operation") == "anim_state_entry"]
+        entry = entry_nodes[0] if entry_nodes else {}
+        entry_sem = entry.get("semantic", {}) if isinstance(entry.get("semantic"), dict) else {}
+        entry_name = str(entry_sem.get("target_state", "") or entry.get("symbol", ""))
+        machine_rows.append({
+            "machine_id": node.get("node_id", ""),
+            "blueprint_path": node.get("blueprint_path", ""),
+            "host_graph_id": node.get("graph_id", ""),
+            "host_graph_name": node.get("graph_name", ""),
+            "name": sem.get("state_machine_name", "") or node.get("symbol", ""),
+            "editor_graph_path": editor_graph,
+            "machine_graph_id": machine_graph_id,
+            "entry_node_id": entry.get("node_id", ""),
+            "entry_state": entry_name,
+            "entry_state_id": state_id_by_graph_name.get((machine_graph_id, entry_name), ""),
+            "state_count": sum(1 for r in state_rows if r.get("machine_graph_id") == machine_graph_id),
+            "transition_count": sum(1 for r in transition_rows if r.get("machine_graph_id") == machine_graph_id),
+        })
+
+    return machine_rows, state_rows, transition_rows
 
 def _relation_id(parts: tuple[str, ...]) -> str:
     digest = hashlib.sha1("\x1f".join(parts).encode("utf-8")).hexdigest()[:20]
@@ -2271,6 +2773,9 @@ def derive_blueprint_summaries(
         rel_by_bp[rel.get("blueprint_path", "")][rel.get("relation", "")] += 1
 
     function_counts = collections.Counter(row.get("blueprint_path", "") for row in (functions or []))
+    pure_function_counts = collections.Counter(
+        row.get("blueprint_path", "") for row in (functions or []) if row.get("blueprint_pure", False)
+    )
     event_counts = collections.Counter(row.get("blueprint_path", "") for row in (events or []))
     stream_counts: dict[str, collections.Counter] = {}
     for filename, key in (
@@ -2306,7 +2811,7 @@ def derive_blueprint_summaries(
             f"Variables ({len(variables)}): {', '.join(variables[:80])}",
             f"Components ({len(components)}): {', '.join(components[:80])}",
             f"Interfaces ({len(interfaces)}): {', '.join(interfaces[:40])}",
-            f"Functions: {function_counts[path]} | Events: {event_counts[path]} | Defaults: {stream_counts['default_count'][path]} | Component overrides: {stream_counts['component_override_count'][path]}",
+            f"Functions: {function_counts[path]} ({pure_function_counts[path]} pure) | Events: {event_counts[path]} | Defaults: {stream_counts['default_count'][path]} | Component overrides: {stream_counts['component_override_count'][path]}",
             f"Timelines: {stream_counts['timeline_count'][path]} ({stream_counts['timeline_key_count'][path]} keys) | Widgets: {stream_counts['widget_count'][path]} ({stream_counts['widget_property_count'][path]} changed properties)",
             "Graphs: " + ", ".join(f"{g.get('graph_name','')}[{g.get('graph_system','')}/{g.get('graph_kind','')}]" for g in graphs[:120]),
             "Operations: " + ", ".join(f"{k}={v}" for k, v in op_counts.most_common(60)),
@@ -2793,7 +3298,12 @@ def derive_visual(output: Path) -> tuple[list[dict], list[dict], list[dict], lis
             target = generated_to_bp.get(raw_target,raw_target)
             target_cls=classes.get(target, classes.get(raw_target, p.get("object_class","") if raw_target == obj else ""))
             if target_cls == "/Script/PCG.PCGGraph":
-                add("pcg",asset,p.get("owner_kind","pcg_object"),owner,"uses_subgraph","pcg_graph",target,{"property":prop})
+                # Reflected PCG node/settings objects retain ownership pointers
+                # back to their containing graph (InputPins, OutputPins,
+                # SettingsInterface, Nodes, etc.). Those are not subgraph uses.
+                # Only a reference to a *different* PCG graph is a subgraph edge.
+                if target != asset or "subgraph" in prop.lower():
+                    add("pcg",asset,p.get("owner_kind","pcg_object"),owner,"uses_subgraph","pcg_graph",target,{"property":prop})
             elif target in generated_to_bp.values() or raw_target in generated_to_bp:
                 add("pcg",asset,p.get("owner_kind","pcg_object"),owner,"uses_blueprint","blueprint",target,{"property":prop})
             elif target_cls.startswith("/Script/Engine.Material"):
@@ -2904,6 +3414,9 @@ def derive_output(output: Path) -> dict[str, int]:
     rigvm_links = derive_rigvm_editor_links(output)
     functions = derive_blueprint_functions(output)
     events = derive_blueprint_events(output)
+    call_edges = derive_blueprint_call_edges(output, functions)
+    execution_blocks, execution_block_edges, execution_roots = derive_blueprint_execution_program(output, functions, events)
+    anim_state_machines, anim_states, anim_transitions = derive_anim_state_machines(output)
     relations = derive_blueprint_relations(output, rigvm_links, functions, events)
     graph_context = derive_graph_context(output, rigvm_links, functions, events)
     summaries = derive_blueprint_summaries(output, relations, functions, events)
@@ -2914,6 +3427,13 @@ def derive_output(output: Path) -> dict[str, int]:
         "rigvm_editor_links": _write_jsonl(output / "rigvm_editor_links.jsonl", rigvm_links),
         "blueprint_functions": _write_jsonl(output / "blueprint_functions.jsonl", functions),
         "blueprint_events": _write_jsonl(output / "blueprint_events.jsonl", events),
+        "blueprint_call_edges": _write_jsonl(output / "blueprint_call_edges.jsonl", call_edges),
+        "blueprint_execution_blocks": _write_jsonl(output / "blueprint_execution_blocks.jsonl", execution_blocks),
+        "blueprint_execution_block_edges": _write_jsonl(output / "blueprint_execution_block_edges.jsonl", execution_block_edges),
+        "blueprint_execution_roots": _write_jsonl(output / "blueprint_execution_roots.jsonl", execution_roots),
+        "anim_state_machines": _write_jsonl(output / "anim_state_machines.jsonl", anim_state_machines),
+        "anim_states": _write_jsonl(output / "anim_states.jsonl", anim_states),
+        "anim_transitions": _write_jsonl(output / "anim_transitions.jsonl", anim_transitions),
         "blueprint_relations": _write_jsonl(output / "blueprint_relations.jsonl", relations),
         "blueprint_graph_context": _write_jsonl(output / "blueprint_graph_context.jsonl", graph_context),
         "blueprint_summaries": _write_jsonl(output / "blueprint_summaries.jsonl", summaries),
@@ -3488,12 +4008,17 @@ def build_database(output: Path) -> Path:
 
         for row in iter_jsonl(output / "blueprint_functions.jsonl"):
             conn.execute(
-                "INSERT OR REPLACE INTO blueprint_functions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT OR REPLACE INTO blueprint_functions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     row.get("function_id", ""), row.get("blueprint_path", ""), row.get("graph_id", ""),
                     row.get("graph_name", ""), row.get("graph_path", ""), row.get("name", ""), row.get("owner", ""),
                     row.get("resolved_function", ""), int(row.get("function_flags", 0)),
                     1 if row.get("has_exec", False) else 0, 1 if row.get("pure_shape", False) else 0,
+                    1 if row.get("blueprint_pure", False) else 0,
+                    1 if row.get("const_function", False) else 0,
+                    1 if row.get("blueprint_callable", False) else 0,
+                    1 if row.get("static_function", False) else 0,
+                    1 if row.get("event_function", False) else 0,
                     int(row.get("result_node_count", 0)),
                     json.dumps(row.get("inputs", []), ensure_ascii=False, separators=(",", ":")),
                     json.dumps(row.get("outputs", []), ensure_ascii=False, separators=(",", ":")),
@@ -3512,6 +4037,96 @@ def build_database(output: Path) -> Path:
                     row.get("component_name", ""), row.get("delegate_name", ""), row.get("delegate_owner", ""),
                     row.get("input_name", ""),
                     json.dumps(row.get("parameters", []), ensure_ascii=False, separators=(",", ":")),
+                    json.dumps(row, ensure_ascii=False, separators=(",", ":")),
+                ),
+            )
+
+        for row in iter_jsonl(output / "blueprint_call_edges.jsonl"):
+            conn.execute(
+                "INSERT OR REPLACE INTO blueprint_call_edges VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    row.get("call_id", ""), row.get("blueprint_path", ""), row.get("graph_id", ""), row.get("graph_name", ""),
+                    row.get("caller_function_id", ""), row.get("call_node_id", ""), row.get("target_function", ""),
+                    row.get("target_name", ""), row.get("target_owner", ""), row.get("target_blueprint_path", ""),
+                    row.get("target_function_id", ""), row.get("resolution", ""), int(row.get("candidate_count", 0)),
+                    json.dumps(row.get("candidate_function_ids", []), ensure_ascii=False, separators=(",", ":")),
+                    1 if row.get("pure", False) else 0, 1 if row.get("const_function", False) else 0,
+                    1 if row.get("latent", False) else 0, 1 if row.get("interface_call", False) else 0,
+                    int(row.get("function_flags", 0)), json.dumps(row, ensure_ascii=False, separators=(",", ":")),
+                ),
+            )
+
+        for row in iter_jsonl(output / "blueprint_execution_blocks.jsonl"):
+            conn.execute(
+                "INSERT OR REPLACE INTO blueprint_execution_blocks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    row.get("block_id", ""), row.get("blueprint_path", ""), row.get("graph_id", ""), row.get("graph_name", ""),
+                    int(row.get("block_index", 0)), row.get("entry_node_id", ""), row.get("exit_node_id", ""),
+                    int(row.get("node_count", 0)), json.dumps(row.get("node_ids", []), ensure_ascii=False, separators=(",", ":")),
+                    json.dumps(row.get("operations", []), ensure_ascii=False, separators=(",", ":")),
+                    json.dumps(row.get("labels", []), ensure_ascii=False, separators=(",", ":")), row.get("text", ""),
+                    json.dumps(row, ensure_ascii=False, separators=(",", ":")),
+                ),
+            )
+
+        for row in iter_jsonl(output / "blueprint_execution_block_edges.jsonl"):
+            conn.execute(
+                "INSERT OR REPLACE INTO blueprint_execution_block_edges VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    row.get("edge_id", ""), row.get("blueprint_path", ""), row.get("graph_id", ""),
+                    row.get("source_block_id", ""), row.get("target_block_id", ""), row.get("source_node_id", ""),
+                    row.get("target_node_id", ""), row.get("source_pin_name", ""), row.get("target_pin_name", ""),
+                    json.dumps(row, ensure_ascii=False, separators=(",", ":")),
+                ),
+            )
+
+        for row in iter_jsonl(output / "blueprint_execution_roots.jsonl"):
+            conn.execute(
+                "INSERT OR REPLACE INTO blueprint_execution_roots VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    row.get("root_id", ""), row.get("blueprint_path", ""), row.get("graph_id", ""), row.get("graph_name", ""),
+                    row.get("root_node_id", ""), row.get("root_kind", ""), row.get("root_name", ""), row.get("block_id", ""),
+                    json.dumps(row, ensure_ascii=False, separators=(",", ":")),
+                ),
+            )
+
+        for row in iter_jsonl(output / "anim_state_machines.jsonl"):
+            conn.execute(
+                "INSERT OR REPLACE INTO anim_state_machines VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    row.get("machine_id", ""), row.get("blueprint_path", ""), row.get("host_graph_id", ""), row.get("host_graph_name", ""),
+                    row.get("name", ""), row.get("editor_graph_path", ""), row.get("machine_graph_id", ""), row.get("entry_node_id", ""),
+                    row.get("entry_state", ""), row.get("entry_state_id", ""), int(row.get("state_count", 0)), int(row.get("transition_count", 0)),
+                    json.dumps(row, ensure_ascii=False, separators=(",", ":")),
+                ),
+            )
+
+        for row in iter_jsonl(output / "anim_states.jsonl"):
+            conn.execute(
+                "INSERT OR REPLACE INTO anim_states VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    row.get("state_id", ""), row.get("blueprint_path", ""), row.get("machine_graph_id", ""), row.get("machine_name", ""),
+                    row.get("state_kind", ""), row.get("name", ""), row.get("bound_graph", ""),
+                    1 if row.get("always_reset_on_entry", False) else 0, int(row.get("state_type", 0)),
+                    1 if row.get("global_alias", False) else 0,
+                    json.dumps(row.get("aliased_states", []), ensure_ascii=False, separators=(",", ":")),
+                    json.dumps(row, ensure_ascii=False, separators=(",", ":")),
+                ),
+            )
+
+        for row in iter_jsonl(output / "anim_transitions.jsonl"):
+            conn.execute(
+                "INSERT OR REPLACE INTO anim_transitions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    row.get("transition_id", ""), row.get("blueprint_path", ""), row.get("machine_graph_id", ""), row.get("machine_name", ""),
+                    row.get("previous_state", ""), row.get("previous_state_id", ""), row.get("next_state", ""), row.get("next_state_id", ""),
+                    1 if row.get("bidirectional", False) else 0, 1 if row.get("disabled", False) else 0,
+                    1 if row.get("automatic_rule", False) else 0, float(row.get("automatic_rule_trigger_time", -1) or 0),
+                    float(row.get("crossfade_duration", 0) or 0), int(row.get("priority_order", 0)), int(row.get("logic_type", 0)),
+                    float(row.get("min_time_before_reentry", -1) or 0), 1 if row.get("only_evaluate_when_active", False) else 0,
+                    1 if row.get("shared_rules", False) else 0, row.get("shared_rules_name", ""),
+                    1 if row.get("shared_crossfade", False) else 0, row.get("shared_crossfade_name", ""),
+                    row.get("rule_graph", ""), row.get("custom_transition_graph", ""),
                     json.dumps(row, ensure_ascii=False, separators=(",", ":")),
                 ),
             )
@@ -3764,6 +4379,13 @@ DEFAULT_BUNDLE_FILES = (
     "blueprint_widget_animation_bindings.jsonl",
     "blueprint_functions.jsonl",
     "blueprint_events.jsonl",
+    "blueprint_call_edges.jsonl",
+    "blueprint_execution_blocks.jsonl",
+    "blueprint_execution_block_edges.jsonl",
+    "blueprint_execution_roots.jsonl",
+    "anim_state_machines.jsonl",
+    "anim_states.jsonl",
+    "anim_transitions.jsonl",
     "blueprint_relations.jsonl",
     "blueprint_graph_context.jsonl",
     "blueprint_summaries.jsonl",
@@ -4068,6 +4690,58 @@ def query(args: argparse.Namespace) -> int:
         )
         _print_rows(rows, ("blueprint_path", "graph_name", "graph_system", "text"))
 
+        print("\n[blueprint call graph]")
+        rows = conn.execute(
+            """
+            SELECT blueprint_path, graph_name, target_name, target_owner, resolution,
+                   target_blueprint_path, pure, latent
+            FROM blueprint_call_edges
+            WHERE blueprint_path LIKE ? OR graph_name LIKE ? OR target_name LIKE ? OR target_owner LIKE ?
+               OR target_blueprint_path LIKE ? OR target_function LIKE ? OR resolution LIKE ?
+            LIMIT ?
+            """,
+            (f"%{term}%",)*7 + (limit,),
+        )
+        _print_rows(rows, ("blueprint_path", "graph_name", "target_name", "target_owner", "resolution", "target_blueprint_path", "pure", "latent"))
+
+        print("\n[blueprint execution blocks]")
+        rows = conn.execute(
+            """
+            SELECT blueprint_path, graph_name, block_index, node_count, entry_node_id, exit_node_id, substr(text,1,1200) AS text
+            FROM blueprint_execution_blocks
+            WHERE blueprint_path LIKE ? OR graph_name LIKE ? OR text LIKE ? OR operations_json LIKE ? OR labels_json LIKE ?
+            LIMIT ?
+            """,
+            (f"%{term}%", f"%{term}%", f"%{term}%", f"%{term}%", f"%{term}%", limit),
+        )
+        _print_rows(rows, ("blueprint_path", "graph_name", "block_index", "node_count", "entry_node_id", "exit_node_id", "text"))
+
+        print("\n[AnimBP state machines]")
+        rows = conn.execute(
+            """
+            SELECT blueprint_path, name, entry_state, state_count, transition_count, machine_graph_id
+            FROM anim_state_machines
+            WHERE blueprint_path LIKE ? OR name LIKE ? OR entry_state LIKE ? OR editor_graph_path LIKE ? OR machine_graph_id LIKE ?
+            LIMIT ?
+            """,
+            (f"%{term}%", f"%{term}%", f"%{term}%", f"%{term}%", f"%{term}%", limit),
+        )
+        _print_rows(rows, ("blueprint_path", "name", "entry_state", "state_count", "transition_count", "machine_graph_id"))
+
+        print("\n[AnimBP transitions]")
+        rows = conn.execute(
+            """
+            SELECT blueprint_path, machine_name, previous_state, next_state, crossfade_duration,
+                   automatic_rule, disabled, rule_graph
+            FROM anim_transitions
+            WHERE blueprint_path LIKE ? OR machine_name LIKE ? OR previous_state LIKE ? OR next_state LIKE ?
+               OR shared_rules_name LIKE ? OR rule_graph LIKE ?
+            LIMIT ?
+            """,
+            (f"%{term}%",)*6 + (limit,),
+        )
+        _print_rows(rows, ("blueprint_path", "machine_name", "previous_state", "next_state", "crossfade_duration", "automatic_rule", "disabled", "rule_graph"))
+
         print("\n[blueprint relations]")
         rows = conn.execute(
             """
@@ -4217,7 +4891,7 @@ def query(args: argparse.Namespace) -> int:
         print("\n[blueprint functions]")
         rows = conn.execute(
             """
-            SELECT blueprint_path, name, resolved_function, has_exec, inputs_json, outputs_json
+            SELECT blueprint_path, name, resolved_function, blueprint_pure, const_function, blueprint_callable, has_exec, inputs_json, outputs_json
             FROM blueprint_functions
             WHERE name LIKE ? OR resolved_function LIKE ? OR owner LIKE ?
                OR inputs_json LIKE ? OR outputs_json LIKE ? OR locals_json LIKE ?
@@ -4225,7 +4899,7 @@ def query(args: argparse.Namespace) -> int:
             """,
             (f"%{term}%", f"%{term}%", f"%{term}%", f"%{term}%", f"%{term}%", f"%{term}%", limit),
         )
-        _print_rows(rows, ("blueprint_path", "name", "resolved_function", "has_exec", "inputs_json", "outputs_json"))
+        _print_rows(rows, ("blueprint_path", "name", "resolved_function", "blueprint_pure", "const_function", "blueprint_callable", "has_exec", "inputs_json", "outputs_json"))
 
         print("\n[blueprint events]")
         rows = conn.execute(
