@@ -1,8 +1,12 @@
 # Cross-project workflow
 
-UnrealAssetTool is designed to be used from **one canonical checkout** against multiple Unreal projects.
+UnrealAssetTool 0.6.4 supports one **canonical checkout** scanning multiple Unreal projects without manually maintaining a plugin copy in every project.
 
-This is the recommended workflow after 0.6.4.
+This workflow is validated on UE 5.8.2 with:
+
+- Game Animation Sample
+- Cropout Sample Project
+- Content Examples
 
 ## Why
 
@@ -12,7 +16,7 @@ Maintaining one plugin copy per project creates avoidable drift:
 Project A plugin != Project B plugin != Project C plugin
 ```
 
-A canonical checkout gives you:
+The canonical workflow gives you:
 
 ```text
 one source tree
@@ -22,38 +26,93 @@ one version to update
 many target .uproject files
 ```
 
-The scan output still belongs to each target project.
+Each target project still owns its own `.uatool` output and compact bundle.
 
-## Choose the canonical checkout
+## Canonical checkout
 
-For the current test setup, use:
+Current validated checkout:
 
 ```text
 E:\TheDigitalGame\ue\GameAnimationSample\Plugins\UnrealAssetTool
 ```
 
-This is the copy that was first validated with scanner schema 11.
-
-## Remove duplicate target-project copies
-
-Once the canonical checkout is confirmed, remove or move the other project-local copies:
-
-```text
-E:\TheDigitalGame\ue\CropoutSampleProject\Plugins\UnrealAssetTool
-E:\TheDigitalGame\ue\ContentExamples\Plugins\UnrealAssetTool
-```
-
-If you want backups, move them **outside** each project's `Plugins` directory.
-
-Do not keep a second enabled `UnrealAssetTool.uplugin` under the target `Plugins` tree unless you deliberately want to exercise duplicate-plugin masking.
-
-The launcher can temporarily mask duplicate descriptors, but one checkout is simpler.
-
-## Run all scans from the canonical checkout
+Run commands from there:
 
 ```powershell
 cd E:\TheDigitalGame\ue\GameAnimationSample\Plugins\UnrealAssetTool
 ```
+
+## How external-project scanning actually works
+
+UnrealBuildTool reliably discovers plugin module rules when the plugin is beneath:
+
+```text
+<TargetProject>\Plugins
+```
+
+The launcher therefore does **not** depend on `-Plugin` or `-ForeignPlugin` to compile an unrelated target.
+
+For an external target it performs this transaction:
+
+```text
+canonical checkout
+      |
+      | copy descriptor + Source only
+      v
+<TargetProject>\Plugins\UnrealAssetTool   (temporary)
+      |
+      v
+normal target Editor build
+      |
+      v
+normal -Module=UnrealAssetTool build
+      |
+      v
+resolve actual UBT-produced plugin DLL
+      |
+      v
+repair plugin runtime .modules manifest
+using target project's BuildId
+      |
+      v
+run UnrealAssetTool commandlet
+      |
+      v
+remove temporary staged plugin
+```
+
+The temporary staging copy contains only:
+
+```text
+UnrealAssetTool.uplugin
+Source\
+```
+
+UBT creates `Binaries/` and `Intermediate/` beneath the temporary stage as needed. The whole staged directory is deleted after the build/scan transaction.
+
+The real canonical checkout is never duplicated as another maintained working copy.
+
+## Existing target-project plugin copies
+
+If a target already has one or more `UnrealAssetTool.uplugin` files beneath its `Plugins` tree, the launcher moves each containing plugin directory completely outside `Plugins` before staging the canonical copy.
+
+Temporary backup location:
+
+```text
+<TargetProject>\Saved\UnrealAssetToolCrossProjectBackup\<pid>\...
+```
+
+After the scan (or after an error), the staged canonical copy is removed and the original target plugin directories are restored.
+
+This is a safety mechanism. Once the one-checkout workflow is adopted, removing obsolete target-project copies is simpler.
+
+## Same-project behavior
+
+If the canonical checkout already lives beneath the target project's `Plugins` directory—as it does for Game Animation Sample—the launcher does not stage another copy.
+
+It uses the existing project-local canonical plugin directly.
+
+## Running the regression projects
 
 ### Game Animation Sample
 
@@ -79,147 +138,174 @@ python scripts\uatool.py scan `
     --editor "E:\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Win64-DebugGame-Cmd.exe"
 ```
 
-## Where output goes
+## Output location
 
-Default output remains target-project-local:
+Output remains target-project-local:
 
 ```text
 <TargetProject>\.uatool\
 <TargetProject>\<ProjectName>.uatool.zip
 ```
 
-For example:
+Example:
 
 ```text
 E:\TheDigitalGame\ue\CropoutSampleProject\.uatool\
 E:\TheDigitalGame\ue\CropoutSampleProject\Cropout.uatool.zip
 ```
 
-The plugin code does not need to live in that project.
+The plugin source itself does not remain in Cropout after the scan.
 
-## How the external plugin is selected
+## Build behavior
 
-The launcher knows its own checkout from:
+For a normal scan the launcher:
 
-```text
-scripts\uatool.py
-        ↓
-<checkout>\UnrealAssetTool.uplugin
-```
+1. determines the requested target configuration from the exact `--editor` executable;
+2. stages the canonical plugin if the target is external;
+3. builds the target Editor through normal project-plugin discovery;
+4. explicitly builds `-Module=UnrealAssetTool`;
+5. resolves the DLL UBT actually produced;
+6. repairs/validates the staged/local plugin runtime manifest using the target project's BuildId;
+7. launches the commandlet with `-EnablePlugins=UnrealAssetTool`;
+8. derives, packs, and bundles output;
+9. removes the staged plugin and restores any temporarily moved target plugin.
 
-It passes that descriptor explicitly to UnrealBuildTool and the Editor commandlet.
+For scanner C++ changes, do not use `--no-build` unless you already know the staged/local plugin binary is current.
 
-If the target project contains another descriptor with the same plugin name, the launcher temporarily renames that target descriptor for the duration of the build/run, then restores it.
+Because an external stage is temporary, ordinary cross-project scans should normally allow the launcher to build it.
 
-That exists as a safety mechanism, not as a reason to keep duplicates.
+## UE 5.8 DebugGame module naming
 
-## Builds
+Do not assume a single UnrealAssetTool DLL filename.
 
-Do not assume a module built for one target is automatically sufficient for another target configuration.
-
-The launcher:
-
-1. determines the requested target configuration from the explicit editor filename;
-2. ensures the target Editor build is ready;
-3. explicitly builds the canonical UnrealAssetTool module;
-4. repairs the plugin-local runtime module manifest using the **target project's BuildId**;
-5. runs the target project with the canonical plugin.
-
-For scanner C++ changes, run a normal scan or explicit build. Do not add `--no-build` unless the new module is already known to be built.
-
-## DebugGame UE 5.8
-
-For:
+In the validated setups UE 5.8 has produced both styles depending on build context, including:
 
 ```text
-UnrealEditor-Win64-DebugGame-Cmd.exe
+UnrealEditor-UnrealAssetTool.dll
 ```
 
-expect:
+and:
 
 ```text
-project runtime manifest:
-<Target>\Binaries\Win64\UnrealEditor-Win64-DebugGame.modules
-
-canonical plugin binary:
-<CanonicalPlugin>\Binaries\Win64\UnrealEditor-UnrealAssetTool.dll
-
-canonical plugin runtime manifest:
-<CanonicalPlugin>\Binaries\Win64\UnrealEditor-Win64-DebugGame.modules
+UnrealEditor-UnrealAssetTool-Win64-DebugGame.dll
 ```
 
-The plugin manifest BuildId is copied from the target project's runtime manifest.
+The running DebugGame Editor consumes:
+
+```text
+UnrealEditor-Win64-DebugGame.modules
+```
+
+The launcher resolves `UnrealAssetTool` from generated module metadata first. If that metadata cannot identify it, it accepts only a single unambiguous:
+
+```text
+UnrealEditor-UnrealAssetTool*.dll
+```
+
+candidate.
+
+It then writes/repairs the plugin runtime manifest using:
+
+```text
+BuildId = target project's runtime BuildId
+Modules.UnrealAssetTool = exact DLL filename UBT produced
+```
+
+Correctness does not depend on a hard-coded DebugGame naming rule.
+
+## Manifest provenance
+
+`manifest.json` currently records `tool_plugin_dir` from the Unreal commandlet's point of view.
+
+For an external scan that is therefore the temporary staged path, for example:
+
+```text
+E:/TheDigitalGame/ue/CropoutSampleProject/Plugins/UnrealAssetTool
+```
+
+That does **not** mean Cropout contains a maintained plugin copy.
+
+A future scanner/launcher schema may record the canonical source checkout separately.
 
 ## Updating UnrealAssetTool
 
-With the canonical workflow, a new build normally means updating only:
+With the canonical workflow, update only:
 
 ```text
 E:\TheDigitalGame\ue\GameAnimationSample\Plugins\UnrealAssetTool
 ```
 
-Then scan whichever corpus is required for validation.
+Then scan whichever corpus is required.
 
-You no longer copy the plugin update into Cropout and ContentExamples.
+Do not manually copy new versions into Cropout or Content Examples.
 
-## When a new build requires rescanning
-
-Use this rule:
+## When rescanning is necessary
 
 ### Scanner schema changed
 
 Example:
 
 ```text
-10 -> 11
+11 -> 12
 ```
 
-Unreal-extracted canonical facts changed.
+Canonical Unreal facts changed.
 
-**Perform an Unreal scan** for the requested regression projects.
+Run an Unreal scan for the requested regression projects.
 
 ### Only derived schema changed
 
 Example:
 
 ```text
-6 -> 7
+7 -> 8
 ```
 
-Canonical facts are compatible.
+Canonical scanner facts are compatible.
 
-Usually run:
+Usually regenerate with:
 
 ```powershell
-python scripts\uatool.py bundle "<Target>\.uatool" --destination "<Target>\<Name>.uatool.zip"
+python scripts\uatool.py bundle `
+    "<Target>\.uatool" `
+    --destination "<Target>\<Name>.uatool.zip"
 ```
 
 because `bundle` reruns derivation.
 
-No Unreal scan is normally needed.
+### Launcher/docs only
 
-### Docs/version metadata only
+No Unreal rescan is required unless the launcher behavior itself needs regression testing.
 
-No scan, derive, or rebuild is needed.
+## Validated 0.6.4 cross-project result
 
-## Recommended development validation order
+The final staged Cropout and Content Examples scans match their frozen schema-11/derived-7 semantic baselines.
 
-For scanner C++ changes:
+Expected scanner state remains:
+
+```text
+scanner schema: 11
+derived schema: 7
+```
+
+The cross-project implementation changes **where the plugin is built from**, not the extracted project semantics.
+
+## Recommended validation order
+
+Scanner C++ changes:
 
 ```text
 1. Game Animation Sample
 2. inspect result
-3. Cropout
-4. Content Examples
+3. Cropout via canonical checkout
+4. Content Examples via canonical checkout
 5. freeze new regression baseline
 ```
 
-For Python-derived changes:
+Derived-only changes:
 
 ```text
-1. regenerate from existing frozen corpora
+1. regenerate from frozen corpora
 2. validate all three offline
-3. request new Unreal scans only if canonical scanner facts changed
+3. request Unreal rescans only if canonical facts changed
 ```
-
-This keeps Unreal rescans purposeful rather than routine.

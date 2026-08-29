@@ -263,7 +263,9 @@ python scripts\uatool.py scan `
     --editor "E:\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Win64-DebugGame-Cmd.exe"
 ```
 
-If the target project still contains a project-local `UnrealAssetTool.uplugin`, the launcher temporarily masks the duplicate descriptor while the invoking checkout builds/runs, then restores it. Once you adopt the canonical-checkout workflow, removing duplicate target-project copies is cleaner.
+For an external target, the launcher temporarily stages the canonical checkout's `UnrealAssetTool.uplugin` and `Source/` tree under `<TargetProject>/Plugins/UnrealAssetTool`, builds and scans through Unreal's normal project-plugin path, then removes the staged copy automatically.
+
+If the target already contains its own UnrealAssetTool plugin directory, the launcher moves that whole directory temporarily outside `Plugins`, restores it afterward, and never modifies it. Removing duplicate target-project copies is still cleaner once the canonical workflow is adopted.
 
 ## Build behavior
 
@@ -284,12 +286,13 @@ For standard engine layouts, the launcher derives `Engine\Build\BatchFiles\Build
 For a DebugGame Editor target:
 
 - the running executable can be `UnrealEditor-Win64-DebugGame-Cmd.exe`;
-- the project's game module is DebugGame;
-- Editor/plugin modules remain Development-style binaries such as `UnrealEditor-UnrealAssetTool.dll`;
+- the target project's game module is DebugGame;
 - the running DebugGame process consumes `UnrealEditor-Win64-DebugGame.modules`;
-- the plugin-local runtime manifest must use the **target project's BuildId** and map `UnrealAssetTool` to the unsuffixed Editor-plugin DLL.
+- Unreal may emit the UnrealAssetTool Editor-module DLL as either an unsuffixed Editor binary or a `-Win64-DebugGame` binary depending on how the plugin participates in the target;
+- the launcher therefore does **not** hard-code the plugin DLL name;
+- it resolves the actual module from generated `.modules` metadata (falling back only to a unique UBT-produced DLL), then writes the plugin runtime manifest with the **target project's BuildId** and that exact DLL filename.
 
-The launcher handles this runtime-manifest repair automatically.
+This behavior was validated through the canonical cross-project staging workflow on Game Animation Sample, Cropout, and Content Examples.
 
 ## Scan
 

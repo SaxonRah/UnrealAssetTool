@@ -347,11 +347,17 @@ This gives an AI a common traversal model while specialist tables retain exact s
 
 The canonical workflow is one UnrealAssetTool checkout used against many `.uproject` files.
 
-The launcher passes its own exact `.uplugin` descriptor to UBT and Unreal.
+For an external target, the launcher temporarily stages the canonical checkout's descriptor and `Source/` tree at:
 
-When a target project contains another `UnrealAssetTool.uplugin`, the launcher temporarily masks that duplicate descriptor for the build/run and restores it afterward.
+```text
+<TargetProject>/Plugins/UnrealAssetTool
+```
 
-This avoids requiring three manually synchronized plugin copies.
+This deliberately uses UnrealBuildTool's normal project-plugin discovery path instead of relying on foreign-plugin target modes.
+
+If the target already contains UnrealAssetTool plugin directories, the launcher moves those directories completely outside `Plugins`, stages the canonical copy, and restores the originals afterward.
+
+The staging transaction lasts through build **and** commandlet execution. The temporary stage is deleted on success or failure.
 
 The target project's `.uatool` output and bundle still live with the target project.
 
@@ -359,54 +365,59 @@ See `docs/cross-project-workflow.md`.
 
 ## UE 5.8 DebugGame module loading
 
-UE 5.8 DebugGame Editor has an important split:
+UE 5.8 DebugGame does not provide one safe hard-coded UnrealAssetTool DLL naming rule across all plugin build contexts.
 
-```text
-running target: DebugGame
-project game module: DebugGame
-Editor/plugin module binary form: Development-style
-```
-
-Therefore UnrealAssetTool's module binary is normally:
+Validated builds have produced both:
 
 ```text
 UnrealEditor-UnrealAssetTool.dll
 ```
 
-while the running DebugGame process looks for:
+and:
+
+```text
+UnrealEditor-UnrealAssetTool-Win64-DebugGame.dll
+```
+
+The running DebugGame process consumes:
 
 ```text
 UnrealEditor-Win64-DebugGame.modules
 ```
 
-The plugin-local runtime manifest must use the target project's BuildId.
+The launcher therefore resolves the plugin DLL from generated `.modules` metadata first and only falls back to a single unambiguous UBT-produced DLL.
 
-The launcher performs:
+The plugin-local/staged runtime manifest is then repaired using:
 
-1. a full target Editor build for target/runtime readiness;
-2. an explicit UnrealAssetTool module build;
-3. plugin-local runtime-manifest repair using the target project's manifest/BuildId.
+```text
+BuildId = target project's runtime BuildId
+Modules.UnrealAssetTool = actual UBT-produced DLL filename
+```
 
 This behavior is launcher infrastructure, not scanner schema.
 
 ## Build/read lifecycle
 
-A normal scan is:
+A normal cross-project scan is:
 
 ```text
 target .uproject
     |
 validate explicit editor path
     |
-temporarily mask duplicate project-local plugin descriptor if needed
+stage canonical descriptor + Source under target Plugins if external
     |
-build target Editor if required
+temporarily move any duplicate target plugin outside Plugins
     |
-build invoking UnrealAssetTool module
+build target Editor
     |
-repair runtime module manifest
+build -Module=UnrealAssetTool
     |
-run UnrealAssetTool commandlet
+resolve actual generated module DLL
+    |
+repair runtime module manifest from target BuildId
+    |
+run UnrealAssetTool commandlet with staged plugin still present
     |
 canonical schema-11 JSONL
     |
@@ -415,6 +426,8 @@ derive schema-7 views
 pack SQLite
     |
 create compact upload ZIP
+    |
+remove staged plugin and restore any original target plugin
 ```
 
 A failed commandlet run deletes/does not trust stale `manifest.json`; old output must not be mistaken for a new successful scan.
