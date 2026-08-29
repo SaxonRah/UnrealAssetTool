@@ -1,119 +1,208 @@
 # UnrealAssetTool
 
-**UnrealAssetTool** builds an AI-friendly structural database of an Unreal Engine project from the project itself, rather than relying on hand-written documentation.
+**UnrealAssetTool** builds an AI-friendly structural index of an Unreal Engine project from Unreal's own serialized/editor data instead of relying on hand-written project documentation.
 
-> **Naming note:** Unreal Engine already uses **UAT** to mean **Unreal AutomationTool**. The project remains `UnrealAssetTool`, but the command-line launcher is intentionally named `uatool` to avoid collisions with Epic's UAT.
+> Unreal Engine already uses **UAT** for **Unreal AutomationTool**. The project is `UnrealAssetTool`; the command-line launcher is `uatool`.
+
+## Current stable baseline
+
+**UnrealAssetTool 0.6.4**
+
+- Unreal target: **UE 5.8+**
+- validated engine: **UE 5.8.2**
+- scanner schema: **11**
+- derived schema: **7**
+- canonical storage: line-oriented JSONL emitted from Unreal
+- derived storage/retrieval: regenerable JSONL views plus SQLite
+- validated regression corpora:
+  - Game Animation Sample
+  - Cropout Sample Project
+  - Content Examples
+
+Schema 11 and derived schema 7 are intentionally separate version numbers:
+
+- **scanner schema 11** describes facts that require Unreal/editor objects and therefore require an Unreal rescan when the schema changes;
+- **derived schema 7** describes deterministic Python reconstruction that can be regenerated from compatible canonical JSONL without reopening Unreal.
 
 ## Goal
 
-Given a `.uproject`, UnrealAssetTool should answer questions such as:
+Given a `.uproject`, UnrealAssetTool should help answer questions such as:
 
 - What modules, plugins, source files, configs, maps, assets, and Blueprints exist?
 - What depends on what?
 - Which Blueprint inherits from which class?
-- What variables and components are declared by a Blueprint?
-- What graphs exist in a Blueprint?
-- Which nodes, pins, default values, and links make up the actual Blueprint logic?
-- Where is a C++ symbol or config setting defined?
+- What variables, components, interfaces, defaults, and authored overrides exist?
+- What graphs, nodes, pins, defaults, and exact links implement Blueprint logic?
+- What execution paths exist?
+- Where did a value feeding a Branch, setter, return, or impure call come from?
+- Which internal Blueprint function does a call target?
+- How do a caller's argument/return pins correspond to a callee's parameters?
+- How are Animation Blueprint state machines, states, aliases, conduits, and transitions connected?
+- How do Control Rig editor graphs map to the underlying RigVM model?
+- How do Behavior Trees, Blackboards, EQS, StateTrees, PCG, and materials connect to surrounding project content?
 - What project content is relevant to a question without loading the entire project into an AI context window?
 
-The output is deliberately **loss-minimizing and sharded**. Raw structural facts are stored first; higher-level summaries can be derived later and regenerated without rescanning Unreal assets.
+The output is deliberately **facts-first, loss-minimizing, sharded, and regenerable**. Unreal-extracted structural truth remains available even when later interpretation algorithms change.
 
-Schema 10 keeps that boundary explicit: scanner-only facts (designer defaults, Timeline curve keys, widget instance overrides) are canonical JSONL, while function/event normalization, semantic relations, graph-context text, summaries, and Control Rig/RigVM joins are deterministic Python-derived views.
+## Architecture in one sentence
 
-## Why it runs inside Unreal
+**Unreal extracts authoritative facts; Python reconstructs deterministic program/context views; SQLite makes those facts and views easy to retrieve.**
 
-`.uasset` and `.umap` files are serialized Unreal packages whose internal representation changes with engine versions and asset types. Reverse-engineering them outside the engine would duplicate a large amount of Unreal's loader, reflection, versioning, and editor-only logic.
+See [docs/architecture.md](docs/architecture.md) for the full architecture.
 
-The primary scanner is therefore an **Editor Commandlet**. Unreal itself supplies:
-
-- package loading;
-- the Asset Registry;
-- Blueprint graph objects;
-- reflection;
-- project/plugin mount points;
-- engine-version compatibility.
-
-A small Python launcher invokes the commandlet and converts the JSONL records into `uat.db` for fast retrieval.
-
-## Current milestone (0.6.0)
-
-The first vertical slice indexes:
+## Current scope
 
 ### Files and source
 
-- every project file by relative path, type, size, and timestamp;
-- C/C++, headers, Build.cs, Target.cs, INI, JSON, `.uproject`, `.uplugin`, Python, shader source, Markdown, and text;
-- source text in 200-line chunks suitable for retrieval;
-- generated/cache directories are excluded by default.
-- the active UnrealAssetTool plugin installation is excluded by default so the scanner does not pollute its own project model;
-- the active output directory is always excluded, including when `--output` uses a custom directory name.
+The scanner records project files with path, kind, size, timestamp, and source/config/document text in bounded line chunks.
 
-### Unreal assets
+Generated/cache directories are excluded by default. The active UnrealAssetTool checkout and output directory are also excluded by default so the tool does not pollute its own project model.
 
-- project and project-plugin assets from the Asset Registry;
-- object path, package path, class, physical package path;
-- all Asset Registry tags;
-- direct package dependency edges.
+### Unreal assets and dependencies
 
-### Blueprints
+The scanner records project and project-plugin Asset Registry assets, tags, package identity, class, physical package path, and direct package dependency edges.
 
-For Blueprint-family assets the scanner loads the real asset and records:
+### Blueprints and visual program structure
 
-- Blueprint class, parent class, generated class, type, and status;
-- member variables and pin types, with normalized SQLite variable records even when a variable is never referenced by a graph node;
-- Simple Construction Script components and attachment hierarchy, with normalized component records for retrieval;
-- every graph;
-- a normalized graph table with stable graph IDs, full graph paths, graph kind, visual system, schema, outer/parent relationship, and node count;
-- every graph node, node class, title, comment, and editor position;
-- normalized semantic operation/symbol/owner fields for core K2 node types;
-- structured semantic metadata for variable accesses, calls, events, casts, macros, branches, function boundaries, switches, selects, sequences, reroutes, self references, and actor spawning;
-- Animation Blueprint graph kinds, state machines, states, transitions, conduits, aliases, cached poses, linked layers/input poses, slots, sequence players, and graph/state/transition result nodes;
-- reflected non-transient node properties, including nested runtime-node structs flattened into addressable paths such as `Node.Sequence` and `Node.BlendSpace`;
-- node-owned AnimGraph binding subobjects plus normalized `PropertyBindings` records, so runtime/thread-safe binding paths are directly queryable;
-- normalized node-level UObject reference edges from reflected properties to assets/classes;
-- normalized Blueprint interfaces implemented by each Blueprint;
-- every pin as both inline node data and a normalized `blueprint_pins` record;
-- every pin-to-pin graph edge with source/target node IDs and explicit execution-vs-data flow classification;
-- compact RigVM/Control Rig graph/node/pin/link records plus object-reference topology;
-- optional raw RigVM reflection properties for deep extractor development rather than multi-gigabyte default output.
-- Blueprint class-default-object overrides relative to the parent CDO, including referenced UObject values;
-- component-template property overrides relative to the component class default object;
-- bounded flattened changed-state paths for nested structs and arrays in CDO/component overrides;
-- Timeline templates and float/vector/color/event tracks plus rich-curve key time/value/interpolation/tangent data;
-- UMG designer widget trees plus class-specific changed widget/slot properties relative to their class defaults;
-- normalized UMG editor bindings, widget animations, and per-animation widget/slot binding records;
-- canonical derived Blueprint function signatures (inputs, outputs, locals, flags, execution shape);
-- canonical derived event definitions, including component-bound delegates and input events;
-- deterministic derived Blueprint relations, per-graph AI context, per-Blueprint summaries, and graph-first Control Rig editor-node to RigVM-model joins that can be regenerated without running Unreal;
+Schema 11 records the real Blueprint/editor graph structure:
 
-This is enough to reconstruct a large portion of Blueprint control/data flow without screenshots or documentation.
+- Blueprint identity, parent/generated classes, type, and status;
+- declared variables;
+- SCS components and attachment hierarchy;
+- graph identity, kind, system, schema, and nesting;
+- node identity/class/title/comment/editor position;
+- normalized node semantics;
+- normalized pins, types, defaults, visibility/connectability metadata, and links;
+- execution-vs-data edge classification;
+- Blueprint interfaces;
+- reflected non-transient node properties;
+- normalized node-to-UObject references;
+- AnimGraph property bindings;
+- class-default-object overrides;
+- component-template overrides;
+- bounded nested changed-state paths;
+- Timelines, tracks, and curve keys;
+- UMG widget trees, instance/slot overrides, bindings, animations, and animation bindings.
 
-### PCG and material graphs
+#### Struct operations fixed in schema 11
 
-Schema 10 adds first-class visual-authoring extraction beyond Blueprint/AI graphs:
+`UK2Node_MakeStruct`, `UK2Node_BreakStruct`, and `UK2Node_SetFieldsInStruct` inherit through Unreal's struct-operation/variable hierarchy. Schema 11 classifies them canonically as:
 
-- PCG graphs, embedded subgraphs, nodes, input/output pins, exact edges, node settings objects, graph/user-parameter state, and reflected settings properties;
-- deterministic PCG parameter records, node-to-node data-flow relations, subgraph references, Blueprint-backed PCG element joins, and bounded graph-context text;
-- Materials, Material Functions, and material/function instances with parent relationships and core material mode fields;
-- owned Material expressions, parameter/function/texture references, recursive `FExpressionInput` wiring (including nested structs/arrays), and root material-output connections;
-- derived material parameter records, function/texture relations, expression-flow relations, Blueprint-to-material/PCG joins, and bounded material graph context/summaries.
+- `make_struct`
+- `break_struct`
+- `set_fields_in_struct`
 
-The PCG extractor remains reflection-first and adds no hard PCG module dependency. Material topology is reconstructed from Unreal-owned expression objects and reflected expression-input structs so the scanner can retain real graph truth without screenshot parsing.
+and records the exact `struct_type` instead of misclassifying them as generic variable references.
 
-### AI gameplay graphs
+### Blueprint reconstruction
 
-Schema 9 adds first-class extraction for Unreal AI authoring systems:
+Derived schema 7 reconstructs higher-level program facts without replacing raw graph truth:
 
-- Behavior Trees: root/composite/task/decorator/service nodes, child ordering, decorator logic, service/decorator attachments, Blackboard association, and reflected per-node settings;
-- Blackboards: parent inheritance, key ordering/names/types, instance-sync settings, and key-type configuration;
-- EQS: query options, generators, tests, scoring/filter configuration, and reflected generator/test settings;
-- StateTree: editor-data roots, hierarchical states, evaluators, global/state tasks, conditions/considerations, transitions, property bindings, linked StateTree assets, and reflected instance-object settings;
-- deterministic `ai_relations.jsonl` and `ai_summaries.jsonl` views tying those assets to each other and to Blueprint-backed AI nodes.
+- normalized function definitions and authoritative UFunction flags;
+- normalized event definitions;
+- call-site resolution to internal/external/ambiguous/unresolved targets;
+- call-site ↔ callee parameter bindings, including split-struct pins;
+- bounded upstream data provenance for execution-relevant inputs;
+- deterministic execution basic blocks and block edges;
+- semantic roots for functions/events;
+- Blueprint relations;
+- graph-context text;
+- per-Blueprint summaries.
 
-The AI scanners are reflection-first and do not add hard AIModule or StateTreeEditorModule link dependencies to UnrealAssetTool.
+#### Data provenance
 
-0.5.1 stabilizes the schema-9 AI layer without changing the schema: UE 5.8 StateTree property bindings use `SourcePropertyPath`/`TargetPropertyPath`, empty StateTree editor-node placeholders are ignored, Blackboard selectors resolve through parent Blackboards, direct BT `EQSRequest.QueryTemplate` values become `runs_eqs_query` relations, and generic AI references are limited to real top-level assets instead of editor/internal subobjects. Existing 0.5.0 bundles can be repaired by rerunning `derive`/`pack`; no Unreal rescan is required.
+`blueprint_data_dependencies.jsonl` follows upstream data edges from connected non-exec inputs on execution-bearing/result nodes through pure/data-only nodes.
+
+It preserves:
+
+- sink node/pin;
+- expression tree and compact expression text;
+- variable reads;
+- function calls;
+- object references;
+- side-effect/execution boundaries;
+- cycle detection;
+- truncation status.
+
+Current safety bounds are 24 recursive levels and 64 expression nodes per dependency.
+
+#### Cross-function bindings
+
+`blueprint_call_bindings.jsonl` maps uniquely resolved internal Blueprint call pins to the actual callee parameter pins.
+
+It supports:
+
+- caller argument → callee input parameter;
+- callee return parameter → caller output;
+- split struct pin matching;
+- links to provenance dependency IDs and downstream consumer pins.
+
+Ambiguous interface/override targets are deliberately **not** forced into a unique binding.
+
+### Animation Blueprints
+
+The scanner plus derived layer covers:
+
+- AnimGraphs;
+- state machines;
+- states;
+- transitions;
+- conduits;
+- aliases;
+- state-entry targets;
+- cached poses;
+- linked layers/input poses;
+- slots;
+- sequence players/evaluators;
+- common AnimGraph node semantics;
+- exact transition endpoints and key transition settings;
+- normalized `anim_state_machines`, `anim_states`, and `anim_transitions`.
+
+### Control Rig / RigVM
+
+Normal scans store a compact RigVM model:
+
+- graph/node objects;
+- pins;
+- links;
+- object relationships;
+- editor-ControlRig-node ↔ model-node joins.
+
+The very large raw reflection stream is opt-in via `--include-raw-rigvm-properties`.
+
+### AI gameplay systems
+
+Current canonical coverage includes:
+
+- Behavior Trees;
+- Blackboard assets and keys;
+- EQS options/generators/tests;
+- StateTree hierarchy, tasks/evaluators, conditions, transitions, bindings, and linked assets.
+
+Python derives normalized AI relations and compact summaries.
+
+### PCG and materials
+
+Current coverage includes:
+
+- PCG graphs, nodes, pins, exact edges, settings/properties, and parameters;
+- material/material-function graphs, expressions, parameter/function/texture relationships, root outputs, and exact expression wiring;
+- visual-system relations, context, and summaries.
+
+A schema-5 derivation bug that treated reflected PCG ownership back-references as subgraph uses has been removed; only real non-self graph references or explicitly named subgraph fields become `uses_subgraph`.
+
+## What is not the current priority
+
+UnrealAssetTool is not trying to collect every possible Unreal asset family as quickly as possible.
+
+The present priority is **gameplay understanding**:
+
+1. keep canonical Blueprint/visual-program semantics accurate;
+2. deepen cross-function/cross-system provenance and call-chain reconstruction;
+3. add map/world/actor placement so extracted gameplay systems can be located in the actual game world;
+4. then expand breadth into systems such as Sequencer, Niagara, and MetaSounds when they materially improve project understanding.
+
+Native C++ semantic parsing is secondary for now because source text is already directly retrievable. A future Clang-based pass is preferable to regex inference.
 
 ## Repository layout
 
@@ -131,238 +220,204 @@ UnrealAssetTool/
   scripts/
     uatool.py
   docs/
+    architecture.md
     schema.md
+    cross-project-workflow.md
 ```
 
-UnrealAssetTool excludes itself from filesystem, source-text, and asset indexing by default. To deliberately index the scanner while developing/debugging it, use:
+## Recommended workflow: one canonical checkout
 
-```powershell
-python scripts\uatool.py scan MyProject.uproject `
-    --editor "E:\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Cmd.exe" `
-    --include-self
-```
+Keep one canonical UnrealAssetTool checkout and use its launcher against any target `.uproject`.
 
-## Install in a project
+This avoids manually synchronizing multiple copies.
 
-Clone or copy this repository to:
+See [docs/cross-project-workflow.md](docs/cross-project-workflow.md).
+
+### Example canonical checkout
 
 ```text
-<MyProject>/Plugins/UnrealAssetTool/
+E:\TheDigitalGame\ue\GameAnimationSample\Plugins\UnrealAssetTool
 ```
 
-UnrealAssetTool contains an Editor C++ module, so it must be built at least once before Unreal can load the commandlet. The launcher can do this automatically when the module DLL is missing.
-
-## Build and scan a UE 5.8 project
-
-Engine selection is intentionally explicit. UnrealAssetTool does **not** inspect the registry, Epic Launcher metadata, `EngineAssociation`, environment variables, or guessed installation directories. Pass the exact editor executable you want used for the scan:
+From that directory:
 
 ```powershell
 python scripts\uatool.py scan `
     "E:\TheDigitalGame\ue\GameAnimationSample\GameAnimationSample.uproject" `
-    --editor "E:\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Cmd.exe"
+    --editor "E:\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Win64-DebugGame-Cmd.exe"
 ```
 
-This works the same way for Launcher engines and source/custom engine builds: point `--editor` at that build's `UnrealEditor-Cmd.exe`.
-
-If the UnrealAssetTool editor module has not been compiled yet, `scan` first invokes the project Editor build. For the standard engine layout, the build script is taken deterministically from the supplied editor path:
-
-```text
-E:\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Cmd.exe
-                    ↓
-E:\UE_5.8\Engine\Build\BatchFiles\Build.bat
-```
-
-For a custom engine with a nonstandard layout, provide the build script explicitly as well:
+The same launcher can target another project:
 
 ```powershell
-python scripts\uatool.py scan MyProject.uproject `
-    --editor "X:\MyUE\bin\UnrealEditor-Cmd.exe" `
-    --build-script "X:\MyUE\Build\Build.bat"
+python scripts\uatool.py scan `
+    "E:\TheDigitalGame\ue\CropoutSampleProject\Cropout.uproject" `
+    --editor "E:\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Win64-DebugGame-Cmd.exe"
 ```
 
-You can also build separately:
+and:
+
+```powershell
+python scripts\uatool.py scan `
+    "E:\TheDigitalGame\ue\ContentExamples\ContentExamples.uproject" `
+    --editor "E:\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Win64-DebugGame-Cmd.exe"
+```
+
+If the target project still contains a project-local `UnrealAssetTool.uplugin`, the launcher temporarily masks the duplicate descriptor while the invoking checkout builds/runs, then restores it. Once you adopt the canonical-checkout workflow, removing duplicate target-project copies is cleaner.
+
+## Build behavior
+
+Engine selection is explicit. UnrealAssetTool does not guess an engine installation from the registry, Epic Launcher metadata, `EngineAssociation`, or environment variables.
+
+Pass the exact editor executable:
 
 ```powershell
 python scripts\uatool.py build `
     "E:\TheDigitalGame\ue\GameAnimationSample\GameAnimationSample.uproject" `
-    --editor "E:\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Cmd.exe"
+    --editor "E:\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Win64-DebugGame-Cmd.exe"
 ```
 
-Or suppress the automatic first build if you know the module is already compiled:
+For standard engine layouts, the launcher derives `Engine\Build\BatchFiles\Build.bat` from that editor path. Use `--build-script` only for a nonstandard custom layout.
+
+### UE 5.8 DebugGame detail
+
+For a DebugGame Editor target:
+
+- the running executable can be `UnrealEditor-Win64-DebugGame-Cmd.exe`;
+- the project's game module is DebugGame;
+- Editor/plugin modules remain Development-style binaries such as `UnrealEditor-UnrealAssetTool.dll`;
+- the running DebugGame process consumes `UnrealEditor-Win64-DebugGame.modules`;
+- the plugin-local runtime manifest must use the **target project's BuildId** and map `UnrealAssetTool` to the unsuffixed Editor-plugin DLL.
+
+The launcher handles this runtime-manifest repair automatically.
+
+## Scan
+
+A normal scan:
 
 ```powershell
-python scripts\uatool.py scan MyProject.uproject `
-    --editor "E:\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Cmd.exe" `
-    --no-build
+python scripts\uatool.py scan `
+    "E:\Path\MyProject.uproject" `
+    --editor "E:\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Win64-DebugGame-Cmd.exe"
 ```
 
-The underlying commandlet can still be run directly once the plugin module is built:
+By default it:
 
-```powershell
-E:\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Cmd.exe MyProject.uproject -run=UnrealAssetTool -Output=.uatool -unattended -nop4 -nosplash -NoShaderCompile
-```
+1. checks/builds the target Editor and UnrealAssetTool module as required;
+2. runs the Unreal commandlet;
+3. writes canonical JSONL to `<Project>\.uatool`;
+4. runs the deterministic derived pass;
+5. builds `<Project>\.uatool\uat.db`;
+6. creates `<ProjectName>.uatool.zip` beside the `.uproject`.
 
-`scan` also creates `<ProjectName>.uatool.zip` beside the `.uproject`. That is the normal file to upload for analysis; it excludes `uat.db` and the optional raw RigVM property dump.
-
-## Output
+Useful scan options:
 
 ```text
-.uatool/
-  manifest.json
-  files.jsonl
-  source_chunks.jsonl
-  assets.jsonl
-  asset_dependencies.jsonl
-  behavior_trees.jsonl
-  behavior_tree_nodes.jsonl
-  behavior_tree_edges.jsonl
-  blackboards.jsonl
-  blackboard_keys.jsonl
-  eqs_queries.jsonl
-  eqs_options.jsonl
-  eqs_generators.jsonl
-  eqs_tests.jsonl
-  statetrees.jsonl
-  statetree_states.jsonl
-  statetree_nodes.jsonl
-  statetree_transitions.jsonl
-  statetree_bindings.jsonl
-  ai_properties.jsonl
-  ai_relations.jsonl
-  ai_summaries.jsonl
-  pcg_graphs.jsonl
-  pcg_nodes.jsonl
-  pcg_pins.jsonl
-  pcg_edges.jsonl
-  pcg_properties.jsonl
-  pcg_parameters.jsonl
-  materials.jsonl
-  material_expressions.jsonl
-  material_edges.jsonl
-  material_properties.jsonl
-  material_parameters.jsonl
-  visual_relations.jsonl
-  pcg_graph_context.jsonl
-  material_graph_context.jsonl
-  visual_summaries.jsonl
-  blueprints.jsonl
-  blueprint_graphs.jsonl
-  blueprint_nodes.jsonl
-  blueprint_pins.jsonl
-  blueprint_edges.jsonl
-  blueprint_interfaces.jsonl
-  blueprint_node_properties.jsonl
-  blueprint_node_references.jsonl
-  blueprint_bindings.jsonl
-  blueprint_defaults.jsonl
-  blueprint_component_properties.jsonl
-  blueprint_timelines.jsonl
-  blueprint_timeline_tracks.jsonl
-  blueprint_widgets.jsonl
-  blueprint_widget_bindings.jsonl
-  blueprint_widget_animations.jsonl
-  blueprint_relations.jsonl
-  blueprint_graph_context.jsonl
-  blueprint_summaries.jsonl
-  rigvm_editor_links.jsonl
-  rigvm_objects.jsonl
-  rigvm_pins.jsonl
-  rigvm_links.jsonl
-  rigvm_properties.jsonl
-  rigvm_references.jsonl
-  uat.db
+--no-build
+--output <dir>
+--include-generated
+--include-engine
+--include-self
+--include-raw-rigvm-properties
+--no-bundle
+--bundle-include-raw-rigvm
+--build-script <path>
 ```
 
-The JSONL files are the canonical scan output. `uat.db` is a derived query/index layer and can be rebuilt at any time:
+Do not use `--no-build` after scanner C++ changes unless you already know the correct module was rebuilt.
+
+## Derived-only regeneration
+
+If scanner schema is compatible and only Python-derived logic changed:
 
 ```powershell
-python scripts\uatool.py pack .uatool
+python scripts\uatool.py derive "E:\Path\Project\.uatool"
 ```
 
-The AI-oriented derived views are deterministic and can be regenerated from an existing scan without opening Unreal:
+Rebuild SQLite:
 
 ```powershell
-python scripts\uatool.py derive .uatool
+python scripts\uatool.py pack "E:\Path\Project\.uatool"
 ```
 
-`pack` and `bundle` run this derivation automatically. This is important for Blueprint development: relation/context logic can improve without asking the project owner for another Unreal scan.
+`pack` reruns derivation first.
 
-Create/recreate the compact upload bundle without rescanning Unreal:
+Regenerate the compact upload ZIP:
 
 ```powershell
-python scripts\uatool.py bundle .uatool
+python scripts\uatool.py bundle `
+    "E:\Path\Project\.uatool" `
+    --destination "E:\Path\Project\Project.uatool.zip"
 ```
 
-By default `rigvm_properties.jsonl` is empty because the compact RigVM model contains the fields needed for normal retrieval. For extractor development, request the old loss-minimizing raw reflection stream explicitly:
+`bundle` also reruns derivation first.
+
+## Compact upload bundle
+
+The normal upload ZIP deliberately excludes:
+
+- `uat.db`;
+- `rigvm_properties.jsonl` unless explicitly requested.
+
+This keeps the upload artifact compact while preserving canonical and useful derived JSONL.
+
+`uat.db` is only a regenerable local index.
+
+## Query
+
+Quick text/index search:
 
 ```powershell
-python scripts\uatool.py scan MyProject.uproject `
-    --editor "E:\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Cmd.exe" `
-    --include-raw-rigvm-properties
+python scripts\uatool.py query `
+    "E:\Path\Project\.uatool" `
+    "Desired Aim Rotation"
 ```
 
-Quick search:
+The query command searches source/assets plus normalized Blueprint, call-graph, call-binding, provenance, execution, AnimBP, AI, PCG, and material views.
 
-```powershell
-python scripts\uatool.py query .uatool "Desired Aim Rotation"
-```
+## Canonical vs derived rule
 
-## Nested Blueprint property/reference indexing
+If Unreal can state a fact exactly, store that fact first.
 
-For visual graph nodes, important facts are often stored inside runtime structs rather than exposed as pins. UnrealAssetTool therefore flattens reflected structs into stable property paths. Examples include:
+Examples:
 
 ```text
-Node.Sequence
-Node.BlendSpace
-Node.BlendProfile
-Node.ControlRigAssetReference.BlueprintRigClass
-Binding.*
+node class
+pin type
+pin default
+pin link
+UFunction flags
+struct type
+transition endpoint
+asset reference
+world transform
 ```
 
-Object-valued reflected fields are also emitted to `blueprint_node_references.jsonl`, giving retrieval a direct node-to-object relationship instead of forcing it to parse an exported struct string. Arrays of simple values are expanded with bounded indexed paths; arrays of structs remain available through their loss-minimizing exported value to avoid unbounded output growth.
-
-Property Access, Chooser/Proxy evaluation, BlendSpace players, sequence evaluators, Pose Drivers, Motion Matching blend profiles, and Control Rig graph model-node paths are promoted into node semantic fields when the reflected facts are available.
-
-## AnimGraph bindings and RigVM model extraction
-
-`blueprint_bindings.jsonl` normalizes the entries stored in AnimGraph node binding objects instead of leaving the entire `PropertyBindings` map as one reflection string. Records retain the target property, access path, path segments, compiled context, pin types, and the raw reflected value. This makes bindings such as `BlendTime -> Get_MMBlendTime` directly searchable.
-
-Control Rig editor nodes are only one presentation of a deeper RigVM model. UATool therefore also walks Blueprint-owned objects and records objects whose class hierarchy derives from `RigVMGraph`, `RigVMNode`, `RigVMPin`, or `RigVMLink`. The default result is split into:
-
-- `rigvm_objects.jsonl`: compact RigVM graph/node identity, hierarchy, node operation, title/function/template information, and contained-graph facts;
-- `rigvm_pins.jsonl`: pin direction, C++ type, type object, default value/object, owning model object, and widget metadata;
-- `rigvm_links.jsonl`: explicit source-pin-path to target-pin-path connections;
-- `rigvm_references.jsonl`: normalized object and object-array references such as graph-to-node, node-to-pin, pin-to-subpin/link, and references to external assets/classes when Unreal stores them as UObject properties.
-
-`rigvm_properties.jsonl` remains available behind `--include-raw-rigvm-properties` when developing deeper extractors. It is intentionally not part of the normal scan because the GASP corpus demonstrated that a loss-minimizing reflection dump can exceed 1.5 million property rows while adding little value to routine retrieval.
-
-RigVM node operations distinguish function entry/return/reference, variables, units, dispatch, reroutes, enums, comments, parameters, library/template nodes, and related model-node classes by the actual Unreal class hierarchy. UATool does not infer a unit's behavior from its display name; deeper unit/function semantics can be promoted later from these model properties. This reflection-first path deliberately avoids depending on non-exported convenience methods of Unreal `MinimalAPI` editor classes.
-
-## Derived Blueprint reconstruction layer
-
-Schema v7 keeps Unreal-emitted facts separate from deterministic post-processing. `uatool.py derive` writes:
-
-- `rigvm_editor_links.jsonl`: joins visual `ControlRigGraphNode` records to the underlying compact RigVM model using Blueprint identity, model-node name, graph context, and editor position, while retaining explicit matched/ambiguous/unmatched status;
-- `blueprint_relations.jsonl`: factual calls, variable reads/writes, casts, macro invocations, delegate use, asset references, animation transitions/cached poses, property bindings, Timeline/widget relationships, and Control Rig-to-RigVM mappings;
-- `blueprint_graph_context.jsonl`: bounded, deterministic text reconstruction of each graph with node aliases, semantic facts, unconnected input defaults, execution flow, data flow, and resolved RigVM unit/function details;
-- `blueprint_summaries.jsonl`: factual per-Blueprint inventory of parent class, variables, components, interfaces, graph systems, operation counts, and relation counts.
-
-These files are derived indexes, not a replacement for the canonical node/pin/property records. They can be deleted and regenerated at any time.
-
-## Design rule: facts first, interpretation second
-
-The scanner should avoid asking an LLM to infer facts that Unreal can state exactly. For example, Blueprint graph edges are stored as graph edges, not only as generated prose. Later passes may produce natural-language summaries such as:
+Interpretation can then produce:
 
 ```text
-Event Blueprint Update Animation
-  -> read Velocity
-  -> compute Speed
-  -> if Speed > 5
-       set IsMoving = true
+execution blocks
+call graph
+parameter bindings
+data provenance
+summaries
+readable graph context
 ```
 
-But that summary is derived data. The underlying nodes, pins, defaults, classes, and links remain available so another model or newer summarizer can verify it.
+Derived data must remain disposable and reproducible from canonical data whenever possible.
 
-## Next implementation phases
+## Versioning rule
 
-Blueprint/visual-program understanding remains the priority. Ordinary K2/AnimGraph, Control Rig/RigVM, AI graphs, PCG, and material graphs now have canonical structural coverage. The next useful work is to deepen visual systems that still live outside those graphs: Niagara, Sequencer, MetaSounds, and map/world placement, while continuing cross-system provenance/call-chain reconstruction in the offline derive layer. Native C++ indexing can remain secondary because source text is already directly legible to an AI.
+A scanner-schema change means canonical Unreal output changed and normally requires an Unreal rescan.
+
+A derived-schema change means deterministic reconstruction changed and can normally be regenerated with `derive`, `pack`, or `bundle`.
+
+The plugin's semantic version does not replace either schema number.
+
+## Next development milestone
+
+With 0.6.4 stabilized, the next major extractor priority is **map/world/actor placement and authored world state**, while continuing targeted cross-system provenance improvements where the current corpora expose real gaps.
+
+The world pass should prefer metadata/descriptor APIs where possible and avoid blindly loading every World Partition actor.
+
+See [docs/architecture.md](docs/architecture.md#next-development-priority-world-and-placement).

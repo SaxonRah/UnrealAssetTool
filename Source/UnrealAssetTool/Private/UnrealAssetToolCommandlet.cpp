@@ -45,6 +45,10 @@
 #include "K2Node_IfThenElse.h"
 #include "K2Node_Knot.h"
 #include "K2Node_MacroInstance.h"
+#include "K2Node_BreakStruct.h"
+#include "K2Node_MakeStruct.h"
+#include "K2Node_SetFieldsInStruct.h"
+#include "K2Node_StructOperation.h"
 #include "K2Node_Select.h"
 #include "K2Node_Self.h"
 #include "K2Node_SpawnActorFromClass.h"
@@ -67,7 +71,7 @@
 
 namespace UnrealAssetTool
 {
-    static constexpr int32 SchemaVersion = 10;
+    static constexpr int32 SchemaVersion = 11;
     static constexpr int32 SourceChunkLines = 200;
 
     class FJsonlWriter
@@ -1712,6 +1716,41 @@ namespace UnrealAssetTool
                 }
                 Semantic->SetStringField(TEXT("resolved_function"), SignatureFunction->GetPathName());
             }
+        }
+        else if (UK2Node_StructOperation* StructOperation = Cast<UK2Node_StructOperation>(Node))
+        {
+            // UK2Node_MakeStruct, UK2Node_BreakStruct, and
+            // UK2Node_SetFieldsInStruct all inherit UK2Node_Variable through
+            // UK2Node_StructOperation. Classify them before the generic
+            // UK2Node_Variable fallback so they are not emitted as bogus
+            // variable_reference nodes with member_name=None.
+            if (Cast<UK2Node_SetFieldsInStruct>(Node))
+            {
+                OutOperation = TEXT("set_fields_in_struct");
+            }
+            else if (Cast<UK2Node_MakeStruct>(Node))
+            {
+                OutOperation = TEXT("make_struct");
+            }
+            else if (Cast<UK2Node_BreakStruct>(Node))
+            {
+                OutOperation = TEXT("break_struct");
+            }
+            else
+            {
+                OutOperation = TEXT("struct_operation");
+            }
+
+            if (UScriptStruct* StructType = StructOperation->StructType.Get())
+            {
+                OutSymbol = StructType->GetName();
+                OutOwner = StructType->GetPathName();
+                Semantic->SetStringField(TEXT("struct_type"), OutOwner);
+                Semantic->SetStringField(TEXT("struct_name"), OutSymbol);
+            }
+            Semantic->SetBoolField(TEXT("pure"), StructOperation->IsNodePure());
+            Semantic->SetStringField(TEXT("classification_source"), TEXT("node_class"));
+            Semantic->SetStringField(TEXT("concrete_node_class"), Node->GetClass()->GetPathName());
         }
         else if (UK2Node_VariableGet* VariableGet = Cast<UK2Node_VariableGet>(Node))
         {
