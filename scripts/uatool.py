@@ -132,7 +132,7 @@ def editor_module_configuration(editor: Path) -> str:
 
     DebugGame builds game modules with debug settings while Editor/plugin
     modules retain Development-style binary names. UnrealAssetTool is an Editor
-    module, so DebugGame uses the normal unsuffixed module DLL/manifest names.
+    module, so DebugGame uses the normal unsuffixed module DLL name. The\n    runtime manifest remains target-configuration-specific.
     """
     configuration = editor_configuration(editor)
     return "Development" if configuration == "DebugGame" else configuration
@@ -150,7 +150,7 @@ def expected_plugin_binary(editor: Path) -> Path:
 
 def expected_module_manifest(editor: Path) -> Path:
     binaries = plugin_root() / "Binaries" / "Win64"
-    configuration = editor_module_configuration(editor)
+    configuration = editor_configuration(editor)
     if configuration == "Development":
         filename = "UnrealEditor.modules"
     else:
@@ -175,6 +175,69 @@ def module_manifest_binary(editor: Path) -> Path | None:
         return None
     binary = manifest.parent / filename
     return binary if binary.is_file() else None
+
+
+def ensure_runtime_module_manifest(editor: Path) -> Path:
+    """Make the plugin manifest match the exact Editor executable being launched.
+
+    DebugGame Editor modules use Development-style DLL names but a
+    DebugGame-specific .modules filename. The manifest BuildId must also match
+    the selected Editor's own manifest or Unreal will ignore the module.
+    """
+    plugin_manifest = expected_module_manifest(editor)
+    engine_manifest = editor.parent / plugin_manifest.name
+    binary = expected_plugin_binary(editor)
+
+    if not binary.is_file():
+        raise RuntimeError(
+            "Cannot prepare UnrealAssetTool module manifest because the module "
+            f"binary is missing:\n  {binary}"
+        )
+    if not engine_manifest.is_file():
+        raise RuntimeError(
+            "Cannot determine the selected Editor BuildId because its runtime "
+            f"module manifest is missing:\n  {engine_manifest}"
+        )
+
+    try:
+        engine_data = json.loads(engine_manifest.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(
+            f"Could not read selected Editor module manifest:\n  {engine_manifest}"
+        ) from exc
+
+    build_id = engine_data.get("BuildId")
+    if not isinstance(build_id, str) or not build_id:
+        raise RuntimeError(
+            "Selected Editor module manifest has no usable BuildId:\n"
+            f"  {engine_manifest}"
+        )
+
+    desired = {
+        "BuildId": build_id,
+        "Modules": {
+            MODULE_NAME: binary.name,
+        },
+    }
+
+    current = None
+    if plugin_manifest.is_file():
+        try:
+            current = json.loads(plugin_manifest.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            current = None
+
+    if current != desired:
+        plugin_manifest.parent.mkdir(parents=True, exist_ok=True)
+        plugin_manifest.write_text(
+            json.dumps(desired, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        print(f"module manifest repaired: {plugin_manifest}")
+    else:
+        print(f"module manifest ready: {plugin_manifest}")
+
+    return plugin_manifest
 
 
 def plugin_binary_candidates() -> list[Path]:
@@ -274,6 +337,7 @@ def ensure_plugin_binary(project: Path, editor: Path, build_script_arg: str | No
                 + "\n".join(f"Missing: {item}" for item in missing)
                 + "\nRun `uatool.py build ...` first, or omit --no-build."
             )
+        ensure_runtime_module_manifest(editor)
         return
 
     # Always ask UBT to build the complete target. This is normally very cheap
@@ -303,6 +367,7 @@ def ensure_plugin_binary(project: Path, editor: Path, build_script_arg: str | No
             f"{candidates}"
         )
 
+    ensure_runtime_module_manifest(editor)
     manifest_binary = module_manifest_binary(editor)
     if manifest_binary is not None:
         print(f"module ready: {manifest_binary}")
