@@ -1146,6 +1146,30 @@ def create_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX bp_call_edges_target_idx ON blueprint_call_edges(target_blueprint_path, target_function_id);
         CREATE INDEX bp_call_edges_resolution_idx ON blueprint_call_edges(resolution, target_name);
 
+        CREATE TABLE blueprint_data_dependencies (
+            dependency_id TEXT PRIMARY KEY,
+            blueprint_path TEXT NOT NULL,
+            graph_id TEXT NOT NULL,
+            graph_name TEXT NOT NULL,
+            sink_node_id TEXT NOT NULL,
+            sink_operation TEXT NOT NULL,
+            sink_label TEXT NOT NULL,
+            sink_pin_id TEXT NOT NULL,
+            sink_pin_name TEXT NOT NULL,
+            source_count INTEGER NOT NULL,
+            expression_node_count INTEGER NOT NULL,
+            truncated INTEGER NOT NULL,
+            cycle INTEGER NOT NULL,
+            variable_reads_json TEXT NOT NULL,
+            function_calls_json TEXT NOT NULL,
+            object_refs_json TEXT NOT NULL,
+            expression_json TEXT NOT NULL,
+            text TEXT NOT NULL,
+            json TEXT NOT NULL
+        );
+        CREATE INDEX bp_data_deps_sink_idx ON blueprint_data_dependencies(blueprint_path, sink_node_id, sink_pin_name);
+        CREATE INDEX bp_data_deps_graph_idx ON blueprint_data_dependencies(graph_id, sink_operation);
+
         CREATE TABLE blueprint_execution_blocks (
             block_id TEXT PRIMARY KEY,
             blueprint_path TEXT NOT NULL,
@@ -1558,7 +1582,7 @@ def iter_blueprint_pin_rows(output: Path) -> Iterator[dict]:
 
 
 
-DERIVED_SCHEMA_VERSION = 5
+DERIVED_SCHEMA_VERSION = 6
 
 
 def _write_jsonl(path: Path, rows: Iterable[dict]) -> int:
@@ -2096,6 +2120,295 @@ def derive_blueprint_call_edges(output: Path, functions: list[dict]) -> list[dic
             "interface_call": bool(sem.get("interface_call", False)),
             "function_flags": int(sem.get("function_flags", 0) or 0),
         })
+    return rows
+
+
+
+def _data_dependency_node_label(node: dict) -> str:
+    return str(
+        node.get("symbol", "")
+        or node.get("title", "")
+        or node.get("operation", "")
+        or node.get("node_class", "").rsplit(".", 1)[-1]
+    )
+
+
+def _render_data_expression(expr: dict, depth: int = 0, max_depth: int = 8) -> str:
+    """Render a compact deterministic expression summary for retrieval."""
+    if not isinstance(expr, dict):
+        return ""
+    if depth >= max_depth:
+        return "..."
+
+    kind = str(expr.get("kind", ""))
+    if kind == "multi":
+        parts = [
+            _render_data_expression(child, depth + 1, max_depth)
+            for child in expr.get("sources", [])
+            if isinstance(child, dict)
+        ]
+        return " | ".join(part for part in parts if part)
+
+    label = str(expr.get("label", "") or expr.get("operation", "") or kind)
+    output_pin = str(expr.get("output_pin", ""))
+    if kind in {"boundary", "cycle", "truncated", "missing"}:
+        suffix = f".{output_pin}" if output_pin else ""
+        return f"{kind}:{label}{suffix}"
+
+    args: list[str] = []
+    for item in expr.get("inputs", []):
+        if not isinstance(item, dict):
+            continue
+        pin_name = str(item.get("pin", ""))
+        if "literal" in item:
+            value = str(item.get("literal", ""))
+            args.append(f"{pin_name}={value}")
+            continue
+        child_text = [
+            _render_data_expression(child, depth + 1, max_depth)
+            for child in item.get("sources", [])
+            if isinstance(child, dict)
+        ]
+        child_text = [value for value in child_text if value]
+        if child_text:
+            args.append(f"{pin_name}={' | '.join(child_text)}")
+
+    suffix = f".{output_pin}" if output_pin else ""
+    if args:
+        return f"{label}({', '.join(args)}){suffix}"
+    return f"{label}{suffix}"
+
+
+def derive_blueprint_data_dependencies(
+    output: Path,
+    *,
+    max_depth: int = 24,
+    max_nodes: int = 64,
+) -> list[dict]:
+    """Collapse upstream pure data graphs feeding executable Blueprint inputs.
+
+    Raw pin/data edges remain authoritative.  This derived view starts at
+    connected data inputs on execution-bearing nodes and graph result nodes,
+    then recursively follows upstream data edges through pure/data-only nodes.
+    Side-effecting/execution-bearing producers become explicit boundary leaves.
+    Cycles and safety-limit truncation are retained rather than guessed through.
+    """
+    nodes: dict[str, dict] = {}
+    for row in iter_jsonl(output / "blueprint_nodes.jsonl"):
+        node_id = str(row.get("node_id", ""))
+        if node_id:
+            nodes[node_id] = row
+
+    pins_by_node: dict[str, list[dict]] = collections.defaultdict(list)
+    for row in iter_blueprint_pin_rows(output):
+        node_id = str(row.get("node_id", ""))
+        if node_id:
+            pins_by_node[node_id].append(row)
+
+    incoming_by_pin: dict[str, list[dict]] = collections.defaultdict(list)
+    for edge in iter_jsonl(output / "blueprint_edges.jsonl"):
+        if edge.get("edge_kind") != "data":
+            continue
+        target_pin_id = str(edge.get("target_pin_id", ""))
+        if target_pin_id:
+            incoming_by_pin[target_pin_id].append(edge)
+
+    def is_exec_pin(pin: dict) -> bool:
+        pin_type = pin.get("type", {}) if isinstance(pin.get("type"), dict) else {}
+        return str(pin_type.get("category", "")).lower() == "exec"
+
+    def is_input_pin(pin: dict) -> bool:
+        return str(pin.get("direction", "")).lower() in {"input", "egpd_input", "0"}
+
+    node_has_exec: dict[str, bool] = {
+        node_id: any(is_exec_pin(pin) for pin in pin_rows)
+        for node_id, pin_rows in pins_by_node.items()
+    }
+
+    result_operations = {
+        "function_result",
+        "anim_graph_root",
+        "anim_state_result",
+        "anim_transition_result",
+    }
+
+    def has_significant_default(pin: dict) -> bool:
+        return bool(
+            pin.get("default_object", "")
+            or pin.get("default_value", "")
+            or pin.get("default_text", "")
+        )
+
+    def trace_edge(
+        edge: dict,
+        state: dict,
+        depth: int,
+        stack: set[str],
+    ) -> dict:
+        source_node_id = str(edge.get("source_node_id", ""))
+        source_pin_name = str(edge.get("source_pin_name", ""))
+        node = nodes.get(source_node_id)
+        if node is None:
+            return {
+                "kind": "missing",
+                "node_id": source_node_id,
+                "output_pin": source_pin_name,
+            }
+
+        label = _data_dependency_node_label(node)
+        operation = str(node.get("operation", ""))
+
+        if source_node_id in stack:
+            state["cycle"] = True
+            return {
+                "kind": "cycle",
+                "node_id": source_node_id,
+                "operation": operation,
+                "label": label,
+                "output_pin": source_pin_name,
+            }
+
+        if depth >= max_depth or state["node_count"] >= max_nodes:
+            state["truncated"] = True
+            return {
+                "kind": "truncated",
+                "node_id": source_node_id,
+                "operation": operation,
+                "label": label,
+                "output_pin": source_pin_name,
+            }
+
+        state["node_count"] += 1
+        semantic = node.get("semantic", {}) if isinstance(node.get("semantic"), dict) else {}
+        pure = (
+            not node_has_exec.get(source_node_id, False)
+            or (operation == "function_call" and bool(semantic.get("pure", False)))
+        )
+        result = {
+            "kind": "expression" if pure else "boundary",
+            "node_id": source_node_id,
+            "operation": operation,
+            "label": label,
+            "output_pin": source_pin_name,
+        }
+
+        if operation == "variable_get":
+            variable = str(node.get("symbol", ""))
+            if variable:
+                state["variable_reads"].add(variable)
+        elif operation == "function_call":
+            function = str(semantic.get("resolved_function", "") or node.get("symbol", ""))
+            if function:
+                state["function_calls"].add(function)
+
+        if not pure:
+            return result
+
+        inputs: list[dict] = []
+        child_stack = set(stack)
+        child_stack.add(source_node_id)
+        for pin in sorted(
+            pins_by_node.get(source_node_id, []),
+            key=lambda item: int(item.get("pin_index", 0)),
+        ):
+            if not is_input_pin(pin) or is_exec_pin(pin):
+                continue
+
+            incoming = incoming_by_pin.get(str(pin.get("pin_id", "")), [])
+            if incoming:
+                inputs.append({
+                    "pin": pin.get("name", ""),
+                    "sources": [
+                        trace_edge(child, state, depth + 1, child_stack)
+                        for child in incoming
+                    ],
+                })
+                continue
+
+            if has_significant_default(pin):
+                value = str(
+                    pin.get("default_object", "")
+                    or pin.get("default_value", "")
+                    or pin.get("default_text", "")
+                )
+                object_path = str(pin.get("default_object", ""))
+                if object_path:
+                    state["object_refs"].add(object_path)
+                pin_type = pin.get("type", {}) if isinstance(pin.get("type"), dict) else {}
+                inputs.append({
+                    "pin": pin.get("name", ""),
+                    "literal": value,
+                    "object": object_path,
+                    "type": pin_type.get("category", ""),
+                })
+
+        if inputs:
+            result["inputs"] = inputs
+        return result
+
+    rows: list[dict] = []
+    for sink_node_id, node in nodes.items():
+        sink_operation = str(node.get("operation", ""))
+        if not (
+            node_has_exec.get(sink_node_id, False)
+            or sink_operation in result_operations
+        ):
+            continue
+
+        for pin in sorted(
+            pins_by_node.get(sink_node_id, []),
+            key=lambda item: int(item.get("pin_index", 0)),
+        ):
+            if not is_input_pin(pin) or is_exec_pin(pin):
+                continue
+
+            sink_pin_id = str(pin.get("pin_id", ""))
+            incoming = incoming_by_pin.get(sink_pin_id, [])
+            if not incoming:
+                # Unconnected defaults remain directly available in the
+                # canonical pin record; this view is specifically provenance.
+                continue
+
+            state = {
+                "node_count": 0,
+                "truncated": False,
+                "cycle": False,
+                "variable_reads": set(),
+                "function_calls": set(),
+                "object_refs": set(),
+            }
+            trees = [
+                trace_edge(edge, state, 0, {sink_node_id})
+                for edge in incoming
+            ]
+            expression = trees[0] if len(trees) == 1 else {
+                "kind": "multi",
+                "sources": trees,
+            }
+            dependency_id = hashlib.sha1(
+                f"{sink_pin_id}\x1fdata_dependency".encode("utf-8")
+            ).hexdigest()
+            rows.append({
+                "dependency_id": dependency_id,
+                "blueprint_path": node.get("blueprint_path", ""),
+                "graph_id": node.get("graph_id", ""),
+                "graph_name": node.get("graph_name", ""),
+                "sink_node_id": sink_node_id,
+                "sink_operation": sink_operation,
+                "sink_label": _data_dependency_node_label(node),
+                "sink_pin_id": sink_pin_id,
+                "sink_pin_name": pin.get("name", ""),
+                "source_count": len(incoming),
+                "expression_node_count": int(state["node_count"]),
+                "truncated": bool(state["truncated"]),
+                "cycle": bool(state["cycle"]),
+                "variable_reads": sorted(state["variable_reads"]),
+                "function_calls": sorted(state["function_calls"]),
+                "object_refs": sorted(state["object_refs"]),
+                "expression": expression,
+                "text": _render_data_expression(expression),
+            })
+
     return rows
 
 
@@ -3415,6 +3728,7 @@ def derive_output(output: Path) -> dict[str, int]:
     functions = derive_blueprint_functions(output)
     events = derive_blueprint_events(output)
     call_edges = derive_blueprint_call_edges(output, functions)
+    data_dependencies = derive_blueprint_data_dependencies(output)
     execution_blocks, execution_block_edges, execution_roots = derive_blueprint_execution_program(output, functions, events)
     anim_state_machines, anim_states, anim_transitions = derive_anim_state_machines(output)
     relations = derive_blueprint_relations(output, rigvm_links, functions, events)
@@ -3428,6 +3742,7 @@ def derive_output(output: Path) -> dict[str, int]:
         "blueprint_functions": _write_jsonl(output / "blueprint_functions.jsonl", functions),
         "blueprint_events": _write_jsonl(output / "blueprint_events.jsonl", events),
         "blueprint_call_edges": _write_jsonl(output / "blueprint_call_edges.jsonl", call_edges),
+        "blueprint_data_dependencies": _write_jsonl(output / "blueprint_data_dependencies.jsonl", data_dependencies),
         "blueprint_execution_blocks": _write_jsonl(output / "blueprint_execution_blocks.jsonl", execution_blocks),
         "blueprint_execution_block_edges": _write_jsonl(output / "blueprint_execution_block_edges.jsonl", execution_block_edges),
         "blueprint_execution_roots": _write_jsonl(output / "blueprint_execution_roots.jsonl", execution_roots),
@@ -4056,6 +4371,23 @@ def build_database(output: Path) -> Path:
                 ),
             )
 
+        for row in iter_jsonl(output / "blueprint_data_dependencies.jsonl"):
+            conn.execute(
+                "INSERT OR REPLACE INTO blueprint_data_dependencies VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    row.get("dependency_id", ""), row.get("blueprint_path", ""), row.get("graph_id", ""), row.get("graph_name", ""),
+                    row.get("sink_node_id", ""), row.get("sink_operation", ""), row.get("sink_label", ""),
+                    row.get("sink_pin_id", ""), row.get("sink_pin_name", ""), int(row.get("source_count", 0)),
+                    int(row.get("expression_node_count", 0)), 1 if row.get("truncated", False) else 0,
+                    1 if row.get("cycle", False) else 0,
+                    json.dumps(row.get("variable_reads", []), ensure_ascii=False, separators=(",", ":")),
+                    json.dumps(row.get("function_calls", []), ensure_ascii=False, separators=(",", ":")),
+                    json.dumps(row.get("object_refs", []), ensure_ascii=False, separators=(",", ":")),
+                    json.dumps(row.get("expression", {}), ensure_ascii=False, separators=(",", ":")),
+                    row.get("text", ""), json.dumps(row, ensure_ascii=False, separators=(",", ":")),
+                ),
+            )
+
         for row in iter_jsonl(output / "blueprint_execution_blocks.jsonl"):
             conn.execute(
                 "INSERT OR REPLACE INTO blueprint_execution_blocks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -4380,6 +4712,7 @@ DEFAULT_BUNDLE_FILES = (
     "blueprint_functions.jsonl",
     "blueprint_events.jsonl",
     "blueprint_call_edges.jsonl",
+    "blueprint_data_dependencies.jsonl",
     "blueprint_execution_blocks.jsonl",
     "blueprint_execution_block_edges.jsonl",
     "blueprint_execution_roots.jsonl",
@@ -4703,6 +5036,22 @@ def query(args: argparse.Namespace) -> int:
             (f"%{term}%",)*7 + (limit,),
         )
         _print_rows(rows, ("blueprint_path", "graph_name", "target_name", "target_owner", "resolution", "target_blueprint_path", "pure", "latent"))
+
+        print("\n[blueprint data dependencies]")
+        rows = conn.execute(
+            """
+            SELECT blueprint_path, graph_name, sink_operation, sink_label, sink_pin_name,
+                   expression_node_count, truncated, cycle, substr(text,1,1400) AS text
+            FROM blueprint_data_dependencies
+            WHERE blueprint_path LIKE ? OR graph_name LIKE ? OR sink_operation LIKE ? OR sink_label LIKE ?
+               OR sink_pin_name LIKE ? OR variable_reads_json LIKE ? OR function_calls_json LIKE ?
+               OR object_refs_json LIKE ? OR text LIKE ?
+            LIMIT ?
+            """,
+            (f"%{term}%",)*9 + (limit,),
+        )
+        _print_rows(rows, ("blueprint_path", "graph_name", "sink_operation", "sink_label", "sink_pin_name",
+                           "expression_node_count", "truncated", "cycle", "text"))
 
         print("\n[blueprint execution blocks]")
         rows = conn.execute(
