@@ -1146,6 +1146,32 @@ def create_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX bp_call_edges_target_idx ON blueprint_call_edges(target_blueprint_path, target_function_id);
         CREATE INDEX bp_call_edges_resolution_idx ON blueprint_call_edges(resolution, target_name);
 
+        CREATE TABLE blueprint_call_bindings (
+            binding_id TEXT PRIMARY KEY,
+            call_id TEXT NOT NULL,
+            call_node_id TEXT NOT NULL,
+            caller_blueprint_path TEXT NOT NULL,
+            caller_graph_id TEXT NOT NULL,
+            caller_function_id TEXT NOT NULL,
+            target_blueprint_path TEXT NOT NULL,
+            target_function_id TEXT NOT NULL,
+            direction TEXT NOT NULL,
+            call_pin_id TEXT NOT NULL,
+            call_pin_name TEXT NOT NULL,
+            parameter_name TEXT NOT NULL,
+            parameter_pin_ids_json TEXT NOT NULL,
+            match_kind TEXT NOT NULL,
+            split_suffix TEXT NOT NULL,
+            call_pin_type_json TEXT NOT NULL,
+            parameter_type_json TEXT NOT NULL,
+            dependency_ids_json TEXT NOT NULL,
+            consumer_pin_ids_json TEXT NOT NULL,
+            json TEXT NOT NULL
+        );
+        CREATE INDEX bp_call_bindings_call_idx ON blueprint_call_bindings(call_id, direction);
+        CREATE INDEX bp_call_bindings_target_idx ON blueprint_call_bindings(target_function_id, parameter_name);
+        CREATE INDEX bp_call_bindings_pin_idx ON blueprint_call_bindings(call_pin_id);
+
         CREATE TABLE blueprint_data_dependencies (
             dependency_id TEXT PRIMARY KEY,
             blueprint_path TEXT NOT NULL,
@@ -1582,7 +1608,7 @@ def iter_blueprint_pin_rows(output: Path) -> Iterator[dict]:
 
 
 
-DERIVED_SCHEMA_VERSION = 6
+DERIVED_SCHEMA_VERSION = 7
 
 
 def _write_jsonl(path: Path, rows: Iterable[dict]) -> int:
@@ -2123,12 +2149,254 @@ def derive_blueprint_call_edges(output: Path, functions: list[dict]) -> list[dic
     return rows
 
 
+def derive_blueprint_call_bindings(
+    output: Path,
+    functions: list[dict],
+    call_edges: list[dict],
+    data_dependencies: list[dict],
+) -> list[dict]:
+    """Bridge uniquely resolved Blueprint calls across function boundaries.
+
+    The canonical pin graph stops at a function-call node.  For calls that
+    resolve to exactly one project Blueprint function, this derived view maps:
+      caller input pin -> callee function-entry parameter pin
+      callee function-result parameter pin -> caller output pin
+
+    Split struct pins are mapped to their parent parameter and retain the raw
+    suffix instead of guessing a member hierarchy. Ambiguous interface/
+    override calls deliberately produce no bindings.
+    """
+    function_by_id = {str(row.get("function_id", "")): row for row in functions}
+
+    pins_by_node: dict[str, list[dict]] = collections.defaultdict(list)
+    for pin in iter_blueprint_pin_rows(output):
+        node_id = str(pin.get("node_id", ""))
+        if node_id:
+            pins_by_node[node_id].append(pin)
+
+    outgoing_by_pin: dict[str, list[dict]] = collections.defaultdict(list)
+    for edge in iter_jsonl(output / "blueprint_edges.jsonl"):
+        if edge.get("edge_kind") != "data":
+            continue
+        source_pin_id = str(edge.get("source_pin_id", ""))
+        if source_pin_id:
+            outgoing_by_pin[source_pin_id].append(edge)
+
+    dependency_by_sink_pin: dict[str, list[str]] = collections.defaultdict(list)
+    for dependency in data_dependencies:
+        sink_pin_id = str(dependency.get("sink_pin_id", ""))
+        dependency_id = str(dependency.get("dependency_id", ""))
+        if sink_pin_id and dependency_id:
+            dependency_by_sink_pin[sink_pin_id].append(dependency_id)
+
+    def is_exec_pin(pin: dict) -> bool:
+        pin_type = pin.get("type", {}) if isinstance(pin.get("type"), dict) else {}
+        return str(pin_type.get("category", "")).lower() == "exec"
+
+    def is_input_pin(pin: dict) -> bool:
+        return str(pin.get("direction", "")).lower() in {"input", "egpd_input", "0"}
+
+    def parameter_records(function: dict, direction: str) -> list[dict]:
+        if direction == "argument":
+            node_ids = [str(function.get("entry_node_id", ""))]
+            signature = function.get("inputs", []) if isinstance(function.get("inputs"), list) else []
+            want_output = True
+        else:
+            node_ids = [str(value) for value in function.get("result_node_ids", [])]
+            signature = function.get("outputs", []) if isinstance(function.get("outputs"), list) else []
+            want_output = False
+
+        signature_by_name = {
+            str(item.get("name", "")): item
+            for item in signature
+            if isinstance(item, dict) and item.get("name")
+        }
+        pin_ids_by_name: dict[str, list[str]] = collections.defaultdict(list)
+        for node_id in node_ids:
+            for pin in pins_by_node.get(node_id, []):
+                if is_exec_pin(pin):
+                    continue
+                if _pin_direction_is_output(pin) != want_output:
+                    continue
+                name = str(pin.get("name", ""))
+                if direction == "argument" and name == "OutputDelegate":
+                    continue
+                if name:
+                    pin_ids_by_name[name].append(str(pin.get("pin_id", "")))
+
+        result: list[dict] = []
+        for name, item in signature_by_name.items():
+            result.append({
+                "name": name,
+                "type": item.get("type", {}) if isinstance(item.get("type"), dict) else {},
+                "pin_ids": [value for value in pin_ids_by_name.get(name, []) if value],
+            })
+        return result
+
+    def match_parameter(call_pin_name: str, parameters: list[dict]) -> tuple[dict | None, str, str]:
+        exact = [item for item in parameters if item.get("name") == call_pin_name]
+        if len(exact) == 1:
+            return exact[0], "exact", ""
+
+        # UE names split struct pins as Parent_Member. Prefer the longest parent
+        # parameter so similarly prefixed parameters remain deterministic.
+        split = [
+            item for item in parameters
+            if item.get("name") and call_pin_name.startswith(str(item.get("name")) + "_")
+        ]
+        split.sort(key=lambda item: (-len(str(item.get("name", ""))), str(item.get("name", ""))))
+        if split:
+            parent = split[0]
+            parent_name = str(parent.get("name", ""))
+            return parent, "split_struct", call_pin_name[len(parent_name) + 1:]
+        return None, "", ""
+
+    rows: list[dict] = []
+    for call in call_edges:
+        if call.get("resolution") != "internal":
+            continue
+        target_function_id = str(call.get("target_function_id", ""))
+        target = function_by_id.get(target_function_id)
+        if not target:
+            continue
+
+        call_node_id = str(call.get("call_node_id", ""))
+        argument_parameters = parameter_records(target, "argument")
+        return_parameters = parameter_records(target, "return")
+
+        for call_pin in pins_by_node.get(call_node_id, []):
+            if is_exec_pin(call_pin):
+                continue
+            direction = "argument" if is_input_pin(call_pin) else "return"
+            parameters = argument_parameters if direction == "argument" else return_parameters
+            call_pin_name = str(call_pin.get("name", ""))
+            parameter, match_kind, split_suffix = match_parameter(call_pin_name, parameters)
+            if not parameter:
+                # Context pins such as self/Target are not function parameters.
+                continue
+
+            call_pin_id = str(call_pin.get("pin_id", ""))
+            parameter_pin_ids = [str(value) for value in parameter.get("pin_ids", []) if value]
+            if direction == "argument":
+                dependency_ids = list(dependency_by_sink_pin.get(call_pin_id, []))
+                consumer_pin_ids = sorted({
+                    str(edge.get("target_pin_id", ""))
+                    for parameter_pin_id in parameter_pin_ids
+                    for edge in outgoing_by_pin.get(parameter_pin_id, [])
+                    if edge.get("target_pin_id")
+                })
+            else:
+                dependency_ids = sorted({
+                    dependency_id
+                    for parameter_pin_id in parameter_pin_ids
+                    for dependency_id in dependency_by_sink_pin.get(parameter_pin_id, [])
+                })
+                consumer_pin_ids = sorted({
+                    str(edge.get("target_pin_id", ""))
+                    for edge in outgoing_by_pin.get(call_pin_id, [])
+                    if edge.get("target_pin_id")
+                })
+
+            basis = "\x1f".join((call_node_id, direction, call_pin_id, str(parameter.get("name", ""))))
+            binding_id = "bind:" + hashlib.sha1(basis.encode("utf-8")).hexdigest()[:24]
+            call_pin_type = call_pin.get("type", {}) if isinstance(call_pin.get("type"), dict) else {}
+            rows.append({
+                "binding_id": binding_id,
+                "call_id": call.get("call_id", ""),
+                "call_node_id": call_node_id,
+                "caller_blueprint_path": call.get("blueprint_path", ""),
+                "caller_graph_id": call.get("graph_id", ""),
+                "caller_function_id": call.get("caller_function_id", ""),
+                "target_blueprint_path": call.get("target_blueprint_path", ""),
+                "target_function_id": target_function_id,
+                "direction": direction,
+                "call_pin_id": call_pin_id,
+                "call_pin_name": call_pin_name,
+                "parameter_name": parameter.get("name", ""),
+                "parameter_pin_ids": parameter_pin_ids,
+                "match_kind": match_kind,
+                "split_suffix": split_suffix,
+                "call_pin_type": call_pin_type,
+                "parameter_type": parameter.get("type", {}),
+                "dependency_ids": dependency_ids,
+                "consumer_pin_ids": consumer_pin_ids,
+            })
+    return rows
+
+
+_STRUCT_NODE_OPERATIONS = {
+    "/Script/BlueprintGraph.K2Node_MakeStruct": "make_struct",
+    "/Script/BlueprintGraph.K2Node_BreakStruct": "break_struct",
+    "/Script/BlueprintGraph.K2Node_SetFieldsInStruct": "set_fields_in_struct",
+}
+
+
+def _effective_blueprint_operation(node: dict) -> str:
+    """Return corrected semantic operation for legacy schema-10 struct nodes.
+
+    Scanner schema 11 emits these operations canonically.  Schema 10 labeled
+    the three struct-operation classes as variable_reference because they
+    inherit UK2Node_Variable.  Keep derive/pack backward-compatible without
+    mutating old canonical scans.
+    """
+    node_class = str(node.get("node_class", ""))
+    return _STRUCT_NODE_OPERATIONS.get(node_class, str(node.get("operation", "")))
+
+
+def _node_struct_type(node: dict) -> str:
+    semantic = node.get("semantic", {}) if isinstance(node.get("semantic"), dict) else {}
+    struct_type = str(semantic.get("struct_type", ""))
+    if struct_type:
+        return struct_type
+
+    # Legacy schema-10 fallback: exact struct type is still retained on pins.
+    operation = _effective_blueprint_operation(node)
+    pins = node.get("pins", []) if isinstance(node.get("pins"), list) else []
+    preferred_direction = "output" if operation == "make_struct" else "input"
+    for pin in pins:
+        if not isinstance(pin, dict):
+            continue
+        pin_type = pin.get("type", {}) if isinstance(pin.get("type"), dict) else {}
+        if str(pin_type.get("category", "")) != "struct":
+            continue
+        if str(pin.get("direction", "")).lower() == preferred_direction:
+            value = str(pin_type.get("subcategory_object", ""))
+            if value:
+                return value
+    for pin in pins:
+        if not isinstance(pin, dict):
+            continue
+        pin_type = pin.get("type", {}) if isinstance(pin.get("type"), dict) else {}
+        if str(pin_type.get("category", "")) == "struct":
+            value = str(pin_type.get("subcategory_object", ""))
+            if value:
+                return value
+    return ""
+
+
+def _struct_type_short_name(path: str) -> str:
+    if not path:
+        return "struct"
+    return path.rsplit(".", 1)[-1].rsplit("/", 1)[-1]
+
 
 def _data_dependency_node_label(node: dict) -> str:
+    operation = _effective_blueprint_operation(node)
+    if operation in {"make_struct", "break_struct", "set_fields_in_struct"}:
+        struct_name = _struct_type_short_name(_node_struct_type(node))
+        prefix = {
+            "make_struct": "Make",
+            "break_struct": "Break",
+            "set_fields_in_struct": "Set fields in",
+        }[operation]
+        return f"{prefix} {struct_name}"
+
+    symbol = str(node.get("symbol", ""))
+    if symbol and symbol != "None":
+        return symbol
     return str(
-        node.get("symbol", "")
-        or node.get("title", "")
-        or node.get("operation", "")
+        node.get("title", "")
+        or operation
         or node.get("node_class", "").rsplit(".", 1)[-1]
     )
 
@@ -2256,7 +2524,7 @@ def derive_blueprint_data_dependencies(
             }
 
         label = _data_dependency_node_label(node)
-        operation = str(node.get("operation", ""))
+        operation = _effective_blueprint_operation(node)
 
         if source_node_id in stack:
             state["cycle"] = True
@@ -2348,7 +2616,7 @@ def derive_blueprint_data_dependencies(
 
     rows: list[dict] = []
     for sink_node_id, node in nodes.items():
-        sink_operation = str(node.get("operation", ""))
+        sink_operation = _effective_blueprint_operation(node)
         if not (
             node_has_exec.get(sink_node_id, False)
             or sink_operation in result_operations
@@ -2738,7 +3006,7 @@ def derive_blueprint_relations(
         bp = node.get("blueprint_path", "")
         gid = node.get("graph_id", "")
         nid = node.get("node_id", "")
-        op = node.get("operation", "")
+        op = _effective_blueprint_operation(node)
         sem = node.get("semantic", {}) if isinstance(node.get("semantic"), dict) else {}
         symbol = str(node.get("symbol", ""))
         owner = str(node.get("owner", ""))
@@ -2991,7 +3259,7 @@ def derive_graph_context(
         for node in nodes:
             nid = node.get("node_id", "")
             label = node.get("symbol", "") or node.get("title", "")
-            line = f"  {aliases[nid]} {node.get('operation','')} {label}".rstrip()
+            line = f"  {aliases[nid]} {_effective_blueprint_operation(node)} {label}".rstrip()
             event = event_by_node.get(nid)
             if event:
                 if event.get("event_kind") == "component_bound":
@@ -3080,7 +3348,7 @@ def derive_blueprint_summaries(
         if node_id in seen_nodes:
             continue
         seen_nodes.add(node_id)
-        ops_by_bp[node.get("blueprint_path", "")][node.get("operation", "")] += 1
+        ops_by_bp[node.get("blueprint_path", "")][_effective_blueprint_operation(node)] += 1
     rel_by_bp: dict[str, collections.Counter] = collections.defaultdict(collections.Counter)
     for rel in relations:
         rel_by_bp[rel.get("blueprint_path", "")][rel.get("relation", "")] += 1
@@ -3729,6 +3997,7 @@ def derive_output(output: Path) -> dict[str, int]:
     events = derive_blueprint_events(output)
     call_edges = derive_blueprint_call_edges(output, functions)
     data_dependencies = derive_blueprint_data_dependencies(output)
+    call_bindings = derive_blueprint_call_bindings(output, functions, call_edges, data_dependencies)
     execution_blocks, execution_block_edges, execution_roots = derive_blueprint_execution_program(output, functions, events)
     anim_state_machines, anim_states, anim_transitions = derive_anim_state_machines(output)
     relations = derive_blueprint_relations(output, rigvm_links, functions, events)
@@ -3742,6 +4011,7 @@ def derive_output(output: Path) -> dict[str, int]:
         "blueprint_functions": _write_jsonl(output / "blueprint_functions.jsonl", functions),
         "blueprint_events": _write_jsonl(output / "blueprint_events.jsonl", events),
         "blueprint_call_edges": _write_jsonl(output / "blueprint_call_edges.jsonl", call_edges),
+        "blueprint_call_bindings": _write_jsonl(output / "blueprint_call_bindings.jsonl", call_bindings),
         "blueprint_data_dependencies": _write_jsonl(output / "blueprint_data_dependencies.jsonl", data_dependencies),
         "blueprint_execution_blocks": _write_jsonl(output / "blueprint_execution_blocks.jsonl", execution_blocks),
         "blueprint_execution_block_edges": _write_jsonl(output / "blueprint_execution_block_edges.jsonl", execution_block_edges),
@@ -4371,6 +4641,24 @@ def build_database(output: Path) -> Path:
                 ),
             )
 
+        for row in iter_jsonl(output / "blueprint_call_bindings.jsonl"):
+            conn.execute(
+                "INSERT OR REPLACE INTO blueprint_call_bindings VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    row.get("binding_id", ""), row.get("call_id", ""), row.get("call_node_id", ""),
+                    row.get("caller_blueprint_path", ""), row.get("caller_graph_id", ""), row.get("caller_function_id", ""),
+                    row.get("target_blueprint_path", ""), row.get("target_function_id", ""), row.get("direction", ""),
+                    row.get("call_pin_id", ""), row.get("call_pin_name", ""), row.get("parameter_name", ""),
+                    json.dumps(row.get("parameter_pin_ids", []), ensure_ascii=False, separators=(",", ":")),
+                    row.get("match_kind", ""), row.get("split_suffix", ""),
+                    json.dumps(row.get("call_pin_type", {}), ensure_ascii=False, separators=(",", ":")),
+                    json.dumps(row.get("parameter_type", {}), ensure_ascii=False, separators=(",", ":")),
+                    json.dumps(row.get("dependency_ids", []), ensure_ascii=False, separators=(",", ":")),
+                    json.dumps(row.get("consumer_pin_ids", []), ensure_ascii=False, separators=(",", ":")),
+                    json.dumps(row, ensure_ascii=False, separators=(",", ":")),
+                ),
+            )
+
         for row in iter_jsonl(output / "blueprint_data_dependencies.jsonl"):
             conn.execute(
                 "INSERT OR REPLACE INTO blueprint_data_dependencies VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -4712,6 +5000,7 @@ DEFAULT_BUNDLE_FILES = (
     "blueprint_functions.jsonl",
     "blueprint_events.jsonl",
     "blueprint_call_edges.jsonl",
+    "blueprint_call_bindings.jsonl",
     "blueprint_data_dependencies.jsonl",
     "blueprint_execution_blocks.jsonl",
     "blueprint_execution_block_edges.jsonl",
@@ -5036,6 +5325,21 @@ def query(args: argparse.Namespace) -> int:
             (f"%{term}%",)*7 + (limit,),
         )
         _print_rows(rows, ("blueprint_path", "graph_name", "target_name", "target_owner", "resolution", "target_blueprint_path", "pure", "latent"))
+
+        print("\n[blueprint call bindings]")
+        rows = conn.execute(
+            """
+            SELECT caller_blueprint_path, direction, call_pin_name, parameter_name, match_kind,
+                   target_blueprint_path, target_function_id, split_suffix
+            FROM blueprint_call_bindings
+            WHERE caller_blueprint_path LIKE ? OR call_pin_name LIKE ? OR parameter_name LIKE ?
+               OR target_blueprint_path LIKE ? OR target_function_id LIKE ? OR split_suffix LIKE ?
+            LIMIT ?
+            """,
+            (f"%{term}%",)*6 + (limit,),
+        )
+        _print_rows(rows, ("caller_blueprint_path", "direction", "call_pin_name", "parameter_name",
+                           "match_kind", "target_blueprint_path", "target_function_id", "split_suffix"))
 
         print("\n[blueprint data dependencies]")
         rows = conn.execute(

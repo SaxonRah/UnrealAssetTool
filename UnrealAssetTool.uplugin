@@ -1,7 +1,7 @@
 {
   "FileVersion": 3,
-  "Version": 63,
-  "VersionName": "0.6.3-dev",
+  "Version": 64,
+  "VersionName": "0.6.4-dev",
   "FriendlyName": "Unreal Asset Tool",
   "Description": "AI-oriented structural indexer for Unreal Engine projects.",
   "Category": "Developer Tools",
