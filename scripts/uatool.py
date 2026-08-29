@@ -611,14 +611,21 @@ CREATE TABLE world_summaries(
 """
 
 
+_original_create_schema = core.create_schema
+_original_derive_output = core.derive_output
+_original_build_database = core.build_database
+_original_query = core.query
+_original_scan = core.scan
+
+
 def create_schema(conn: sqlite3.Connection) -> None:
-    core.create_schema(conn)
+    _original_create_schema(conn)
     conn.executescript(WORLD_DERIVED_SQL)
 
 
 def derive_output(output: Path) -> dict[str, int]:
     output = Path(output).expanduser().resolve()
-    counts = dict(core.derive_output(output))
+    counts = dict(_original_derive_output(output))
     relations, context, summaries = _derive_world(output)
     world_counts = {
         "world_relations": _write(output / "world_relations.jsonl", relations),
@@ -647,7 +654,7 @@ def derive_output(output: Path) -> dict[str, int]:
 
 def build_database(output: Path) -> Path:
     output = Path(output).expanduser().resolve()
-    db_path = core.build_database(output)
+    db_path = _original_build_database(output)
     conn = sqlite3.connect(db_path)
     try:
         for row in _rows(output / "world_relations.jsonl"):
@@ -881,13 +888,6 @@ def _print_summary(args) -> None:
         project = Path(args.project).expanduser().resolve()
         print(f"upload bundle: {project.parent / f'{project.stem}.uatool.zip'}")
     print("============================")
-
-
-_original_create_schema = core.create_schema
-_original_derive_output = core.derive_output
-_original_build_database = core.build_database
-_original_query = core.query
-_original_scan = core.scan
 
 
 def scan(args) -> int:
