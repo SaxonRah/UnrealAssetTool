@@ -26,7 +26,7 @@ def _topology_error(output: Path) -> str | None:
     stateless_renderers = list(_rows(output / "niagara_stateless_renderers.jsonl"))
     channels = list(_rows(output / "niagara_data_channels.jsonl"))
     channel_variables = list(_rows(output / "niagara_data_channel_variables.jsonl"))
-    collections = list(_rows(output / "niagara_parameter_collections.jsonl"))
+    parameter_collections = list(_rows(output / "niagara_parameter_collections.jsonl"))
     collection_parameters = list(_rows(output / "niagara_parameter_collection_parameters.jsonl"))
     cascade_systems = list(_rows(output / "cascade_systems.jsonl"))
     cascade_emitters = list(_rows(output / "cascade_emitters.jsonl"))
@@ -83,7 +83,7 @@ def _topology_error(output: Path) -> str | None:
     parameters_by_collection = collections.Counter(
         str(row.get("collection_path", "")) for row in collection_parameters
     )
-    for row in collections:
+    for row in parameter_collections:
         path = str(row.get("collection_path", ""))
         if int(row.get("parameter_count", 0)) != parameters_by_collection[path]:
             return f"Niagara Parameter Collection parameter count mismatch: {path}"
