@@ -197,7 +197,7 @@ static bool ScanGameplayDataAsset(
 
     if (UDataTable* Table = Cast<UDataTable>(Object))
     {
-        UScriptStruct* RowStruct = Table->GetRowStruct();
+        const UScriptStruct* RowStruct = Table->GetRowStruct();
         RowStructPath = RowStruct ? RowStruct->GetPathName() : FString();
         RowCount = Table->GetRowMap().Num();
 
@@ -218,8 +218,8 @@ static bool ScanGameplayDataAsset(
                 {
                     continue;
                 }
-                const FString Tag = ExportFirstField(RowStruct, RowData, Object, {TEXT("Tag"), TEXT("GameplayTag")}));
-                const FString Comment = ExportFirstField(RowStruct, RowData, Object, {TEXT("DevComment"), TEXT("Comment")}));
+                const FString Tag = ExportFirstField(RowStruct, RowData, Object, {TEXT("Tag"), TEXT("GameplayTag")});
+                const FString Comment = ExportFirstField(RowStruct, RowData, Object, {TEXT("DevComment"), TEXT("Comment")});
                 TSharedRef<FJsonObject> TagRow = MakeShared<FJsonObject>();
                 TagRow->SetStringField(TEXT("table_path"), AssetPath);
                 TagRow->SetNumberField(TEXT("tag_index"), TagIndex++);
