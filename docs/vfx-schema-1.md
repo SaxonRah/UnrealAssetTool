@@ -7,7 +7,7 @@ structural schema: 12
 world schema:      12
 animation schema:   1
 vfx schema:         1   # under validation
- derived schema:   11
+derived schema:    11
 ```
 
 The VFX pass runs alongside the world/animation commandlet work and writes `vfx_manifest.json`. `scripts/uatool.py` remains the only public launcher; VFX data is validated, packed into SQLite, queried, and included in ordinary upload bundles by that launcher.
@@ -99,6 +99,12 @@ vfx_manifest.json
 - update-frequency and cull-reaction authored settings
 - bounded reflected properties/references
 
+### Parameter Collections
+
+StackOBot + the separately installable Fab Niagara Examples content exposes a project-authored `NiagaraParameterCollection`, a family not exercised by the original Content Examples VFX inventory. UE 5.8 treats this as a first-class global Niagara parameter asset and permits a collection to reference a Material Parameter Collection.
+
+This family is now explicitly part of the schema-1 corpus gate. It is not silently considered covered by the initial scanner; collection/parameter normalization will be promoted from the second-corpus evidence during the validation/fix pass.
+
 ## Cascade coverage in the first pass
 
 ```text
@@ -122,9 +128,11 @@ The normalized rows retain emitter/LOD order, emitter name/significance, LOD ena
 - hard/soft UObject references are recursively normalized through arrays, sets, maps and structs;
 - uncommon Niagara renderer/module/plugin-specific state remains available even before it receives a dedicated normalized field.
 
-## Initial validation corpus
+## Validation corpora
 
-Content Examples is the first breadth corpus because the existing Asset Registry scan already exposes substantial real VFX content:
+### Content Examples
+
+Content Examples is the primary mixed Niagara + Cascade breadth corpus. Generic Asset Registry inventory before VFX schema 1 normalization:
 
 ```text
 NiagaraSystem             84
@@ -135,4 +143,45 @@ NiagaraEffectType          1
 ParticleSystem            29
 ```
 
-The first UE 5.8.2 build/scan will validate the actual serialized container shapes and determine which reflected fields need post-pass normalization, following the same evidence-driven approach used for animation schema 1.
+### StackOBot + Niagara Examples
+
+The separately installable Fab Niagara Examples content was added to StackOBot. The pack contributes 669 project assets and provides an independently authored gameplay-oriented Niagara corpus rather than duplicating Content Examples.
+
+Whole-project Niagara-related inventory:
+
+```text
+NiagaraSystem              73
+NiagaraEmitter             21
+NiagaraEffectType           7
+NiagaraScript               3
+NiagaraDataChannelAsset     2
+NiagaraParameterCollection  1
+```
+
+The `/Game/NiagaraExamples/` pack itself contains:
+
+```text
+NiagaraSystem              59
+NiagaraEmitter             21
+NiagaraEffectType           5
+NiagaraScript               3
+NiagaraDataChannelAsset     2
+NiagaraParameterCollection  1
+```
+
+The same pack also broadens future regression coverage with Enhanced Input, Level Sequence, Control Rig, Animation Blueprint, Animated Sparse Volume Texture, materials, meshes and gameplay Blueprints.
+
+## Current validation state
+
+The first uploaded Content Examples and StackOBot+NiagaraExamples bundles after PR #8 was opened are valid structural/world/animation/derived-schema-11 regression artifacts: all 144 files in each bundle parse cleanly and their existing schema invariants remain intact.
+
+They do **not**, however, contain `vfx_manifest.json` or any VFX schema-1 streams, so they do not validate PR #8. A valid PR #8 scan must contain `vfx_manifest.json` and these top-level `manifest.json` fields:
+
+```text
+vfx_schema_version
+vfx_counts
+vfx_files
+vfx_pass
+```
+
+The first true UE 5.8.2 VFX-schema scans from both corpora will validate serialized container shapes and drive evidence-based normalization fixes, following the same process used for animation schema 1.
