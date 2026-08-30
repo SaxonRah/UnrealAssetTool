@@ -23,6 +23,9 @@ import subprocess
 import time
 from pathlib import Path
 
+import uatool_bundle_perf as bundle_perf
+import uatool_validation_perf as validation_perf
+
 CACHE_DIR_NAME = "UnrealAssetToolBuildCache"
 CACHE_DIRS = ("Binaries", "Intermediate")
 NATIVE_INPUT_SUFFIXES = {
@@ -242,7 +245,7 @@ def _save_cache(cache_root: Path, stage_root: Path) -> None:
 
 
 def install(core) -> None:
-    """Patch uatool_core's staging/build globals in place."""
+    """Patch uatool_core's staging/build/bundle globals in place."""
     base_stage = core.stage_invoking_plugin_checkout
 
     @contextmanager
@@ -266,3 +269,8 @@ def install(core) -> None:
     core.build_project = lambda project, editor, build_script_arg=None, active_plugin_root=None: _optimized_build_project(
         core, project, editor, build_script_arg, active_plugin_root
     )
+
+    # These are orthogonal performance policies but are installed here before
+    # the composition root captures core globals, keeping one canonical CLI.
+    bundle_perf.install(core)
+    validation_perf.install()
