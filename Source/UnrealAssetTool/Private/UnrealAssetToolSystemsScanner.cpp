@@ -20,6 +20,8 @@
 #include "UObject/UObjectHash.h"
 #include "UObject/UnrealType.h"
 
+#include <initializer_list>
+
 namespace UnrealAssetToolSystems
 {
 #include "UnrealAssetToolSystemsCore.inl"
