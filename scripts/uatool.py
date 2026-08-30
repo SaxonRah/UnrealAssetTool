@@ -165,14 +165,17 @@ def derive_output(output):
             f"{cleanup['material_expression_guids']}"
         )
 
-    # Raw specialist passes are prerequisites for the unified graph. Gate before
-    # trusting or rewriting any derived files so failed/old scans cannot look fresh.
-    _require_vfx(output)
-    _require_systems(output)
-
+    # A freshness stamp exists only after a complete raw + derived validation.
+    # Canonical cleanup runs first: if it changed a raw file, its metadata no
+    # longer matches the stamp and this fast path automatically misses.
     if _derived_is_fresh(output):
         print(f"derived output current: reusing validated schema {FINAL_DERIVED_SCHEMA_VERSION}")
         return _declared_derived_counts(output)
+
+    # Raw specialist passes are prerequisites for the unified graph. Gate before
+    # rewriting derived files so failed/old scans cannot look fresh.
+    _require_vfx(output)
+    _require_systems(output)
 
     counts = dict(_base_derive_output(output))
 
