@@ -298,7 +298,7 @@ static void GatherNestedObjects(UObject* Root, TArray<UObject*>& Out)
     GetObjectsWithOuter(
         Root,
         Out,
-        true,
+        EGetObjectsFlags::IncludeNestedObjects,
         RF_Transient,
         EInternalObjectFlags::Garbage);
     Out.Sort([](const UObject& A, const UObject& B)
