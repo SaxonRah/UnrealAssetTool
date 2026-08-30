@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
-"""Canonical UnrealAssetTool CLI extended with derived world schema 10."""
+"""Canonical UnrealAssetTool CLI with derived world and animation indexing."""
 from __future__ import annotations
-import builtins, collections, hashlib, json, sqlite3
+import builtins, collections, hashlib, json, sqlite3, sys
 from pathlib import Path
 import uatool_core as core
+import uatool_animation as animation
+import uatool_animation_breadth as animation_breadth
+import uatool_animation_stitch as animation_stitch
 import uatool_world_stitch as world_stitch
 
-DERIVED_SCHEMA_VERSION = 10
+DERIVED_SCHEMA_VERSION = 11
 WORLD_DERIVED_FILES = ("world_relations.jsonl","world_context.jsonl","world_summaries.jsonl",world_stitch.SYSTEM_DERIVED_FILE)
+ANIMATION_DERIVED_FILES = animation_stitch.DERIVED_FILES
 
 def _rows(path):
     if not path.exists(): return
@@ -147,7 +151,7 @@ def _derive_world(output):
     for w in sorted(sm):
         s=sm[w]; lines=[s["text"]]
         if dw[w]:
-            lines.append("Data Layers:"); lines += [f"  {z.get('instance_name','')} {z.get('short_name','')} asset={z.get('asset_path','')}" for z in sorted(dw[w],key=lambda z:str(z.get("instance_name","")))]
+            lines.append("Data Layers:"); lines += [f"  {z.get('instance_name','')} {z.get('short_name','')} asset={z.get('asset_path','')}" for z in sorted(dw[w],key=lambda z:str(z.get("instance_name","") ))]
         st=[z for z in lw[w] if z.get("level_kind")!="persistent"]
         if st: lines.append("Streaming:"); lines += [f"  {z.get('streaming_class','')} -> {z.get('target_world_package','')}" for z in st]
         wi=[z for z in rr[w] if z.get("relation")=="instantiates_world"]
@@ -170,14 +174,19 @@ CREATE TABLE world_summaries(world_path TEXT PRIMARY KEY,world_name TEXT NOT NUL
 
 _old_schema=core.create_schema; _old_derive=core.derive_output; _old_db=core.build_database; _old_query=core.query; _old_scan=core.scan
 def create_schema(c):
-    _old_schema(c); c.executescript(_SQL); world_stitch.create_schema(c)
+    _old_schema(c); c.executescript(_SQL); world_stitch.create_schema(c); animation.create_schema(c); animation_breadth.create_schema(c); animation_stitch.create_schema(c)
 def derive_output(output):
-    output=Path(output).expanduser().resolve(); counts=dict(_old_derive(output)); rel,ctx,sums=_derive_world(output)
+    output=Path(output).expanduser().resolve(); animation_breadth.prepare_output(output); counts=dict(_old_derive(output)); rel,ctx,sums=_derive_world(output)
     system_relations=world_stitch.derive(output,_rows); ctx=world_stitch.augment_context(ctx,system_relations)
     wc={"world_relations":_write(output/"world_relations.jsonl",rel),world_stitch.SYSTEM_DERIVED_FILE.removesuffix(".jsonl"):_write(output/world_stitch.SYSTEM_DERIVED_FILE,system_relations),"world_context":_write(output/"world_context.jsonl",ctx),"world_summaries":_write(output/"world_summaries.jsonl",sums)}; counts.update(wc)
+    anim_rel,anim_ctx,anim_sums=animation_stitch.derive(output,_rows)
+    ac={"animation_relations":_write(output/"animation_relations.jsonl",anim_rel),"animation_context":_write(output/"animation_context.jsonl",anim_ctx),"animation_summaries":_write(output/"animation_summaries.jsonl",anim_sums)}; counts.update(ac)
     p=output/"manifest.json"
     if p.is_file():
-        m=json.loads(p.read_text(encoding="utf-8")); m["derived_schema_version"]=DERIVED_SCHEMA_VERSION; d=m.get("derived_counts",{}); d=d if isinstance(d,dict) else {}; d.update(wc); m["derived_counts"]=d
+        m=json.loads(p.read_text(encoding="utf-8")); m["derived_schema_version"]=DERIVED_SCHEMA_VERSION; d=m.get("derived_counts",{}); d=d if isinstance(d,dict) else {}; d.update(wc); d.update(ac); m["derived_counts"]=d
+        am=animation.read_manifest(output)
+        if am:
+            m["animation_schema_version"]=am.get("schema_version",0); m["animation_counts"]=am.get("counts",{}); m["animation_files"]=am.get("files",[]); m["animation_pass"]=am.get("pass","UnrealAssetToolAnimation")
         p.write_text(json.dumps(m,ensure_ascii=False,indent=2)+"\n",encoding="utf-8",newline="\n")
     return counts
 def build_database(output):
@@ -186,7 +195,7 @@ def build_database(output):
         for x in _rows(output/"world_relations.jsonl"): c.execute("INSERT OR REPLACE INTO world_relations VALUES(?,?,?,?,?,?,?,?)",(x.get("relation_id","")+"",x.get("world_path","")+"",x.get("source_kind","")+"",x.get("source_id","")+"",x.get("relation","")+"",x.get("target_kind","")+"",x.get("target","")+"",json.dumps(x.get("detail",{}),ensure_ascii=False,separators=(",",":"))))
         for x in _rows(output/"world_context.jsonl"): c.execute("INSERT OR REPLACE INTO world_context VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",(x.get("world_path","")+"",x.get("world_name","")+"",int(bool(x.get("world_partitioned"))),x.get("loaded_actor_count",0),x.get("partition_actor_desc_count",0),x.get("logical_actor_count",0),x.get("component_count",0),x.get("data_layer_count",0),x.get("streaming_relationship_count",0),int(bool(x.get("truncated"))),x.get("text","")+"",json.dumps(x,ensure_ascii=False,separators=(",",":"))))
         for x in _rows(output/"world_summaries.jsonl"): c.execute("INSERT OR REPLACE INTO world_summaries VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(x.get("world_path","")+"",x.get("world_name","")+"",x.get("package_name","")+"",x.get("persistent_level_path","")+"",int(bool(x.get("world_partitioned"))),x.get("level_count",0),x.get("streaming_relationship_count",0),x.get("loaded_actor_count",0),x.get("partition_actor_desc_count",0),x.get("descriptor_loaded_overlap_count",0),x.get("logical_actor_count",0),x.get("component_count",0),x.get("instance_override_count",0),x.get("reference_count",0),x.get("data_layer_count",0),json.dumps(x.get("actor_class_counts",{}),separators=(",",":")),json.dumps(x.get("partition_actor_class_counts",{}),separators=(",",":")),json.dumps(x.get("component_class_counts",{}),separators=(",",":")),json.dumps(x.get("relation_counts",{}),separators=(",",":")),x.get("text","")+"",json.dumps(x,ensure_ascii=False,separators=(",",":"))))
-        world_stitch.load_database(c,output,_rows); c.commit()
+        world_stitch.load_database(c,output,_rows); animation.load_database(c,output,_rows); animation_breadth.load_database(c,output,_rows); animation_stitch.load_database(c,output,_rows); c.commit()
     finally:c.close()
     return db
 def query(a):
@@ -197,19 +206,23 @@ def query(a):
             print("\n[world relations]"); core._print_rows(c.execute("SELECT world_path,source_kind,source_id,relation,target_kind,target FROM world_relations WHERE world_path LIKE ? OR source_id LIKE ? OR relation LIKE ? OR target LIKE ? OR detail_json LIKE ? LIMIT ?",(q,q,q,q,q,a.limit)),("world_path","source_kind","source_id","relation","target_kind","target"))
             world_stitch.query(c,core._print_rows,q,a.limit)
             print("\n[world context]"); core._print_rows(c.execute("SELECT world_path,world_name,substr(text,1,1600) text FROM world_context WHERE world_path LIKE ? OR world_name LIKE ? OR text LIKE ? LIMIT ?",(q,q,q,a.limit)),("world_path","world_name","text"))
+        animation_stitch.query(c,core._print_rows,q,a.limit); animation.query(c,core._print_rows,q,a.limit); animation_breadth.query(c,core._print_rows,q,a.limit)
     finally:c.close()
     return int(_old_query(a))
+def _output(a):
+    return (Path(a.output).expanduser() if a.output else Path(a.project).expanduser().resolve().parent/".uatool").resolve()
 def _summary(a):
-    o=Path(a.output).expanduser() if a.output else Path(a.project).expanduser().resolve().parent/".uatool"; o=o.resolve(); p=o/"manifest.json"; wp=o/"world_manifest.json"
+    o=_output(a); p=o/"manifest.json"; wp=o/"world_manifest.json"
     if not(p.is_file() and wp.is_file()):return
-    m=json.loads(p.read_text(encoding="utf-8")); w=json.loads(wp.read_text(encoding="utf-8")); d=m.get("derived_counts",{})
-    sc=m.get("counts",{}) if isinstance(m.get("counts",{}),dict) else {}; wc=w.get("counts",{}) if isinstance(w.get("counts",{}),dict) else {}
+    m=json.loads(p.read_text(encoding="utf-8")); w=json.loads(wp.read_text(encoding="utf-8")); am=animation.read_manifest(o) or {}; d=m.get("derived_counts",{})
+    sc=m.get("counts",{}) if isinstance(m.get("counts",{}),dict) else {}; wc=w.get("counts",{}) if isinstance(w.get("counts",{}),dict) else {}; ac=am.get("counts",{}) if isinstance(am.get("counts",{}),dict) else {}
     line=lambda c,n:" ".join(f"{k}={c.get(k,0)}" for k in n)
     print(); print("=== UATOOL FINAL SUMMARY ===")
     print("structural scan complete: "+line(sc,("files","assets","blueprints","blueprint_graphs","blueprint_nodes","blueprint_pins","blueprint_edges")))
     print("world scan complete: "+line(wc,("worlds","levels","streaming_relationships","actors","components","instance_overrides","references","data_layers","world_partition_worlds","world_partition_initialized_for_scan","world_partition_actor_descs")))
-    print("derived complete: "+line(d,("world_relations","world_system_relations","world_context","world_summaries","blueprint_call_bindings","blueprint_data_dependencies","blueprint_relations","ai_relations","visual_relations")))
-    print(f"schemas: structural={m.get('schema_version',0)} world={w.get('schema_version',0)} derived={m.get('derived_schema_version',0)}")
+    print("animation scan complete: "+line(ac,("animation_assets","animation_notifies","animation_sync_markers","skeletons","skeleton_bones","pose_search_databases","pose_search_database_assets","pose_search_schemas","pose_search_channels","animation_optional_assets","pose_assets","chooser_tables","proxy_tables","ik_rigs","ik_retargeters")))
+    print("derived complete: "+line(d,("world_relations","world_system_relations","world_context","world_summaries","animation_relations","animation_context","animation_summaries","blueprint_call_bindings","blueprint_data_dependencies","blueprint_relations","ai_relations","visual_relations")))
+    print(f"schemas: structural={m.get('schema_version',0)} world={w.get('schema_version',0)} animation={am.get('schema_version',0)} derived={m.get('derived_schema_version',0)}")
     print(f"database: {o/core.DB_NAME}")
     if not a.no_bundle:
         project=Path(a.project).expanduser().resolve(); print(f"upload bundle: {project.parent / f'{project.stem}.uatool.zip'}")
@@ -229,11 +242,15 @@ def scan(a):
     finally:
         if had:core.print=old
         else:core.__dict__.pop("print",None)
-    if r==0:_summary(a)
+    if r==0:
+        error=animation.validation_error(_output(a)) or animation_breadth.validation_error(_output(a))
+        if error:
+            print(f"ERROR: animation scan incomplete: {error}",file=sys.stderr); return 24
+        _summary(a)
     return r
 
 core.DERIVED_SCHEMA_VERSION=DERIVED_SCHEMA_VERSION
 core.create_schema=create_schema; core.derive_output=derive_output; core.build_database=build_database; core.query=query; core.scan=scan
-core.DEFAULT_BUNDLE_FILES=tuple(dict.fromkeys((*core.DEFAULT_BUNDLE_FILES,*WORLD_DERIVED_FILES)))
+core.DEFAULT_BUNDLE_FILES=tuple(dict.fromkeys((*core.DEFAULT_BUNDLE_FILES,*WORLD_DERIVED_FILES,*ANIMATION_DERIVED_FILES,*animation.RAW_FILES,*animation_breadth.RAW_FILES)))
 def main(): return int(core.main())
 if __name__=="__main__": raise SystemExit(main())
