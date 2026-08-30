@@ -13,6 +13,7 @@ import uatool_vfx as vfx
 import uatool_vfx_stitch as vfx_stitch
 import uatool_systems as systems
 import uatool_project_graph as project_graph
+import uatool_project_graph_finalize as project_graph_finalize
 
 # uatool_runtime installs the structural/world/animation/derived-schema-11
 # pipeline into uatool_core. This composition root adds independently versioned
@@ -92,6 +93,9 @@ def _require_project_graph(output: Path) -> None:
     error = project_graph.validation_error(output, runtime._rows)
     if error:
         raise RuntimeError(f"project graph incomplete: {error}")
+    error = project_graph_finalize.validation_error(output, runtime._rows)
+    if error:
+        raise RuntimeError(f"project graph incomplete: {error}")
     manifest = _require_declared_counts(output, project_graph.DERIVED_FILES, "project graph")
     version = int(manifest.get("derived_schema_version", 0) or 0)
     if version != project_graph.DERIVED_SCHEMA_VERSION:
@@ -119,13 +123,19 @@ def derive_output(output):
         raise RuntimeError(f"VFX derived incomplete: {error}")
     counts.update(vfx_counts)
 
-    project_nodes, project_edges, project_neighborhoods = project_graph.derive(output, runtime._rows)
+    project_nodes, project_edges, _ = project_graph.derive(output, runtime._rows)
+    project_nodes, project_edges, project_neighborhoods = project_graph_finalize.finalize(
+        output, runtime._rows, project_nodes, project_edges
+    )
     project_counts = {
         "project_nodes": runtime._write(output / "project_nodes.jsonl", project_nodes),
         "project_edges": runtime._write(output / "project_edges.jsonl", project_edges),
         "project_neighborhoods": runtime._write(output / "project_neighborhoods.jsonl", project_neighborhoods),
     }
     error = project_graph.validation_error(output, runtime._rows)
+    if error:
+        raise RuntimeError(f"project graph incomplete: {error}")
+    error = project_graph_finalize.validation_error(output, runtime._rows)
     if error:
         raise RuntimeError(f"project graph incomplete: {error}")
     counts.update(project_counts)
