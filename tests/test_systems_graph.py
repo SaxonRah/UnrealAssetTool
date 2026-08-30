@@ -13,6 +13,7 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 import uatool_project_graph as project_graph
+import uatool_project_graph_finalize as project_graph_finalize
 import uatool_systems as systems
 
 
@@ -138,11 +139,19 @@ class SystemsGraphSmokeTest(unittest.TestCase):
     def test_project_graph_quality_and_neighborhoods(self) -> None:
         self._write_systems_fixture()
         self._write_project_inputs()
-        nodes, edges, neighborhoods = project_graph.derive(self.output, read_rows)
+        nodes, edges, _ = project_graph.derive(self.output, read_rows)
+        nodes, edges, neighborhoods = project_graph_finalize.finalize(
+            self.output, read_rows, nodes, edges
+        )
         write_jsonl(self.output / "project_nodes.jsonl", nodes)
         write_jsonl(self.output / "project_edges.jsonl", edges)
         write_jsonl(self.output / "project_neighborhoods.jsonl", neighborhoods)
         self.assertIsNone(project_graph.validation_error(self.output, read_rows))
+        self.assertIsNone(project_graph_finalize.validation_error(self.output, read_rows))
+
+        root_paths = [node["path"] for node in nodes if node.get("root")]
+        self.assertEqual(len(root_paths), len(set(root_paths)))
+        self.assertFalse(any(not node["path"].strip() for node in nodes))
 
         generic = [edge for edge in edges if edge["relation"] == "depends_on_package"]
         self.assertEqual(len(generic), 1)
