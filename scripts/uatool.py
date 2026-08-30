@@ -225,13 +225,10 @@ def build_database(output):
         vfx.load_database(conn, output, runtime._rows)
         vfx_stitch.load_database(conn, output, runtime._rows)
         systems.load_database(conn, output, runtime._rows)
+        # project_neighborhoods loads compact JSON and an empty text field.
+        # Readable text is reconstructed only when queried, avoiding another
+        # hundreds-of-megabytes copy of neighborhood paths in uat.db.
         project_graph.load_database(conn, output, runtime._rows)
-        neighborhood_compact.enrich_database(
-            conn,
-            output,
-            runtime._rows,
-            max_chars=project_graph.MAX_NEIGHBOR_CHARS,
-        )
         conn.commit()
     finally:
         conn.close()
@@ -247,7 +244,13 @@ def query(args):
         conn.row_factory = sqlite3.Row
         try:
             pattern = f"%{args.term}%"
-            project_graph.query(conn, core._print_rows, pattern, args.limit)
+            neighborhood_compact.query(
+                conn,
+                core._print_rows,
+                pattern,
+                args.limit,
+                max_chars=project_graph.MAX_NEIGHBOR_CHARS,
+            )
             systems.query(conn, core._print_rows, pattern, args.limit)
             vfx_stitch.query(conn, core._print_rows, pattern, args.limit)
             vfx.query(conn, core._print_rows, pattern, args.limit)
