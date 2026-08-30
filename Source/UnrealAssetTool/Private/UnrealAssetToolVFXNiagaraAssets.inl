@@ -103,27 +103,32 @@ static bool ScanNiagaraDataChannel(
                     TypeHandle,
                     LegacyTypeDefinition);
 
-                bool bTruncated = false;
-                TSharedRef<FJsonObject> Row = MakeShared<FJsonObject>();
-                Row->SetStringField(TEXT("data_channel_path"), AssetPath);
-                Row->SetNumberField(TEXT("variable_index"), Index);
-                Row->SetStringField(TEXT("version"), ExportField(
-                    VariableStruct->Struct,
-                    Variable,
-                    TEXT("Version"),
-                    DataChannel));
-                Row->SetStringField(TEXT("name"), GetNameField(
+                const FString Name = GetNameField(
                     VariableStruct->Struct,
                     Variable,
                     TEXT("Name"),
-                    DataChannel));
+                    DataChannel);
+
+                // FNiagaraDataChannelVariable::Version is regenerated while
+                // loading the same unchanged asset in UE 5.8. It is therefore
+                // not an authored identifier. Preserve the stable reflected
+                // fields in a canonical summary instead of exporting that GUID.
+                const FString StableRawValue = FString::Printf(
+                    TEXT("Name=%s;TypeDefHandle=%s;LegacyTypeDefinition=%s"),
+                    *Name,
+                    *TypeHandle,
+                    *LegacyTypeDefinition);
+
+                TSharedRef<FJsonObject> Row = MakeShared<FJsonObject>();
+                Row->SetStringField(TEXT("data_channel_path"), AssetPath);
+                Row->SetNumberField(TEXT("variable_index"), Index);
+                Row->SetStringField(TEXT("version"), FString());
+                Row->SetStringField(TEXT("name"), Name);
                 Row->SetStringField(TEXT("type"), Type);
                 Row->SetStringField(TEXT("type_handle"), TypeHandle);
                 Row->SetStringField(TEXT("legacy_type_definition"), LegacyTypeDefinition);
-                Row->SetStringField(
-                    TEXT("raw_value"),
-                    ExportProperty(Variables->Inner, Variable, DataChannel, bTruncated));
-                Row->SetBoolField(TEXT("truncated"), bTruncated);
+                Row->SetStringField(TEXT("raw_value"), StableRawValue);
+                Row->SetBoolField(TEXT("truncated"), false);
                 if (!Writers.NiagaraDataChannelVariables.Write(Row))
                 {
                     return false;
