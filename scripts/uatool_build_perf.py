@@ -7,10 +7,10 @@ which also deleted the plugin's Binaries/Intermediate and forced a cold compile
 on the next run. This module preserves those build products under Saved and
 restores them for the next invocation.
 
-When the target already has a valid Editor runtime manifest, building the whole
-Editor target again is unnecessary for a scanner-only source change. We first
-build only UnrealAssetTool with UBT's ForceUnity option, then fall back to the
-old full-target build if the module-only path fails.
+When the target already has a valid, up-to-date Editor runtime manifest, building
+the whole Editor target again is unnecessary for a scanner-only source change.
+We first build only UnrealAssetTool with UBT's ForceUnity option, then fall back
+to the old full-target build if the module-only path fails.
 """
 from __future__ import annotations
 
@@ -24,6 +24,12 @@ from pathlib import Path
 
 CACHE_DIR_NAME = "UnrealAssetToolBuildCache"
 CACHE_DIRS = ("Binaries", "Intermediate")
+NATIVE_INPUT_SUFFIXES = {
+    ".c", ".cc", ".cpp", ".cxx",
+    ".h", ".hh", ".hpp", ".inl",
+    ".cs", ".uplugin", ".uproject",
+}
+SKIP_INPUT_DIRS = {"binaries", "deriveddatacache", "intermediate", "saved", ".git", ".vs"}
 
 
 def _cache_enabled() -> bool:
@@ -31,15 +37,98 @@ def _cache_enabled() -> bool:
     return value not in {"0", "false", "no", "off"}
 
 
-def _runtime_manifest_ready(core, project: Path, editor: Path) -> bool:
+def _runtime_manifest(core, project: Path, editor: Path) -> Path | None:
     manifest = core.project_runtime_manifest(project, editor)
     if not manifest.is_file():
-        return False
+        return None
     try:
         data = json.loads(manifest.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(data.get("BuildId"), str) or not data.get("BuildId"):
+        return None
+    return manifest
+
+
+def _is_below(path: Path, root: Path | None) -> bool:
+    if root is None:
         return False
-    return isinstance(data.get("BuildId"), str) and bool(data.get("BuildId"))
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def _target_native_inputs_newer_than(
+    project: Path,
+    timestamp: float,
+    *,
+    active_plugin_root: Path | None,
+) -> list[Path]:
+    """Return target-owned native/build inputs newer than a runtime manifest.
+
+    The staged UnrealAssetTool source is intentionally excluded: it is exactly
+    what the module-only invocation is about to compile. Native project modules
+    and all other project plugins remain part of the freshness gate.
+    """
+    project_dir = project.parent.resolve()
+    active_plugin_root = active_plugin_root.resolve() if active_plugin_root else None
+    newer: list[Path] = []
+
+    candidates = [project]
+    for top_name in ("Source", "Plugins"):
+        top = project_dir / top_name
+        if not top.is_dir():
+            continue
+        for root, dirs, files in os.walk(top):
+            root_path = Path(root)
+            dirs[:] = [name for name in dirs if name.lower() not in SKIP_INPUT_DIRS]
+            if _is_below(root_path, active_plugin_root):
+                dirs[:] = []
+                continue
+            for name in files:
+                path = root_path / name
+                if path.suffix.lower() in NATIVE_INPUT_SUFFIXES:
+                    candidates.append(path)
+
+    for path in candidates:
+        if _is_below(path, active_plugin_root):
+            continue
+        try:
+            if path.stat().st_mtime > timestamp:
+                newer.append(path)
+        except OSError:
+            continue
+    newer.sort(key=lambda item: str(item).lower())
+    return newer
+
+
+def _module_only_is_safe(core, project: Path, editor: Path, active_plugin_root: Path | None) -> bool:
+    manifest = _runtime_manifest(core, project, editor)
+    if manifest is None:
+        print("target runtime manifest missing/invalid; full Editor target build required")
+        return False
+    try:
+        manifest_mtime = manifest.stat().st_mtime
+    except OSError:
+        return False
+    newer = _target_native_inputs_newer_than(
+        project,
+        manifest_mtime,
+        active_plugin_root=active_plugin_root,
+    )
+    if not newer:
+        return True
+    print(
+        "target native/build inputs changed after runtime manifest; "
+        "full Editor target build required"
+    )
+    for path in newer[:8]:
+        print(f"  newer target input: {path}")
+    if len(newer) > 8:
+        print(f"  ... {len(newer) - 8} more")
+    return False
 
 
 def _run_timed(command: list[str], label: str) -> int:
@@ -51,7 +140,13 @@ def _run_timed(command: list[str], label: str) -> int:
     return result
 
 
-def _optimized_build_project(core, project: Path, editor: Path, build_script_arg: str | None, active_plugin_root: Path | None = None) -> int:
+def _optimized_build_project(
+    core,
+    project: Path,
+    editor: Path,
+    build_script_arg: str | None,
+    active_plugin_root: Path | None = None,
+) -> int:
     build_script = core.resolve_build_script(editor, build_script_arg)
     target = f"{project.stem}Editor"
     configuration = core.editor_configuration(editor)
@@ -66,8 +161,8 @@ def _optimized_build_project(core, project: Path, editor: Path, build_script_arg
         "-ForceUnity",
     ]
 
-    if _runtime_manifest_ready(core, project, editor):
-        print("target runtime manifest ready; skipping full Editor target rebuild")
+    if _module_only_is_safe(core, project, editor, active_plugin_root):
+        print("target runtime manifest is current; skipping full Editor target rebuild")
         result = _run_timed(module_command, "building UnrealAssetTool module")
         if result == 0:
             return 0
@@ -131,16 +226,9 @@ def _save_cache(cache_root: Path, stage_root: Path) -> None:
             shutil.rmtree(target)
         shutil.move(str(source), str(target))
         saved.append(name)
-    # The runtime scanner never needs standalone PDBs. Removing only PDB output
-    # keeps the persistent cache smaller without discarding object/PCH inputs that
-    # make the next compile incremental.
-    binaries = cache_root / "Binaries"
-    if binaries.is_dir():
-        for pdb in binaries.rglob("*.pdb"):
-            try:
-                pdb.unlink()
-            except OSError:
-                pass
+    # Keep all UBT-declared build products, including PDBs. A missing output can
+    # turn a would-be warm no-op into a relink/rebuild; the cache exists to favor
+    # speed, while upload/output size is addressed independently by schema 14.
     if saved:
         print(f"saved staged plugin build cache: {cache_root} ({', '.join(saved)})")
 
