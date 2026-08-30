@@ -6,6 +6,7 @@
 #include "Dom/JsonValue.h"
 #include "HAL/FileManager.h"
 #include "Interfaces/IPluginManager.h"
+#include "Internationalization/Regex.h"
 #include "Math/UnrealMathUtility.h"
 #include "Misc/CommandLine.h"
 #include "Misc/CoreDelegates.h"
@@ -16,7 +17,6 @@
 #include "Misc/Parse.h"
 #include "Misc/Paths.h"
 #include "Modules/ModuleManager.h"
-#include "Regex.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
 #include "UObject/UnrealType.h"
@@ -414,8 +414,8 @@ static bool ScanPoseAsset(UPoseAsset* Pose, const FAssetData& Asset, FWriters& W
             if (!Writers.PoseTransforms.Write(Row)) return false;
             ++Counts.PoseTransforms;
         }
-        const int32 CurveCount = FMath::Max(RawCurves.Num(), FullCurves.Num());
-        for (int32 CurveIndex = 0; CurveIndex < CurveCount; ++CurveIndex)
+
+        for (int32 CurveIndex = 0; CurveIndex < FullCurves.Num(); ++CurveIndex)
         {
             TSharedRef<FJsonObject> Row = MakeShared<FJsonObject>();
             Row->SetStringField(TEXT("pose_asset_path"), Path);
@@ -423,8 +423,7 @@ static bool ScanPoseAsset(UPoseAsset* Pose, const FAssetData& Asset, FWriters& W
             Row->SetStringField(TEXT("pose_name"), PoseName);
             Row->SetNumberField(TEXT("curve_index"), CurveIndex);
             Row->SetStringField(TEXT("curve_name"), CurveNames.IsValidIndex(CurveIndex) ? CurveNames[CurveIndex].ToString() : FString());
-            if (RawCurves.IsValidIndex(CurveIndex)) SetFiniteNumber(Row, TEXT("raw_value"), RawCurves[CurveIndex]); else Row->SetField(TEXT("raw_value"), MakeShared<FJsonValueNull>());
-            if (FullCurves.IsValidIndex(CurveIndex)) SetFiniteNumber(Row, TEXT("full_value"), FullCurves[CurveIndex]); else Row->SetField(TEXT("full_value"), MakeShared<FJsonValueNull>());
+            SetFiniteNumber(Row, TEXT("value"), FullCurves[CurveIndex]);
             if (!Writers.PoseCurveValues.Write(Row)) return false;
             ++Counts.PoseCurveValues;
         }
@@ -432,37 +431,30 @@ static bool ScanPoseAsset(UPoseAsset* Pose, const FAssetData& Asset, FWriters& W
     return true;
 }
 
-static bool ScanSkeletonSlots(UObject* Skeleton, const FAssetData& Asset, FWriters& Writers, FCounts& Counts)
+static bool ScanSkeletonSlots(USkeleton* Skeleton, const FAssetData& Asset, FWriters& Writers, FCounts& Counts)
 {
-    FArrayProperty* Groups = Skeleton ? CastField<FArrayProperty>(Skeleton->GetClass()->FindPropertyByName(TEXT("SlotGroups"))) : nullptr;
-    FStructProperty* GroupStruct = Groups ? CastField<FStructProperty>(Groups->Inner) : nullptr;
-    if (!Groups || !GroupStruct) return true;
-    const void* Ptr = Groups->ContainerPtrToValuePtr<void>(Skeleton);
-    if (!Ptr) return true;
-    FScriptArrayHelper Helper(Groups, Ptr);
+    if (!Skeleton) return true;
     const FString Path = Asset.GetSoftObjectPath().ToString();
+    const FArrayProperty* GroupsProperty = CastField<FArrayProperty>(Skeleton->GetClass()->FindPropertyByName(TEXT("SlotGroups")));
+    const FStructProperty* GroupStruct = GroupsProperty ? CastField<FStructProperty>(GroupsProperty->Inner) : nullptr;
+    if (!GroupsProperty || !GroupStruct) return true;
+    const void* Ptr = GroupsProperty->ContainerPtrToValuePtr<void>(Skeleton);
+    FScriptArrayHelper Helper(GroupsProperty, Ptr);
     for (int32 GroupIndex = 0; GroupIndex < Helper.Num(); ++GroupIndex)
     {
         const void* Group = Helper.GetRawPtr(GroupIndex);
         const FString GroupName = GetNameField(GroupStruct->Struct, Group, TEXT("GroupName"));
-        const TArray<FName> SlotNames = ReadNameArray(GroupStruct->Struct, Group, TEXT("SlotNames"));
-        TSharedRef<FJsonObject> GroupRow = MakeShared<FJsonObject>();
-        GroupRow->SetStringField(TEXT("skeleton_path"), Path);
-        GroupRow->SetNumberField(TEXT("group_index"), GroupIndex);
-        GroupRow->SetStringField(TEXT("group_name"), GroupName.IsEmpty() || GroupName == TEXT("None") ? TEXT("DefaultGroup") : GroupName);
-        GroupRow->SetNumberField(TEXT("slot_count"), SlotNames.Num());
-        if (!Writers.SkeletonSlotGroups.Write(GroupRow)) return false;
-        ++Counts.SkeletonSlotGroups;
-        for (int32 SlotIndex = 0; SlotIndex < SlotNames.Num(); ++SlotIndex)
+        const TArray<FName> Slots = ReadNameArray(GroupStruct->Struct, Group, TEXT("SlotNames"));
+        TSharedRef<FJsonObject> G = MakeShared<FJsonObject>();
+        G->SetStringField(TEXT("skeleton_path"), Path); G->SetNumberField(TEXT("group_index"), GroupIndex);
+        G->SetStringField(TEXT("group_name"), GroupName); G->SetNumberField(TEXT("slot_count"), Slots.Num());
+        if (!Writers.SkeletonSlotGroups.Write(G)) return false; ++Counts.SkeletonSlotGroups;
+        for (int32 SlotIndex = 0; SlotIndex < Slots.Num(); ++SlotIndex)
         {
-            TSharedRef<FJsonObject> Row = MakeShared<FJsonObject>();
-            Row->SetStringField(TEXT("skeleton_path"), Path);
-            Row->SetNumberField(TEXT("group_index"), GroupIndex);
-            Row->SetStringField(TEXT("group_name"), GroupRow->GetStringField(TEXT("group_name")));
-            Row->SetNumberField(TEXT("slot_index"), SlotIndex);
-            Row->SetStringField(TEXT("slot_name"), SlotNames[SlotIndex].ToString());
-            if (!Writers.SkeletonSlots.Write(Row)) return false;
-            ++Counts.SkeletonSlots;
+            TSharedRef<FJsonObject> R = MakeShared<FJsonObject>();
+            R->SetStringField(TEXT("skeleton_path"), Path); R->SetNumberField(TEXT("group_index"), GroupIndex); R->SetStringField(TEXT("group_name"), GroupName);
+            R->SetNumberField(TEXT("slot_index"), SlotIndex); R->SetStringField(TEXT("slot_name"), Slots[SlotIndex].ToString());
+            if (!Writers.SkeletonSlots.Write(R)) return false; ++Counts.SkeletonSlots;
         }
     }
     return true;
@@ -471,25 +463,15 @@ static bool ScanSkeletonSlots(UObject* Skeleton, const FAssetData& Asset, FWrite
 static bool ScanChooser(UObject* Object, const FAssetData& Asset, FWriters& Writers, FCounts& Counts)
 {
     const FString Path = Asset.GetSoftObjectPath().ToString();
-    const TArray<bool> Disabled = ReadBoolArray(Object, TEXT("DisabledRows"));
-    const int32 Columns = GetArrayCount(Object, TEXT("ColumnsStructs"));
-    const int32 Results = GetArrayCount(Object, TEXT("ResultsStructs"));
+    const int32 ResultCount = GetArrayCount(Object, TEXT("ResultsStructs"));
+    const int32 ColumnCount = GetArrayCount(Object, TEXT("ColumnsStructs"));
+    const int32 ContextCount = GetArrayCount(Object, TEXT("ContextData"));
     TSharedRef<FJsonObject> Summary = MakeShared<FJsonObject>();
-    Summary->SetStringField(TEXT("chooser_path"), Path);
-    Summary->SetStringField(TEXT("package_name"), Asset.PackageName.ToString());
-    Summary->SetNumberField(TEXT("column_count"), Columns);
-    Summary->SetNumberField(TEXT("result_count"), Results);
-    int32 DisabledCount = 0; for (const bool bDisabled : Disabled) if (bDisabled) ++DisabledCount;
-    Summary->SetNumberField(TEXT("disabled_row_count"), DisabledCount);
-    Summary->SetNumberField(TEXT("context_count"), GetArrayCount(Object, TEXT("ContextData")));
-    Summary->SetNumberField(TEXT("nested_chooser_count"), GetArrayCount(Object, TEXT("NestedChoosers")));
-    Summary->SetStringField(TEXT("result_type"), ExportObjectField(Object, TEXT("ResultType")));
-    Summary->SetStringField(TEXT("output_object_type"), ExportObjectField(Object, TEXT("OutputObjectType")));
-    const FString Fallback = ExportObjectField(Object, TEXT("FallbackResult"));
-    Summary->SetStringField(TEXT("fallback_raw_value"), Fallback);
-    if (!Writers.ChooserTables.Write(Summary)) return false;
-    ++Counts.ChooserTables;
-    if (!EmitExportReferences(Path, TEXT("chooser_fallback"), -1, Fallback, Writers, Counts)) return false;
+    Summary->SetStringField(TEXT("chooser_path"), Path); Summary->SetStringField(TEXT("package_name"), Asset.PackageName.ToString());
+    Summary->SetStringField(TEXT("output_object_type"), GetObjectField(Object, TEXT("OutputObjectType")) ? GetObjectField(Object, TEXT("OutputObjectType"))->GetPathName() : FString());
+    Summary->SetNumberField(TEXT("result_count"), ResultCount); Summary->SetNumberField(TEXT("column_count"), ColumnCount); Summary->SetNumberField(TEXT("context_count"), ContextCount);
+    if (!Writers.ChooserTables.Write(Summary)) return false; ++Counts.ChooserTables;
+    const TArray<bool> Disabled = ReadBoolArray(Object, TEXT("DisabledRows"));
     if (!WriteInstancedStructArray(Object, Path, TEXT("ColumnsStructs"), TEXT("chooser_column"), Writers.ChooserColumns, Counts.ChooserColumns, Writers, Counts)) return false;
     if (!WriteInstancedStructArray(Object, Path, TEXT("ResultsStructs"), TEXT("chooser_result"), Writers.ChooserResults, Counts.ChooserResults, Writers, Counts, &Disabled)) return false;
     if (!WriteInstancedStructArray(Object, Path, TEXT("ContextData"), TEXT("chooser_context"), Writers.ChooserContext, Counts.ChooserContext, Writers, Counts)) return false;
@@ -499,319 +481,119 @@ static bool ScanChooser(UObject* Object, const FAssetData& Asset, FWriters& Writ
 static bool ScanProxyTable(UObject* Object, const FAssetData& Asset, FWriters& Writers, FCounts& Counts)
 {
     const FString Path = Asset.GetSoftObjectPath().ToString();
-    FArrayProperty* Entries = CastField<FArrayProperty>(Object->GetClass()->FindPropertyByName(TEXT("Entries")));
-    FStructProperty* EntryStruct = Entries ? CastField<FStructProperty>(Entries->Inner) : nullptr;
-    const int32 EntryCount = Entries ? GetArrayCount(Object, TEXT("Entries")) : 0;
     TSharedRef<FJsonObject> Summary = MakeShared<FJsonObject>();
-    Summary->SetStringField(TEXT("proxy_table_path"), Path);
-    Summary->SetStringField(TEXT("package_name"), Asset.PackageName.ToString());
-    Summary->SetNumberField(TEXT("entry_count"), EntryCount);
-    Summary->SetNumberField(TEXT("inherit_table_count"), GetArrayCount(Object, TEXT("InheritEntriesFrom")));
-    if (!Writers.ProxyTables.Write(Summary)) return false;
-    ++Counts.ProxyTables;
-
-    if (Entries && EntryStruct)
-    {
-        const void* Ptr = Entries->ContainerPtrToValuePtr<void>(Object);
-        FScriptArrayHelper Helper(Entries, Ptr);
-        for (int32 Index = 0; Index < Helper.Num(); ++Index)
-        {
-            const void* Entry = Helper.GetRawPtr(Index);
-            UObject* Proxy = GetObjectField(EntryStruct->Struct, Entry, TEXT("Proxy"));
-            const FString ValueRaw = ExportStructField(EntryStruct->Struct, Entry, TEXT("ValueStruct"), Object);
-            bool bTruncated = false;
-            const FString Raw = ExportProperty(Entries->Inner, Entry, Object, bTruncated);
-            TSharedRef<FJsonObject> Row = MakeShared<FJsonObject>();
-            Row->SetStringField(TEXT("proxy_table_path"), Path);
-            Row->SetNumberField(TEXT("entry_index"), Index);
-            Row->SetStringField(TEXT("proxy_path"), Proxy ? Proxy->GetPathName() : FString());
-            Row->SetStringField(TEXT("value_struct_type"), StructTypeFromExport(ValueRaw));
-            Row->SetStringField(TEXT("value_raw"), ValueRaw);
-            Row->SetStringField(TEXT("raw_value"), Raw);
-            Row->SetBoolField(TEXT("truncated"), bTruncated);
-            if (!Writers.ProxyEntries.Write(Row)) return false;
-            ++Counts.ProxyEntries;
-            if (!EmitExportReferences(Path, TEXT("proxy_entry"), Index, Raw, Writers, Counts)) return false;
-        }
-    }
-
-    FArrayProperty* Inherit = CastField<FArrayProperty>(Object->GetClass()->FindPropertyByName(TEXT("InheritEntriesFrom")));
-    FObjectPropertyBase* InnerObject = Inherit ? CastField<FObjectPropertyBase>(Inherit->Inner) : nullptr;
-    if (Inherit && InnerObject)
-    {
-        const void* Ptr = Inherit->ContainerPtrToValuePtr<void>(Object);
-        FScriptArrayHelper Helper(Inherit, Ptr);
-        for (int32 Index = 0; Index < Helper.Num(); ++Index)
-        {
-            UObject* Parent = InnerObject->GetObjectPropertyValue(Helper.GetRawPtr(Index));
-            TSharedRef<FJsonObject> Row = MakeShared<FJsonObject>();
-            Row->SetStringField(TEXT("proxy_table_path"), Path);
-            Row->SetNumberField(TEXT("inherit_index"), Index);
-            Row->SetStringField(TEXT("parent_table_path"), Parent ? Parent->GetPathName() : FString());
-            if (!Writers.ProxyInheritance.Write(Row)) return false;
-            ++Counts.ProxyInheritance;
-        }
-    }
+    Summary->SetStringField(TEXT("proxy_table_path"), Path); Summary->SetStringField(TEXT("package_name"), Asset.PackageName.ToString());
+    Summary->SetNumberField(TEXT("entry_count"), GetArrayCount(Object, TEXT("Entries"))); Summary->SetNumberField(TEXT("inheritance_count"), GetArrayCount(Object, TEXT("InheritEntries")));
+    if (!Writers.ProxyTables.Write(Summary)) return false; ++Counts.ProxyTables;
+    if (!WriteInstancedStructArray(Object, Path, TEXT("Entries"), TEXT("proxy_entry"), Writers.ProxyEntries, Counts.ProxyEntries, Writers, Counts)) return false;
+    if (!WriteInstancedStructArray(Object, Path, TEXT("InheritEntries"), TEXT("proxy_inheritance"), Writers.ProxyInheritance, Counts.ProxyInheritance, Writers, Counts)) return false;
     return true;
 }
 
 static bool ScanIKRig(UObject* Object, const FAssetData& Asset, FWriters& Writers, FCounts& Counts)
 {
     const FString Path = Asset.GetSoftObjectPath().ToString();
-    const FStructProperty* SkeletonProperty = CastField<FStructProperty>(Object->GetClass()->FindPropertyByName(TEXT("Skeleton")));
-    const void* SkeletonValue = SkeletonProperty ? SkeletonProperty->ContainerPtrToValuePtr<void>(Object) : nullptr;
-    const TArray<FName> BoneNames = SkeletonProperty ? ReadNameArray(SkeletonProperty->Struct, SkeletonValue, TEXT("BoneNames")) : TArray<FName>();
-    const TArray<int32> ParentIndices = SkeletonProperty ? ReadIntArray(SkeletonProperty->Struct, SkeletonValue, TEXT("ParentIndices")) : TArray<int32>();
-    const TArray<FTransform> RefPose = SkeletonProperty ? ReadTransformArray(SkeletonProperty->Struct, SkeletonValue, TEXT("RefPoseGlobal")) : TArray<FTransform>();
-    const TArray<FName> ExcludedBones = SkeletonProperty ? ReadNameArray(SkeletonProperty->Struct, SkeletonValue, TEXT("ExcludedBones")) : TArray<FName>();
-    TSet<FName> ExcludedSet; for (const FName BoneName : ExcludedBones) ExcludedSet.Add(BoneName);
-    UObject* RigMesh = SkeletonProperty ? GetObjectField(SkeletonProperty->Struct, SkeletonValue, TEXT("SkeletalMesh")) : nullptr;
-
-    const FStructProperty* RetargetProperty = CastField<FStructProperty>(Object->GetClass()->FindPropertyByName(TEXT("RetargetDefinition")));
-    const void* RetargetValue = RetargetProperty ? RetargetProperty->ContainerPtrToValuePtr<void>(Object) : nullptr;
-    FArrayProperty* Chains = RetargetProperty ? CastField<FArrayProperty>(RetargetProperty->Struct->FindPropertyByName(TEXT("BoneChains"))) : nullptr;
-    const int32 ChainCount = Chains && RetargetValue ? FScriptArrayHelper(Chains, Chains->ContainerPtrToValuePtr<void>(RetargetValue)).Num() : 0;
-
+    UObject* Skeleton = GetObjectField(Object, TEXT("Skeleton"));
+    if (!Skeleton) Skeleton = GetObjectField(Object, TEXT("SkeletonAsset"));
     TSharedRef<FJsonObject> Summary = MakeShared<FJsonObject>();
-    Summary->SetStringField(TEXT("ik_rig_path"), Path);
-    Summary->SetStringField(TEXT("package_name"), Asset.PackageName.ToString());
-    UObject* PreviewMesh = GetObjectField(Object, TEXT("PreviewSkeletalMesh"));
-    Summary->SetStringField(TEXT("preview_mesh_path"), PreviewMesh ? PreviewMesh->GetPathName() : FString());
-    Summary->SetStringField(TEXT("skeleton_mesh_path"), RigMesh ? RigMesh->GetPathName() : FString());
-    Summary->SetNumberField(TEXT("bone_count"), BoneNames.Num());
-    Summary->SetNumberField(TEXT("excluded_bone_count"), ExcludedBones.Num());
-    Summary->SetStringField(TEXT("root_bone"), RetargetProperty ? GetNameField(RetargetProperty->Struct, RetargetValue, TEXT("RootBone")) : FString());
-    Summary->SetStringField(TEXT("pelvis_bone"), RetargetProperty ? GetNameField(RetargetProperty->Struct, RetargetValue, TEXT("PelvisBone")) : FString());
-    Summary->SetNumberField(TEXT("chain_count"), ChainCount);
+    Summary->SetStringField(TEXT("ik_rig_path"), Path); Summary->SetStringField(TEXT("package_name"), Asset.PackageName.ToString());
+    Summary->SetStringField(TEXT("skeleton_path"), Skeleton ? Skeleton->GetPathName() : FString());
+    Summary->SetStringField(TEXT("preview_mesh"), ExportObjectField(Object, TEXT("PreviewSkeletalMesh")));
+    Summary->SetNumberField(TEXT("chain_count"), GetArrayCount(Object, TEXT("RetargetDefinition")));
     Summary->SetNumberField(TEXT("goal_count"), GetArrayCount(Object, TEXT("Goals")));
     Summary->SetNumberField(TEXT("solver_count"), GetArrayCount(Object, TEXT("SolverStack")));
-    if (!Writers.IKRigs.Write(Summary)) return false;
-    ++Counts.IKRigs;
+    if (!Writers.IKRigs.Write(Summary)) return false; ++Counts.IKRigs;
 
-    for (int32 BoneIndex = 0; BoneIndex < BoneNames.Num(); ++BoneIndex)
+    const FStructProperty* SkeletonProperty = CastField<FStructProperty>(Object->GetClass()->FindPropertyByName(TEXT("Skeleton")));
+    if (SkeletonProperty)
     {
-        TSharedRef<FJsonObject> Row = MakeShared<FJsonObject>();
-        Row->SetStringField(TEXT("ik_rig_path"), Path);
-        Row->SetNumberField(TEXT("bone_index"), BoneIndex);
-        Row->SetStringField(TEXT("bone_name"), BoneNames[BoneIndex].ToString());
-        Row->SetNumberField(TEXT("parent_index"), ParentIndices.IsValidIndex(BoneIndex) ? ParentIndices[BoneIndex] : -1);
-        Row->SetBoolField(TEXT("excluded"), ExcludedSet.Contains(BoneNames[BoneIndex]));
-        if (RefPose.IsValidIndex(BoneIndex)) SetTransform(Row, RefPose[BoneIndex]);
-        if (!Writers.IKRigBones.Write(Row)) return false;
-        ++Counts.IKRigBones;
-    }
-
-    if (Chains && RetargetValue)
-    {
-        FStructProperty* ChainStruct = CastField<FStructProperty>(Chains->Inner);
-        const void* Ptr = Chains->ContainerPtrToValuePtr<void>(RetargetValue);
-        FScriptArrayHelper Helper(Chains, Ptr);
-        if (ChainStruct)
+        const void* Skel = SkeletonProperty->ContainerPtrToValuePtr<void>(Object);
+        const TArray<FName> Bones = ReadNameArray(SkeletonProperty->Struct, Skel, TEXT("BoneNames"));
+        const TArray<int32> Parents = ReadIntArray(SkeletonProperty->Struct, Skel, TEXT("ParentIndices"));
+        const TArray<FTransform> Poses = ReadTransformArray(SkeletonProperty->Struct, Skel, TEXT("CurrentPoseGlobal"));
+        for (int32 Index = 0; Index < Bones.Num(); ++Index)
         {
-            for (int32 Index = 0; Index < Helper.Num(); ++Index)
-            {
-                const void* Chain = Helper.GetRawPtr(Index);
-                TSharedRef<FJsonObject> Row = MakeShared<FJsonObject>();
-                Row->SetStringField(TEXT("ik_rig_path"), Path);
-                Row->SetNumberField(TEXT("chain_index"), Index);
-                Row->SetStringField(TEXT("chain_name"), GetNameField(ChainStruct->Struct, Chain, TEXT("ChainName")));
-                Row->SetStringField(TEXT("start_bone"), GetNestedBoneName(ChainStruct->Struct, Chain, TEXT("StartBone")));
-                Row->SetStringField(TEXT("end_bone"), GetNestedBoneName(ChainStruct->Struct, Chain, TEXT("EndBone")));
-                Row->SetStringField(TEXT("ik_goal_name"), GetNameField(ChainStruct->Struct, Chain, TEXT("IKGoalName")));
-                if (!Writers.IKRigChains.Write(Row)) return false;
-                ++Counts.IKRigChains;
-            }
-        }
-    }
-
-    FArrayProperty* Goals = CastField<FArrayProperty>(Object->GetClass()->FindPropertyByName(TEXT("Goals")));
-    FObjectPropertyBase* GoalObjectProperty = Goals ? CastField<FObjectPropertyBase>(Goals->Inner) : nullptr;
-    if (Goals && GoalObjectProperty)
-    {
-        const void* Ptr = Goals->ContainerPtrToValuePtr<void>(Object);
-        FScriptArrayHelper Helper(Goals, Ptr);
-        for (int32 Index = 0; Index < Helper.Num(); ++Index)
-        {
-            UObject* Goal = GoalObjectProperty->GetObjectPropertyValue(Helper.GetRawPtr(Index));
-            if (!Goal) continue;
             TSharedRef<FJsonObject> Row = MakeShared<FJsonObject>();
-            Row->SetStringField(TEXT("ik_rig_path"), Path);
-            Row->SetNumberField(TEXT("goal_index"), Index);
-            Row->SetStringField(TEXT("goal_path"), Goal->GetPathName());
-            Row->SetStringField(TEXT("goal_class"), Goal->GetClass()->GetPathName());
-            Row->SetStringField(TEXT("goal_name"), GetNameField(Goal, TEXT("GoalName")));
-            Row->SetStringField(TEXT("bone_name"), GetNameField(Goal, TEXT("BoneName")));
-            Row->SetStringField(TEXT("position_alpha"), ExportObjectField(Goal, TEXT("PositionAlpha")));
-            Row->SetStringField(TEXT("rotation_alpha"), ExportObjectField(Goal, TEXT("RotationAlpha")));
-            Row->SetBoolField(TEXT("expose_position"), GetBoolField(Goal, TEXT("bExposePosition"), false));
-            Row->SetBoolField(TEXT("expose_rotation"), GetBoolField(Goal, TEXT("bExposeRotation"), false));
-            if (!Writers.IKRigGoals.Write(Row)) return false;
-            ++Counts.IKRigGoals;
+            Row->SetStringField(TEXT("ik_rig_path"), Path); Row->SetNumberField(TEXT("bone_index"), Index); Row->SetStringField(TEXT("bone_name"), Bones[Index].ToString());
+            Row->SetNumberField(TEXT("parent_index"), Parents.IsValidIndex(Index) ? Parents[Index] : -1); if (Poses.IsValidIndex(Index)) SetTransform(Row, Poses[Index]);
+            if (!Writers.IKRigBones.Write(Row)) return false; ++Counts.IKRigBones;
         }
     }
 
-    if (!WriteInstancedStructArray(Object, Path, TEXT("SolverStack"), TEXT("ik_rig_solver"), Writers.IKRigSolvers, Counts.IKRigSolvers, Writers, Counts)) return false;
-    return true;
-}
-
-static bool WriteRetargetPoseMap(UObject* Object, const FString& Path, const FName PropertyName, const FString& Side, FWriters& Writers, FCounts& Counts)
-{
-    FMapProperty* Map = CastField<FMapProperty>(Object->GetClass()->FindPropertyByName(PropertyName));
-    FNameProperty* Key = Map ? CastField<FNameProperty>(Map->KeyProp) : nullptr;
-    if (!Map || !Key) return true;
-    const void* Ptr = Map->ContainerPtrToValuePtr<void>(Object);
-    if (!Ptr) return true;
-    FScriptMapHelper Helper(Map, Ptr);
-    int32 LogicalIndex = 0;
-    for (int32 SparseIndex = 0; SparseIndex < Helper.GetMaxIndex(); ++SparseIndex)
+    FArrayProperty* ChainArray = CastField<FArrayProperty>(Object->GetClass()->FindPropertyByName(TEXT("RetargetDefinition")));
+    if (ChainArray)
     {
-        if (!Helper.IsValidIndex(SparseIndex)) continue;
-        const FString PoseName = Key->GetPropertyValue(Helper.GetKeyPtr(SparseIndex)).ToString();
-        bool bTruncated = false;
-        const FString Raw = ExportProperty(Map->ValueProp, Helper.GetValuePtr(SparseIndex), Object, bTruncated);
-        TSharedRef<FJsonObject> Row = MakeShared<FJsonObject>();
-        Row->SetStringField(TEXT("retargeter_path"), Path);
-        Row->SetStringField(TEXT("side"), Side);
-        Row->SetNumberField(TEXT("pose_index"), LogicalIndex++);
-        Row->SetStringField(TEXT("pose_name"), PoseName);
-        Row->SetStringField(TEXT("raw_value"), Raw);
-        Row->SetBoolField(TEXT("truncated"), bTruncated);
-        if (!Writers.IKRetargetPoses.Write(Row)) return false;
-        ++Counts.IKRetargetPoses;
-        if (!EmitExportReferences(Path, TEXT("ik_retarget_pose"), LogicalIndex - 1, Raw, Writers, Counts)) return false;
+        const FStructProperty* Container = CastField<FStructProperty>(ChainArray->Inner);
+        const void* Ptr = ChainArray->ContainerPtrToValuePtr<void>(Object);
+        FScriptArrayHelper H(ChainArray, Ptr);
+        for (int32 I = 0; I < H.Num(); ++I)
+        {
+            const void* V = H.GetRawPtr(I); UStruct* S = Container ? Container->Struct : nullptr;
+            TSharedRef<FJsonObject> Row = MakeShared<FJsonObject>(); Row->SetStringField(TEXT("ik_rig_path"), Path); Row->SetNumberField(TEXT("chain_index"), I);
+            Row->SetStringField(TEXT("chain_name"), GetNameField(S, V, TEXT("ChainName"))); Row->SetStringField(TEXT("start_bone"), GetNestedBoneName(S, V, TEXT("StartBone")));
+            Row->SetStringField(TEXT("end_bone"), GetNestedBoneName(S, V, TEXT("EndBone"))); Row->SetStringField(TEXT("ik_goal_name"), GetNameField(S, V, TEXT("IKGoalName")));
+            bool T=false; Row->SetStringField(TEXT("raw_value"), ExportProperty(ChainArray->Inner,V,Object,T));
+            if (!Writers.IKRigChains.Write(Row)) return false; ++Counts.IKRigChains;
+        }
     }
+    if (!WriteInstancedStructArray(Object, Path, TEXT("Goals"), TEXT("ik_goal"), Writers.IKRigGoals, Counts.IKRigGoals, Writers, Counts)) return false;
+    if (!WriteInstancedStructArray(Object, Path, TEXT("SolverStack"), TEXT("ik_solver"), Writers.IKRigSolvers, Counts.IKRigSolvers, Writers, Counts)) return false;
     return true;
 }
 
 static bool ScanIKRetargeter(UObject* Object, const FAssetData& Asset, FWriters& Writers, FCounts& Counts)
 {
     const FString Path = Asset.GetSoftObjectPath().ToString();
-    UObject* SourceRig = GetObjectField(Object, TEXT("SourceIKRigAsset"));
-    UObject* TargetRig = GetObjectField(Object, TEXT("TargetIKRigAsset"));
-    TSharedRef<FJsonObject> Summary = MakeShared<FJsonObject>();
-    Summary->SetStringField(TEXT("retargeter_path"), Path);
-    Summary->SetStringField(TEXT("package_name"), Asset.PackageName.ToString());
-    Summary->SetStringField(TEXT("source_ik_rig_path"), SourceRig ? SourceRig->GetPathName() : FString());
-    Summary->SetStringField(TEXT("target_ik_rig_path"), TargetRig ? TargetRig->GetPathName() : FString());
-    Summary->SetStringField(TEXT("source_preview_mesh"), ExportObjectField(Object, TEXT("SourcePreviewMesh")));
-    Summary->SetStringField(TEXT("target_preview_mesh"), ExportObjectField(Object, TEXT("TargetPreviewMesh")));
-    Summary->SetNumberField(TEXT("op_count"), GetArrayCount(Object, TEXT("RetargetOps")));
-    Summary->SetNumberField(TEXT("source_pose_count"), 0);
-    Summary->SetNumberField(TEXT("target_pose_count"), 0);
-    if (!Writers.IKRetargeters.Write(Summary)) return false;
-    ++Counts.IKRetargeters;
+    UObject* Source = GetObjectField(Object, TEXT("SourceIKRigAsset")); if (!Source) Source = GetObjectField(Object, TEXT("SourceIKRig"));
+    UObject* Target = GetObjectField(Object, TEXT("TargetIKRigAsset")); if (!Target) Target = GetObjectField(Object, TEXT("TargetIKRig"));
+    TSharedRef<FJsonObject> Summary = MakeShared<FJsonObject>(); Summary->SetStringField(TEXT("ik_retargeter_path"), Path); Summary->SetStringField(TEXT("package_name"), Asset.PackageName.ToString());
+    Summary->SetStringField(TEXT("source_ik_rig"), Source ? Source->GetPathName() : FString()); Summary->SetStringField(TEXT("target_ik_rig"), Target ? Target->GetPathName() : FString());
+    Summary->SetNumberField(TEXT("op_count"), GetArrayCount(Object, TEXT("RetargetOps")) + GetArrayCount(Object, TEXT("OpStack")));
+    if (!Writers.IKRetargeters.Write(Summary)) return false; ++Counts.IKRetargeters;
     if (!WriteInstancedStructArray(Object, Path, TEXT("RetargetOps"), TEXT("ik_retarget_op"), Writers.IKRetargetOps, Counts.IKRetargetOps, Writers, Counts)) return false;
-    if (!WriteRetargetPoseMap(Object, Path, TEXT("SourceRetargetPoses"), TEXT("source"), Writers, Counts)) return false;
-    if (!WriteRetargetPoseMap(Object, Path, TEXT("TargetRetargetPoses"), TEXT("target"), Writers, Counts)) return false;
+    if (!WriteInstancedStructArray(Object, Path, TEXT("OpStack"), TEXT("ik_retarget_op"), Writers.IKRetargetOps, Counts.IKRetargetOps, Writers, Counts)) return false;
+    if (!WriteInstancedStructArray(Object, Path, TEXT("SourceRetargetPoses"), TEXT("ik_source_pose"), Writers.IKRetargetPoses, Counts.IKRetargetPoses, Writers, Counts)) return false;
+    if (!WriteInstancedStructArray(Object, Path, TEXT("TargetRetargetPoses"), TEXT("ik_target_pose"), Writers.IKRetargetPoses, Counts.IKRetargetPoses, Writers, Counts)) return false;
     return true;
 }
 
 static bool SaveManifest(const FString& OutputDir, const FCounts& C, bool bSuccess, const FString& Error)
 {
     TSharedRef<FJsonObject> Root = MakeShared<FJsonObject>();
-    Root->SetNumberField(TEXT("schema_version"), BreadthSchemaVersion);
-    Root->SetStringField(TEXT("pass"), TEXT("UnrealAssetToolAnimationBreadth"));
-    Root->SetStringField(TEXT("generated_utc"), FDateTime::UtcNow().ToIso8601());
-    Root->SetStringField(TEXT("engine_version"), FEngineVersion::Current().ToString());
-    Root->SetBoolField(TEXT("success"), bSuccess);
-    Root->SetStringField(TEXT("error"), Error);
+    Root->SetNumberField(TEXT("schema_version"), BreadthSchemaVersion); Root->SetStringField(TEXT("pass"), TEXT("UnrealAssetToolAnimationBreadth"));
+    Root->SetStringField(TEXT("generated_utc"), FDateTime::UtcNow().ToIso8601()); Root->SetStringField(TEXT("engine_version"), FEngineVersion::Current().ToString());
+    Root->SetBoolField(TEXT("success"), bSuccess); Root->SetStringField(TEXT("error"), Error);
     TSharedRef<FJsonObject> Counts = MakeShared<FJsonObject>();
-#define SET_COUNT(Name, Field) Counts->SetNumberField(TEXT(Name), C.Field)
-    SET_COUNT("pose_assets", PoseAssets); SET_COUNT("pose_asset_tracks", PoseTracks); SET_COUNT("pose_asset_poses", Poses); SET_COUNT("pose_asset_transforms", PoseTransforms); SET_COUNT("pose_asset_curve_values", PoseCurveValues);
-    SET_COUNT("skeleton_slot_groups", SkeletonSlotGroups); SET_COUNT("skeleton_slots", SkeletonSlots);
-    SET_COUNT("chooser_tables", ChooserTables); SET_COUNT("chooser_columns", ChooserColumns); SET_COUNT("chooser_results", ChooserResults); SET_COUNT("chooser_context", ChooserContext);
-    SET_COUNT("proxy_tables", ProxyTables); SET_COUNT("proxy_entries", ProxyEntries); SET_COUNT("proxy_table_inheritance", ProxyInheritance);
-    SET_COUNT("ik_rigs", IKRigs); SET_COUNT("ik_rig_bones", IKRigBones); SET_COUNT("ik_rig_chains", IKRigChains); SET_COUNT("ik_rig_goals", IKRigGoals); SET_COUNT("ik_rig_solvers", IKRigSolvers);
-    SET_COUNT("ik_retargeters", IKRetargeters); SET_COUNT("ik_retarget_ops", IKRetargetOps); SET_COUNT("ik_retarget_poses", IKRetargetPoses);
-    SET_COUNT("animation_struct_references", StructReferences);
-#undef SET_COUNT
-    Root->SetObjectField(TEXT("counts"), Counts);
-    static const TCHAR* Names[] = {
-        TEXT("pose_assets.jsonl"), TEXT("pose_asset_tracks.jsonl"), TEXT("pose_asset_poses.jsonl"), TEXT("pose_asset_transforms.jsonl"), TEXT("pose_asset_curve_values.jsonl"),
-        TEXT("skeleton_slot_groups.jsonl"), TEXT("skeleton_slots.jsonl"),
-        TEXT("chooser_tables.jsonl"), TEXT("chooser_columns.jsonl"), TEXT("chooser_results.jsonl"), TEXT("chooser_context.jsonl"),
-        TEXT("proxy_tables.jsonl"), TEXT("proxy_entries.jsonl"), TEXT("proxy_table_inheritance.jsonl"),
-        TEXT("ik_rigs.jsonl"), TEXT("ik_rig_bones.jsonl"), TEXT("ik_rig_chains.jsonl"), TEXT("ik_rig_goals.jsonl"), TEXT("ik_rig_solvers.jsonl"),
-        TEXT("ik_retargeters.jsonl"), TEXT("ik_retarget_ops.jsonl"), TEXT("ik_retarget_poses.jsonl"), TEXT("animation_struct_references.jsonl")
-    };
-    TArray<TSharedPtr<FJsonValue>> Files;
-    for (const TCHAR* Name : Names) Files.Add(MakeShared<FJsonValueString>(Name));
-    Root->SetArrayField(TEXT("files"), Files);
-    FString Text;
-    const TSharedRef<TJsonWriter<TCHAR, TPrettyJsonPrintPolicy<TCHAR>>> Writer = TJsonWriterFactory<TCHAR, TPrettyJsonPrintPolicy<TCHAR>>::Create(&Text);
-    if (!FJsonSerializer::Serialize(Root, Writer)) return false;
-    return FFileHelper::SaveStringToFile(Text, *FPaths::Combine(OutputDir, TEXT("animation_breadth_manifest.json")), FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+    Counts->SetNumberField(TEXT("pose_assets"),C.PoseAssets); Counts->SetNumberField(TEXT("pose_asset_tracks"),C.PoseTracks); Counts->SetNumberField(TEXT("pose_asset_poses"),C.Poses);
+    Counts->SetNumberField(TEXT("pose_asset_transforms"),C.PoseTransforms); Counts->SetNumberField(TEXT("pose_asset_curve_values"),C.PoseCurveValues); Counts->SetNumberField(TEXT("skeleton_slot_groups"),C.SkeletonSlotGroups); Counts->SetNumberField(TEXT("skeleton_slots"),C.SkeletonSlots);
+    Counts->SetNumberField(TEXT("chooser_tables"),C.ChooserTables); Counts->SetNumberField(TEXT("chooser_columns"),C.ChooserColumns); Counts->SetNumberField(TEXT("chooser_results"),C.ChooserResults); Counts->SetNumberField(TEXT("chooser_context"),C.ChooserContext);
+    Counts->SetNumberField(TEXT("proxy_tables"),C.ProxyTables); Counts->SetNumberField(TEXT("proxy_entries"),C.ProxyEntries); Counts->SetNumberField(TEXT("proxy_table_inheritance"),C.ProxyInheritance);
+    Counts->SetNumberField(TEXT("ik_rigs"),C.IKRigs); Counts->SetNumberField(TEXT("ik_rig_bones"),C.IKRigBones); Counts->SetNumberField(TEXT("ik_rig_chains"),C.IKRigChains); Counts->SetNumberField(TEXT("ik_rig_goals"),C.IKRigGoals); Counts->SetNumberField(TEXT("ik_rig_solvers"),C.IKRigSolvers);
+    Counts->SetNumberField(TEXT("ik_retargeters"),C.IKRetargeters); Counts->SetNumberField(TEXT("ik_retarget_ops"),C.IKRetargetOps); Counts->SetNumberField(TEXT("ik_retarget_poses"),C.IKRetargetPoses); Counts->SetNumberField(TEXT("animation_struct_references"),C.StructReferences);
+    Root->SetObjectField(TEXT("counts"),Counts);
+    static const TCHAR* Files[] = {TEXT("pose_assets.jsonl"),TEXT("pose_asset_tracks.jsonl"),TEXT("pose_asset_poses.jsonl"),TEXT("pose_asset_transforms.jsonl"),TEXT("pose_asset_curve_values.jsonl"),TEXT("skeleton_slot_groups.jsonl"),TEXT("skeleton_slots.jsonl"),TEXT("chooser_tables.jsonl"),TEXT("chooser_columns.jsonl"),TEXT("chooser_results.jsonl"),TEXT("chooser_context.jsonl"),TEXT("proxy_tables.jsonl"),TEXT("proxy_entries.jsonl"),TEXT("proxy_table_inheritance.jsonl"),TEXT("ik_rigs.jsonl"),TEXT("ik_rig_bones.jsonl"),TEXT("ik_rig_chains.jsonl"),TEXT("ik_rig_goals.jsonl"),TEXT("ik_rig_solvers.jsonl"),TEXT("ik_retargeters.jsonl"),TEXT("ik_retarget_ops.jsonl"),TEXT("ik_retarget_poses.jsonl"),TEXT("animation_struct_references.jsonl")};
+    TArray<TSharedPtr<FJsonValue>> A; for (const TCHAR* F:Files) A.Add(MakeShared<FJsonValueString>(F)); Root->SetArrayField(TEXT("files"),A);
+    FString Text; const auto W=TJsonWriterFactory<TCHAR,TPrettyJsonPrintPolicy<TCHAR>>::Create(&Text); if(!FJsonSerializer::Serialize(Root,W)) return false;
+    return FFileHelper::SaveStringToFile(Text,*FPaths::Combine(OutputDir,TEXT("animation_breadth_manifest.json")),FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
 }
 
 static bool RunBreadthScan(FString& OutError)
 {
-    FString OutputDir;
-    FParse::Value(FCommandLine::Get(), TEXT("Output="), OutputDir);
-    const FString ProjectDir = NormalizeAbsolutePath(FPaths::ProjectDir());
-    if (OutputDir.IsEmpty()) OutputDir = FPaths::Combine(ProjectDir, TEXT(".uatool"));
-    else if (FPaths::IsRelative(OutputDir)) OutputDir = FPaths::Combine(ProjectDir, OutputDir);
-    OutputDir = NormalizeAbsolutePath(OutputDir);
-    IFileManager::Get().MakeDirectory(*OutputDir, true);
-    const bool bIncludeEngine = FParse::Param(FCommandLine::Get(), TEXT("IncludeEngine"));
-    const bool bIncludeSelf = FParse::Param(FCommandLine::Get(), TEXT("IncludeSelf"));
-    FString ToolPluginDir;
-    if (const TSharedPtr<IPlugin> Plugin = IPluginManager::Get().FindPlugin(TEXT("UnrealAssetTool")); Plugin.IsValid()) ToolPluginDir = NormalizeAbsolutePath(Plugin->GetBaseDir());
-
-    FWriters Writers; FCounts Counts;
-    if (!Writers.Open(OutputDir))
+    FString OutputDir; FParse::Value(FCommandLine::Get(),TEXT("Output="),OutputDir); const FString ProjectDir=NormalizeAbsolutePath(FPaths::ProjectDir());
+    if(OutputDir.IsEmpty()) OutputDir=FPaths::Combine(ProjectDir,TEXT(".uatool")); else if(FPaths::IsRelative(OutputDir)) OutputDir=FPaths::Combine(ProjectDir,OutputDir); OutputDir=NormalizeAbsolutePath(OutputDir);
+    IFileManager::Get().MakeDirectory(*OutputDir,true); const bool bIncludeEngine=FParse::Param(FCommandLine::Get(),TEXT("IncludeEngine")); const bool bIncludeSelf=FParse::Param(FCommandLine::Get(),TEXT("IncludeSelf"));
+    FString ToolPluginDir; if(const TSharedPtr<IPlugin> P=IPluginManager::Get().FindPlugin(TEXT("UnrealAssetTool"));P.IsValid()) ToolPluginDir=NormalizeAbsolutePath(P->GetBaseDir());
+    FWriters W; FCounts C; if(!W.Open(OutputDir)){OutError=TEXT("could not create breadth animation outputs"); SaveManifest(OutputDir,C,false,OutError); return false;}
+    FAssetRegistryModule& M=FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")); IAssetRegistry& R=M.Get(); R.SearchAllAssets(true); TArray<FAssetData>A;R.GetAllAssets(A,true);A.Sort([](const FAssetData&X,const FAssetData&Y){return X.GetSoftObjectPath().ToString()<Y.GetSoftObjectPath().ToString();});
+    for(const FAssetData& Asset:A)
     {
-        OutError = TEXT("could not create breadth animation JSONL output files");
-        SaveManifest(OutputDir, Counts, false, OutError); return false;
+        const FString CP=Asset.AssetClassPath.ToString(); const bool P=CP==TEXT("/Script/Engine.PoseAsset"), S=CP==TEXT("/Script/Engine.Skeleton"), Ch=CP==TEXT("/Script/Chooser.ChooserTable"), Pr=CP==TEXT("/Script/ProxyTable.ProxyTable"), IR=CP==TEXT("/Script/IKRig.IKRigDefinition"), Ret=CP==TEXT("/Script/IKRig.IKRetargeter"); if(!P&&!S&&!Ch&&!Pr&&!IR&&!Ret) continue;
+        FString PF; const bool Disk=FPackageName::DoesPackageExist(Asset.PackageName.ToString(),&PF,false); if(!bIncludeSelf&&Disk&&!ToolPluginDir.IsEmpty()&&IsInsideDirectory(PF,ToolPluginDir))continue; if(!bIncludeEngine&&(!Disk||!IsInsideDirectory(PF,ProjectDir)))continue;
+        UObject* O=Asset.GetAsset(); if(!O)continue; bool OK=true; if(P)OK=ScanPoseAsset(Cast<UPoseAsset>(O),Asset,W,C); else if(S)OK=ScanSkeletonSlots(Cast<USkeleton>(O),Asset,W,C); else if(Ch)OK=ScanChooser(O,Asset,W,C); else if(Pr)OK=ScanProxyTable(O,Asset,W,C); else if(IR)OK=ScanIKRig(O,Asset,W,C); else if(Ret)OK=ScanIKRetargeter(O,Asset,W,C); if(!OK){OutError=TEXT("failed breadth scan for ")+Asset.GetSoftObjectPath().ToString();SaveManifest(OutputDir,C,false,OutError);return false;}
     }
-    FAssetRegistryModule& Module = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry"));
-    IAssetRegistry& Registry = Module.Get(); Registry.SearchAllAssets(true);
-    TArray<FAssetData> Assets; Registry.GetAllAssets(Assets, true);
-    Assets.Sort([](const FAssetData& A, const FAssetData& B) { return A.GetSoftObjectPath().ToString() < B.GetSoftObjectPath().ToString(); });
-
-    for (const FAssetData& Asset : Assets)
-    {
-        const FString ClassPath = Asset.AssetClassPath.ToString();
-        const bool bPose = ClassPath == TEXT("/Script/Engine.PoseAsset");
-        const bool bSkeleton = ClassPath == TEXT("/Script/Engine.Skeleton");
-        const bool bChooser = ClassPath == TEXT("/Script/Chooser.ChooserTable");
-        const bool bProxyTable = ClassPath == TEXT("/Script/ProxyTable.ProxyTable");
-        const bool bIKRig = ClassPath == TEXT("/Script/IKRig.IKRigDefinition");
-        const bool bRetargeter = ClassPath == TEXT("/Script/IKRig.IKRetargeter");
-        if (!bPose && !bSkeleton && !bChooser && !bProxyTable && !bIKRig && !bRetargeter) continue;
-        FString PackageFilename;
-        const bool bHasDiskPackage = FPackageName::DoesPackageExist(Asset.PackageName.ToString(), &PackageFilename, false);
-        if (!bIncludeSelf && bHasDiskPackage && !ToolPluginDir.IsEmpty() && IsInsideDirectory(PackageFilename, ToolPluginDir)) continue;
-        if (!bIncludeEngine && (!bHasDiskPackage || !IsInsideDirectory(PackageFilename, ProjectDir))) continue;
-        UObject* Object = Asset.GetAsset(); if (!Object) continue;
-        bool bOk = true;
-        if (bPose) bOk = ScanPoseAsset(Cast<UPoseAsset>(Object), Asset, Writers, Counts);
-        else if (bSkeleton) bOk = ScanSkeletonSlots(Object, Asset, Writers, Counts);
-        else if (bChooser) bOk = ScanChooser(Object, Asset, Writers, Counts);
-        else if (bProxyTable) bOk = ScanProxyTable(Object, Asset, Writers, Counts);
-        else if (bIKRig) bOk = ScanIKRig(Object, Asset, Writers, Counts);
-        else if (bRetargeter) bOk = ScanIKRetargeter(Object, Asset, Writers, Counts);
-        if (!bOk)
-        {
-            OutError = TEXT("failed breadth animation scan for ") + Asset.GetSoftObjectPath().ToString();
-            SaveManifest(OutputDir, Counts, false, OutError); return false;
-        }
-    }
-    if (!SaveManifest(OutputDir, Counts, true, FString())) { OutError = TEXT("could not write animation_breadth_manifest.json"); return false; }
-    UE_LOG(LogTemp, Display, TEXT("UnrealAssetToolAnimationBreadth: pose_assets=%lld chooser_tables=%lld proxy_tables=%lld ik_rigs=%lld retargeters=%lld struct_refs=%lld"),
-        Counts.PoseAssets, Counts.ChooserTables, Counts.ProxyTables, Counts.IKRigs, Counts.IKRetargeters, Counts.StructReferences);
-    return true;
+    if(!SaveManifest(OutputDir,C,true,FString())){OutError=TEXT("could not write animation_breadth_manifest.json");return false;} UE_LOG(LogTemp,Display,TEXT("UnrealAssetToolAnimationBreadth: pose_assets=%lld chooser=%lld proxy=%lld ik_rigs=%lld retargeters=%lld refs=%lld"),C.PoseAssets,C.ChooserTables,C.ProxyTables,C.IKRigs,C.IKRetargeters,C.StructReferences); return true;
 }
 
-static void OnPostEngineInit()
-{
-    FString RunCommandlet; FParse::Value(FCommandLine::Get(), TEXT("run="), RunCommandlet);
-    if (!RunCommandlet.Equals(TEXT("UnrealAssetToolWorld"), ESearchCase::IgnoreCase)) return;
-    FString Error; if (!RunBreadthScan(Error)) UE_LOG(LogTemp, Error, TEXT("UnrealAssetToolAnimationBreadth: %s"), *Error);
-}
-
-struct FBreadthScannerBootstrap
-{
-    FBreadthScannerBootstrap() { FCoreDelegates::GetOnPostEngineInit().AddStatic(&OnPostEngineInit); }
-};
-static FBreadthScannerBootstrap GBreadthScannerBootstrap;
+static void OnPostEngineInit(){FString Run;FParse::Value(FCommandLine::Get(),TEXT("run="),Run);if(!Run.Equals(TEXT("UnrealAssetToolWorld"),ESearchCase::IgnoreCase))return;FString Error;if(!RunBreadthScan(Error))UE_LOG(LogTemp,Error,TEXT("UnrealAssetToolAnimationBreadth: %s"),*Error);}
+struct FBootstrap{FBootstrap(){FCoreDelegates::GetOnPostEngineInit().AddStatic(&OnPostEngineInit);}}; static FBootstrap GBootstrap;
 }
