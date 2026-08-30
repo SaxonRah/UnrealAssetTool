@@ -13,7 +13,7 @@ animation schema:   1
 derived schema:    10
 ```
 
-`animation_schema_version` and `animation_counts` are copied into the main `manifest.json` after a successful scan. `animation_manifest.json` remains the canonical animation-pass manifest. A bounded deep pass writes `animation_deep_manifest.json`; the Python integration validates it and folds its counts/file list into the animation schema-1 manifest before database packing/bundling.
+`animation_schema_version` and `animation_counts` are copied into the main `manifest.json` after a successful scan. `animation_manifest.json` remains the canonical animation-pass manifest. A bounded companion pass writes `animation_deep_manifest.json`; the Python integration validates it and folds its counts/file list into animation schema 1 before database packing/bundling. The companion pass is an implementation split, not a second public schema.
 
 ## Canonical streams
 
@@ -65,7 +65,7 @@ animation_deep_manifest.json
 
 ### Animation curves
 
-The deep pass reads the UE animation data model rather than only Skeleton curve metadata:
+The companion pass reads the UE animation data model rather than only Skeleton curve metadata:
 
 - float-curve identity/type flags
 - transform-curve identity/type flags
@@ -146,7 +146,7 @@ Chooser Tables, Proxy Tables, Proxy Assets, IK Rig definitions and IK Retargeter
 
 ## GASP validation — first pass
 
-The first UE 5.8.2 Game Animation Sample run compiled and completed successfully. Before the deep follow-up, it produced:
+The first UE 5.8.2 Game Animation Sample run compiled and completed successfully. Before the companion follow-up, it produced:
 
 ```text
 animation_assets                 2518
@@ -179,7 +179,7 @@ Important invariants from that corpus:
 - channel coverage included Trajectory, Group, Position, Curve, Pose, Heading, and a Blueprint-defined custom feature channel
 - structural schema 12, world schema 12, derived schema 10, and the existing 1,099 GASP world-system relations remained stable
 
-That run also exposed the gaps now addressed by the deep pass: 24 `PoseSearchInteractionAsset` database entries, four normalization sets, actual animation curve keys, the project Mirror Data Table, unused BlendSpace backing axes, and `ProxyAsset`/`ProxyTable` disambiguation.
+That run also exposed the gaps now addressed by the companion pass: 24 `PoseSearchInteractionAsset` database entries, four normalization sets, actual animation curve keys, the project Mirror Data Table, unused BlendSpace backing axes, and `ProxyAsset`/`ProxyTable` disambiguation.
 
 ## Not yet claimed complete
 
