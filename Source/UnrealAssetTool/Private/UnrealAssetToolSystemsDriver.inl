@@ -194,6 +194,8 @@ static bool RunSystemsScan(FString& OutError)
         }
         else if (Kind == TEXT("primary_asset_label") ||
                  Kind == TEXT("common_input_action_table") ||
+                 Kind == TEXT("common_input_action_domain") ||
+                 Kind == TEXT("common_input_action_domain_table") ||
                  Kind == TEXT("gameplay_tag_table"))
         {
             bOk = ScanGameplayDataAsset(Object, Asset, Kind, Writers, Counts);
