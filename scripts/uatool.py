@@ -44,7 +44,7 @@ _base_scan = core.scan
 def create_schema(conn) -> None:
     _base_create_schema(conn)
 
-    # uat.db is a disposable cache rebuilt from authoritative JSONL.  During a
+    # uat.db is a disposable cache rebuilt from authoritative JSONL. During a
     # from-scratch pack, durable WAL journaling only duplicates write traffic.
     # Build it in bulk with journaling/sync disabled, then restore a normal
     # persistent mode after the database is complete.
@@ -392,24 +392,36 @@ def scan(args):
     if result != 0:
         return result
 
-    error = canonical_cleanup.validation_error(runtime._output(args))
-    if error:
-        print(f"ERROR: canonical cleanup incomplete: {error}", file=sys.stderr)
-        return 29
-    error = vfx.validation_error(runtime._output(args))
-    if error:
-        print(f"ERROR: VFX scan incomplete: {error}", file=sys.stderr)
-        return 25
-    error = systems.validation_error(runtime._output(args))
-    if error:
-        print(f"ERROR: systems scan incomplete: {error}", file=sys.stderr)
-        return 27
-    try:
-        _require_vfx_derived(runtime._output(args))
-        _require_project_graph(runtime._output(args))
-    except RuntimeError as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
-        return 28 if "project graph incomplete:" in str(exc) else 26
+    output = runtime._output(args)
+    if not _derived_is_fresh(output):
+        # This should be rare: the composed derive writes the stamp only after
+        # all raw/derived validators pass. Keep a conservative diagnostic path
+        # for old/unexpected outputs without imposing the full parse on every
+        # successful normal scan.
+        error = canonical_cleanup.validation_error(output)
+        if error:
+            print(f"ERROR: canonical cleanup incomplete: {error}", file=sys.stderr)
+            return 29
+        error = vfx.validation_error(output)
+        if error:
+            print(f"ERROR: VFX scan incomplete: {error}", file=sys.stderr)
+            return 25
+        error = systems.validation_error(output)
+        if error:
+            print(f"ERROR: systems scan incomplete: {error}", file=sys.stderr)
+            return 27
+        try:
+            _require_vfx_derived(output)
+            _require_project_graph(output)
+        except RuntimeError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 28 if "project graph incomplete:" in str(exc) else 26
+        derived_freshness.mark_fresh(
+            output,
+            schema_version=FINAL_DERIVED_SCHEMA_VERSION,
+            script_dir=SCRIPT_DIR,
+        )
+
     _combined_summary(args)
     return 0
 
