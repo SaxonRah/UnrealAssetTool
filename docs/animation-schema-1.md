@@ -1,10 +1,8 @@
-# Animation schema 1 — development scope
+# Animation schema 1
 
-This document tracks the first raw animation-asset extraction pass while it is under validation.
+Animation schema 1 is the canonical authored-animation layer for UnrealAssetTool.
 
-## Versioning
-
-Animation is versioned independently from the existing structural/world/derived layers:
+It is independently versioned from the structural, world, and derived layers:
 
 ```text
 structural schema: 12
@@ -13,11 +11,26 @@ animation schema:   1
 derived schema:    10
 ```
 
-`animation_schema_version` and `animation_counts` are copied into the main `manifest.json` after a successful scan, while `animation_manifest.json` remains the raw pass manifest.
+`animation_schema_version`, `animation_counts`, and `animation_files` are copied into the top-level `manifest.json` after the animation passes have been normalized and merged.
+
+## Pass model
+
+Animation extraction is internally split so optional/plugin-heavy families remain build-safe:
+
+```text
+UnrealAssetToolAnimation
+UnrealAssetToolAnimationDeep
+UnrealAssetToolAnimationBreadth
+UnrealAssetToolAnimationBreadthFinalize
+```
+
+The split is an implementation detail. All emitted rows below are public animation schema 1.
+
+The scanner deliberately avoids hard dependencies on Pose Search, Chooser, ProxyTable, and IKRig where reflection can recover the authored data safely.
 
 ## Canonical streams
 
-Animation schema 1 writes:
+### Core animation
 
 ```text
 animation_assets.jsonl
@@ -30,37 +43,81 @@ blend_space_samples.jsonl
 skeletons.jsonl
 skeleton_bones.jsonl
 skeleton_sockets.jsonl
+animation_optional_assets.jsonl
+animation_properties.jsonl
+animation_references.jsonl
+```
+
+### Curves / Pose Search / mirroring
+
+```text
+animation_curves.jsonl
+animation_curve_keys.jsonl
 pose_search_databases.jsonl
 pose_search_database_assets.jsonl
 pose_search_schemas.jsonl
 pose_search_channels.jsonl
 pose_search_schema_skeletons.jsonl
-animation_optional_assets.jsonl
-animation_properties.jsonl
-animation_references.jsonl
-animation_curves.jsonl
-animation_curve_keys.jsonl
 pose_search_interaction_assets.jsonl
 pose_search_interaction_items.jsonl
 pose_search_normalization_sets.jsonl
 pose_search_normalization_databases.jsonl
 mirror_data_tables.jsonl
 mirror_data_table_rows.jsonl
-animation_deep_manifest.json
+```
+
+### PoseAsset / Skeleton slots
+
+```text
+pose_assets.jsonl
+pose_asset_tracks.jsonl
+pose_asset_poses.jsonl
+pose_asset_transforms.jsonl
+pose_asset_curve_values.jsonl
+skeleton_slot_groups.jsonl
+skeleton_slots.jsonl
+```
+
+### Chooser / Proxy / IK
+
+```text
+chooser_tables.jsonl
+chooser_columns.jsonl
+chooser_results.jsonl
+chooser_context.jsonl
+proxy_tables.jsonl
+proxy_entries.jsonl
+proxy_table_inheritance.jsonl
+ik_rigs.jsonl
+ik_rig_bones.jsonl
+ik_rig_chains.jsonl
+ik_rig_goals.jsonl
+ik_rig_solvers.jsonl
+ik_retargeters.jsonl
+ik_retarget_ops.jsonl
+ik_retarget_poses.jsonl
+animation_struct_references.jsonl
+```
+
+Companion provenance is retained in:
+
+```text
 animation_manifest.json
+animation_deep_manifest.json
+animation_breadth_manifest.json
 ```
 
 ## First-class facts
 
-### Animation sequences and sequence-base assets
+### AnimSequence / sequence-base
 
 - asset identity/class/package
 - Skeleton
-- play length/additive state
+- play length / rate / looping / additive state
+- root-motion state for AnimSequence
 - authored notifies and notify states
-- notify timing, duration, track, branching-point state and trigger settings
+- notify timing, duration, track, branching-point and trigger settings
 - authored sync markers
-- root-motion flag for `UAnimSequence`
 - bounded reflected authored properties and UObject references
 
 ### Animation curves
@@ -71,30 +128,28 @@ animation_manifest.json
 - interpolation mode
 - tangent mode and tangent-weight mode
 - arrive/leave tangent values and tangent weights
-- transform-component identity when transform curves exist
+- transform-component identity
 
-Non-finite numeric state is never written as an invalid JSON token. A non-finite field is stored as JSON `null` plus `<field>_non_finite` with `nan`, `+inf`, or `-inf`. The deep manifest counts these exceptional fields.
+Non-finite numeric state is serialized as JSON `null` with a companion non-finite marker; invalid JSON numeric tokens are never emitted.
 
 ### Montages
 
-In addition to the sequence-base facts:
-
 - sections and next-section links
 - section start times
-- slots
-- animation segments used by each slot
-- segment source animation, time range, rate and loop count
+- slot tracks
+- animation segments and source animations
+- segment time/rate/loop settings
 - authored montage sync markers
 
 ### Blend Spaces / Aim Offsets
 
 - authored axes and ranges/grid settings
-- samples and sample coordinates
+- samples and coordinates
 - source animations
 - rate/mirror/single-frame settings
 - authored sync markers
 
-Unused backing `BlendParameters` slots are removed from the normalized schema output. This matters because UE stores three backing parameter structures even for lower-dimensional BlendSpaces.
+Unused backing `BlendParameters` slots are filtered so lower-dimensional assets do not falsely claim three authored axes.
 
 ### Skeletons
 
@@ -103,46 +158,92 @@ Unused backing `BlendParameters` slots are removed from the normalized schema ou
 - sockets and socket transforms
 - virtual-bone count
 - curve metadata names
-- registered animation-notify names
-- registered sync-marker names
-- reflected authored properties/references
+- registered notify / sync-marker names
+- authored slot groups and slots
+- bounded reflected properties/references
+
+### PoseAsset
+
+- Skeleton and source animation
+- additive/base-pose state
+- track identities
+- pose identities
+- raw/full pose counts
+- full per-track transforms for every pose
+- raw and full per-curve values for every pose
 
 ### Pose Search / Motion Matching
 
-Pose Search remains an optional engine plugin, so the scanner deliberately does not add a hard `PoseSearch` module dependency. When the plugin is enabled and its assets can load, Unreal reflection is used to preserve:
+- database identity/settings and database -> schema
+- ordered database source entries
+- schema identity/settings
+- concrete feature channel classes/settings/references
+- schema role -> Skeleton / MirrorDataTable entries
+- multi-role PoseSearchInteractionAsset items, source animations, preview meshes, origins and warping weights
+- PoseSearchNormalizationSet -> database membership
 
-- Pose Search database identity
-- database Schema/preview/search-mode/tags
-- database animation entries and source assets
-- Pose Search schema settings
-- schema channels and concrete channel classes
-- reflected channel settings/references
-- schema role/Skeleton/MirrorDataTable entries
-- PoseSearchInteractionAsset identity
-- interaction roles, source animation, origin, preview mesh and warping weights
-- PoseSearchNormalizationSet identity and database membership
-
-### Mirror Data Tables
+### Mirror Data Table
 
 - table identity
 - Skeleton
 - mirror axis
-- row names
 - source/mirrored names
 - entry type
 - enabled state
 
-### Chooser / Proxy / IK Rig
+### Chooser
 
-Chooser Tables, Proxy Tables, Proxy Assets, IK Rig definitions and IK Retargeters are recognized as animation-adjacent optional assets. Schema 1 preserves identity plus bounded reflected authored properties/references without hard module dependencies. ProxyAsset and ProxyTable are distinct normalized kinds.
+- table identity and output type
+- exact column/result/context counts
+- disabled result-row state
+- concrete InstancedStruct type for every column/result/context row
+- bounded authored struct export
+- object/class/asset references extracted from those structs
 
-Deep family-specific Chooser/IK normalization remains evidence-driven follow-up work rather than being guessed from display text.
+The current schema intentionally preserves uncommon per-column settings losslessly in `raw_value` rather than inventing family-specific semantics from display text.
+
+### ProxyTable / ProxyAsset
+
+- distinct ProxyTable and ProxyAsset identities
+- ordered table entries
+- entry -> ProxyAsset
+- concrete value struct type and bounded authored value
+- inherited table relationships when authored
+- object/asset references from entry values
+
+### IK Rig
+
+- preview/skeleton mesh relationship
+- root/pelvis retarget definition
+- complete rig bone hierarchy and current global pose
+- excluded bones
+- retarget chains with start/end bone and optional IK goal
+- IK goals and goal bones
+- solver stack with concrete solver struct type and bounded authored settings
+
+### IK Retargeter
+
+- source and target IK Rig
+- ordered retarget operation stack and concrete op types
+- source and target named retarget poses
+- bounded authored operation/pose values
+- object/IK Rig references contained by operation structs
+
+## UE 5.8 breadth-shape fixes
+
+Content Examples exposed several cases where generic reflection had the correct data but the first breadth pass assumed the wrong container shape. Schema 1 now handles the actual UE 5.8 layout:
+
+- PoseAsset curve rows preserve distinct raw/full values;
+- Proxy inheritance is `InheritEntriesFrom`;
+- IK chains are `RetargetDefinition.BoneChains`;
+- IK goals are UObject rows;
+- source/target retarget poses are TMaps.
+
+The breadth-finalization pass corrects those shapes without introducing hard Chooser/Proxy/IKRig module dependencies.
 
 ## GASP validation — UE 5.8.2
 
-The Game Animation Sample regression corpus has completed the base and deep animation passes successfully.
-
-Validated counts:
+Game Animation Sample passed the Motion Matching/deep-animation gate.
 
 ```text
 animation_assets                         2518
@@ -174,42 +275,70 @@ mirror_data_tables                            1
 mirror_data_table_rows                       88
 ```
 
-Verified invariants:
+Validated invariants include exact database/schema/source/channel/role counts, complete interaction and normalization-set resolution, exact curve/key accounting, no duplicate curve-key identities, and complete MirrorDataTable row accounting.
 
-- every one of the 155 Pose Search databases resolves to one of the 33 indexed schemas;
-- database declared source counts exactly equal all 2,138 emitted database-source rows;
-- all database source targets resolve: 2,080 AnimSequences, 34 AnimMontages, and 24 PoseSearchInteractionAssets;
-- all 24 interaction assets are the exact interaction targets referenced by databases;
-- all 48 interaction items resolve to indexed AnimMontages, with 24 Attacker and 24 Victim roles;
-- all four normalization sets have exact emitted membership counts, and all 117 memberships resolve to indexed Pose Search databases;
-- schema declared channel/role counts exactly equal the 74 channel rows and 37 role/Skeleton rows;
-- all 37 role Skeleton references resolve;
-- channel classes include Trajectory, Group, Position, Curve, Pose, Heading, and a Blueprint-defined custom channel;
-- all 7,692 curve rows account exactly for all 811,357 curve-key rows;
-- there are no duplicate curve-key primary identities;
-- the 54 non-finite numeric fields occur in only 27 curve keys across five assets;
-- none of those 54 values is a key time or authored curve value: 25 are arrive tangents, 25 leave tangents, two arrive tangent weights, and two leave tangent weights; all are NaNs;
-- the single MirrorDataTable declares 88 rows, exactly 88 rows are emitted, all are enabled, and its Skeleton resolves;
-- BlendSpace normalization produces 26 authored axes: three BlendSpace1D assets contribute one axis each, and one nominal `BlendSpace` is authored effectively one-dimensional with only `Horizontal` and all sample Y values equal to zero;
-- structural schema 12, world schema 12, and derived schema 10 regression counts remain unchanged, including exactly 1,099 GASP world-system relations.
+## Content Examples validation — UE 5.8.2
 
-A provenance-ordering bug discovered during this validation caused the top-level `manifest.json` to copy the base animation counts before deep-output normalization. The canonical `animation_manifest.json` and JSONL were correct. The Python integration now normalizes/merges animation output when `read_manifest()` is called, so top-level animation provenance receives the final deep counts and normalized axis count before derivation/packing/bundling.
+Content Examples passed the animation breadth gate.
 
-## Still not claimed complete
+```text
+animation_assets                           294
+animation_notifies                          84
+animation_sync_markers                     162
+montage_sections                              9
+animation_segments                           10
+blend_space_axes                              8
+blend_space_samples                          40
+skeletons                                    30
+skeleton_bones                             2609
+skeleton_sockets                             51
+pose_assets                                  38
+pose_asset_tracks                          5406
+pose_asset_poses                            351
+pose_asset_transforms                     41710
+pose_asset_curve_values                   78039
+skeleton_slot_groups                         10
+skeleton_slots                               33
+chooser_tables                               23
+chooser_columns                              32
+chooser_results                              78
+chooser_context                              27
+proxy_tables                                  9
+proxy_entries                                16
+proxy_table_inheritance                       0
+ik_rigs                                      19
+ik_rig_bones                               1025
+ik_rig_chains                                79
+ik_rig_goals                                 75
+ik_rig_solvers                               21
+ik_retargeters                                9
+ik_retarget_ops                              68
+ik_retarget_poses                            23
+animation_struct_references                 278
+animation_curves                           1349
+animation_curve_keys                      66212
+mirror_data_tables                            1
+mirror_data_table_rows                      159
+```
 
-Animation schema 1 now has strong modern locomotion/Motion Matching coverage, but some adjacent systems remain intentionally partial:
+Verified:
 
-- richer PoseAsset pose data
-- dedicated Chooser row/column/result normalization
-- dedicated Proxy Table entry/fallback normalization
-- IK Rig chains/goals/solvers
-- IK Retargeter chain mappings/settings
-- Motion Warping authored settings where they materially affect project understanding
-- SkeletalMesh / PhysicsAsset internals, which remain separate coverage families
+- every PoseAsset declared track/pose count matches emitted rows;
+- every pose's full transform/curve count matches emitted detail rows and all full poses match track counts;
+- every Chooser declared column/result/context/disabled count matches emitted rows;
+- every Proxy declared entry/inheritance count matches emitted rows;
+- every IK Rig declared bone/chain/goal/solver count matches emitted rows;
+- all chain start/end bones, named chain goals and goal bones resolve inside their rig;
+- all Retargeter source/target rigs resolve and op/source-pose/target-pose counts match;
+- all Proxy entry ProxyAssets resolve;
+- no breadth rows are truncated;
+- all 136 JSONL files in the bundle parse successfully;
+- top-level `manifest.json` animation counts exactly match the normalized `animation_manifest.json` counts.
 
-## Validation order
+## Schema-1 status
 
-1. **GASP:** complete for the current raw schema-1 feature set.
-2. **Content Examples:** breadth validation for Sequence/Montage/BlendSpace/Skeleton/Chooser/IK and unusual asset combinations.
-3. Fix any corpus-proven animation gaps before stabilizing schema 1.
-4. Only after raw animation coverage is stable, add derived animation relations/context and connect them to later project-neighborhood traversal.
+Raw animation schema 1 validation is complete for the current GASP + Content Examples corpus gate.
+
+Further family-specific semantic promotion remains evidence-driven, but it is no longer a blocker for schema 1. In particular, unusual Chooser columns, IK solver settings, and Retarget op settings remain preserved losslessly as concrete struct type + authored raw value + extracted references.
+
+The next feature collection is **derived animation relations/context**, followed by project-neighborhood traversal integration. Niagara + legacy Cascade remains the next major raw subsystem coverage pass.
