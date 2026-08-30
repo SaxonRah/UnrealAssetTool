@@ -2,84 +2,76 @@
 
 ## Current versions
 
-UnrealAssetTool 0.6.4 uses:
+UnrealAssetTool 0.7.0 uses:
 
 ```text
-scanner schema: 11
-derived schema: 7
+structural scanner schema: 12
+world scanner schema:      12
+derived schema:            10
 ```
 
-The two numbers intentionally version different layers.
+The numbers intentionally version different layers.
 
-- `schema_version` in `manifest.json` versions canonical Unreal-extracted output.
-- `derived_schema_version` versions deterministic Python-generated views.
+- `schema_version` in `manifest.json` versions the structural Unreal-extracted output.
+- `schema_version` in `world_manifest.json` versions the world/placement Unreal-extracted output.
+- `derived_schema_version` in `manifest.json` versions deterministic Python-generated views.
 
-A scanner-schema change generally requires rescanning in Unreal. A derived-schema change generally does not.
+A structural/world scanner-schema change generally requires rescanning in Unreal. A derived-schema change generally does not.
 
 ## Storage model
 
-The canonical scan format is JSON Lines: one JSON object per line.
+Canonical scan data is JSON Lines: one JSON object per line. This supports streaming writes, bounded memory, partial reads, diffing, independent index rebuilding, and sharding by subsystem.
 
-This permits streaming writes, partial reads, diffing, independent index rebuilding, and bounded retrieval.
+`uat.db` is a regenerable SQLite index, not canonical truth.
 
-`uat.db` is not canonical. It is a regenerable SQLite index.
+## Manifests
 
-## `manifest.json`
-
-One JSON object describing the scan.
+### `manifest.json`
 
 Important fields include:
 
-- `schema_version`
-- `tool`
-- `generated_utc`
-- `engine_version`
-- `project_file`
-- `project_dir`
-- scanner options such as engine/generated/self inclusion
-- `tool_plugin_dir`
-- `counts`
-- after derivation: `derived_schema_version`
-- after derivation: `derived_counts`
-
-## Canonical scanner streams
-
-The files below require Unreal/editor data and therefore belong to scanner schema 11.
-
-### Project/files
-
-#### `files.jsonl`
-
-One record per indexed physical project file.
-
-Typical fields:
-
 ```text
-path
-kind
-extension
-size
-modified_utc
+schema_version
+tool
+generated_utc
+engine_version
+project_file
+project_dir
+tool_plugin_dir
+counts
+derived_schema_version
+derived_counts
+world_schema_version
+world_counts
+world_files
+world_pass
 ```
 
-#### `source_chunks.jsonl`
+### `world_manifest.json`
 
-Text/source/config/document files split into bounded source-line chunks.
+Records world-pass provenance, structural-schema baseline, engine/project information, scan policies, and world-specific counts.
 
-Typical fields:
+The world pass is a separate Unreal commandlet so world loading/World Partition behavior can evolve independently from the main structural pass while still sharing the same structural schema baseline.
 
-```text
-path
-start_line
-end_line
-text
-```
+---
 
-### Asset Registry
+# Structural scanner schema 12
 
-#### `assets.jsonl`
+## Project/files
 
-One record per indexed Unreal asset.
+### `files.jsonl`
+
+Physical indexed project files with path, kind, extension, size, and modification time.
+
+### `source_chunks.jsonl`
+
+Bounded text/source/config/document chunks with source path and line range.
+
+## Asset Registry
+
+### `assets.jsonl`
+
+One row per indexed Unreal asset.
 
 Typical fields:
 
@@ -94,9 +86,11 @@ tags
 dependencies
 ```
 
-#### `asset_dependencies.jsonl`
+Every supported or unsupported asset family appears here, making Asset Registry data the universal fallback coverage layer.
 
-Normalized package dependency edges.
+### `asset_dependencies.jsonl`
+
+Normalized package dependencies:
 
 ```text
 source_package
@@ -104,19 +98,42 @@ target_package
 category
 ```
 
+Package dependency does not imply first-class understanding of the target asset's internals.
+
 ## Blueprint canonical streams
+
+```text
+blueprints.jsonl
+blueprint_graphs.jsonl
+blueprint_nodes.jsonl
+blueprint_pins.jsonl
+blueprint_edges.jsonl
+blueprint_interfaces.jsonl
+blueprint_node_properties.jsonl
+blueprint_node_references.jsonl
+blueprint_bindings.jsonl
+blueprint_defaults.jsonl
+blueprint_component_properties.jsonl
+blueprint_state_values.jsonl
+blueprint_timelines.jsonl
+blueprint_timeline_tracks.jsonl
+blueprint_timeline_keys.jsonl
+blueprint_widgets.jsonl
+blueprint_widget_properties.jsonl
+blueprint_widget_bindings.jsonl
+blueprint_widget_animations.jsonl
+blueprint_widget_animation_bindings.jsonl
+```
 
 ### `blueprints.jsonl`
 
-One record per Blueprint-family asset.
-
-Includes Blueprint identity/inheritance plus declared variable and SCS-component arrays. Large graph bodies live in separate streams.
+Blueprint-family asset identity, parent/generated classes, Blueprint type/status, declared variables, implemented interfaces, and SCS component data.
 
 ### `blueprint_graphs.jsonl`
 
-One record per unique Blueprint-owned graph.
+One row per unique Blueprint-owned graph.
 
-Important fields:
+Important fields include:
 
 ```text
 graph_id
@@ -147,47 +164,13 @@ anim_conduit
 graph
 ```
 
-Typical systems include:
-
-```text
-k2
-animation
-control_rig
-blend_stack
-umg
-graph
-```
+Typical systems include K2, animation, Control Rig, blend-stack, UMG, and generic graphs.
 
 ### `blueprint_nodes.jsonl`
 
-One record per editor graph node.
+Node identity/class/title/comment/editor position plus normalized factual semantics.
 
-Important fields:
-
-```text
-node_id
-blueprint_path
-graph_id
-graph_name
-graph_kind
-graph_system
-node_class
-operation
-symbol
-owner
-semantic
-title
-comment
-x
-y
-pins[]
-```
-
-`operation`, `symbol`, and `owner` are factual normalized semantics. Specialized facts remain in `semantic`.
-
-Unknown/specialized nodes stay factual rather than being guessed from display text.
-
-### Core K2 operation examples
+Core operation examples:
 
 ```text
 function_entry
@@ -197,7 +180,6 @@ event
 custom_event
 variable_get
 variable_set
-variable_reference
 branch
 switch
 select
@@ -208,135 +190,36 @@ spawn_actor
 macro_instance
 self
 tunnel
-comment
-```
-
-### Schema-11 struct operations
-
-Schema 11 canonically distinguishes:
-
-```text
 make_struct
 break_struct
 set_fields_in_struct
-struct_operation
 ```
 
-For recognized `UK2Node_StructOperation` nodes, semantic fields include:
+Animation operation examples include state machines/states/transitions/conduits/aliases, cached poses, linked layers/input poses, slots, sequence players/evaluators, BlendSpace players, Motion Matching nodes, Control Rig nodes, and graph/state/transition result nodes.
 
-```text
-struct_type
-struct_name
-pure
-classification_source
-concrete_node_class
-```
-
-This fixes schema-10's inherited-class misclassification of Make/Break/SetFields nodes as `variable_reference`.
-
-### Animation operation examples
-
-```text
-anim_state_machine
-anim_state_entry
-anim_state
-anim_transition
-anim_conduit
-anim_state_alias
-anim_save_cached_pose
-anim_use_cached_pose
-anim_linked_layer
-anim_linked_input_pose
-anim_slot
-anim_sequence_player
-anim_graph_root
-anim_state_result
-anim_transition_result
-anim_blend_space_player
-anim_sequence_evaluator
-anim_motion_matching
-anim_control_rig
-```
+Unknown/plugin-defined nodes remain preserved with concrete class/title/pins/properties/wiring instead of being guessed.
 
 ### `blueprint_pins.jsonl`
 
-Normalized pin stream.
-
-Important fields include:
-
-```text
-pin_id
-node_id
-graph_id
-blueprint_path
-name
-direction
-type
-default_value
-default_object
-default_text
-hidden/connectability flags
-link_count
-```
-
-Pin types preserve category/subcategory/container/reference/const information and object types when Unreal exposes them.
+Normalized pin identity, direction, type, defaults, object defaults, flags, and link counts.
 
 ### `blueprint_edges.jsonl`
 
-Exact pin-to-pin Blueprint graph connections.
-
-```text
-edge_id
-graph_id
-source_node_id
-source_pin_id
-target_node_id
-target_pin_id
-source_pin_name
-target_pin_name
-edge_kind
-```
-
-`edge_kind` is `execution` or `data`.
-
-### `blueprint_interfaces.jsonl`
-
-Implemented Blueprint interfaces and associated function graph paths.
+Exact pin-to-pin graph links classified as `execution` or `data`.
 
 ### `blueprint_node_properties.jsonl`
 
-Flattened non-transient reflected node properties.
-
-Important fields:
-
-```text
-node_id
-property_name
-property_path
-declaring_type
-depth
-property_type
-cpp_type
-value
-object_path
-object_class
-property_flags
-truncated
-```
-
-Nested structs are traversed to a bounded depth. Simple arrays are expanded in bounded form.
+Bounded flattened non-transient reflected node properties, including object references when available.
 
 ### `blueprint_node_references.jsonl`
 
-Normalized UObject references discovered during node reflection.
+Normalized UObject references found during node reflection.
 
 ### `blueprint_bindings.jsonl`
 
-Normalized AnimGraph node property-binding entries.
+AnimGraph property-access/property-binding facts including target property and access path.
 
-Includes target property, access path, path segments, compiled context, pin types, and raw reflected value.
-
-### Authored Blueprint state/default streams
+### Authored Blueprint state streams
 
 ```text
 blueprint_defaults.jsonl
@@ -344,7 +227,7 @@ blueprint_component_properties.jsonl
 blueprint_state_values.jsonl
 ```
 
-These capture Blueprint CDO/component-template changed state that requires loaded Unreal objects.
+These capture CDO/component-template changed state that requires Unreal objects.
 
 ### Timeline streams
 
@@ -353,8 +236,6 @@ blueprint_timelines.jsonl
 blueprint_timeline_tracks.jsonl
 blueprint_timeline_keys.jsonl
 ```
-
-Keys preserve time/value/interpolation/tangent facts where applicable.
 
 ### UMG streams
 
@@ -366,9 +247,7 @@ blueprint_widget_animations.jsonl
 blueprint_widget_animation_bindings.jsonl
 ```
 
-## Compact RigVM canonical streams
-
-Normal scans write:
+## Compact Control Rig / RigVM streams
 
 ```text
 rigvm_objects.jsonl
@@ -377,23 +256,17 @@ rigvm_links.jsonl
 rigvm_references.jsonl
 ```
 
-`rigvm_objects` records compact graph/node model identity and factual node kind/operation.
-
-`rigvm_pins` records model pins, types, directions, defaults, and flags.
-
-`rigvm_links` records exact source-pin-path → target-pin-path connections.
-
-`rigvm_references` records structural and external UObject relationships.
+These preserve compact model graph/node objects, pins/types/defaults/directions, exact source-pin-path -> target-pin-path links, and structural/external UObject references.
 
 ### `rigvm_properties.jsonl`
 
-Optional raw reflection stream, populated only with:
+Optional large raw reflection stream enabled with:
 
 ```text
 --include-raw-rigvm-properties
 ```
 
-It is intentionally excluded from ordinary scans/uploads because large Control Rig corpora showed extremely high volume with little routine retrieval value.
+It is excluded from ordinary compact bundles unless explicitly requested.
 
 ## AI canonical streams
 
@@ -405,16 +278,12 @@ behavior_tree_nodes.jsonl
 behavior_tree_edges.jsonl
 ```
 
-Includes hierarchy, child ordering, task/composite/decorator/service identity, attachments, Blackboard association, and reflected settings.
-
 ### Blackboards
 
 ```text
 blackboards.jsonl
 blackboard_keys.jsonl
 ```
-
-Includes parent inheritance, key order/name/type, sync settings, and key-type configuration.
 
 ### EQS
 
@@ -435,11 +304,9 @@ statetree_transitions.jsonl
 statetree_bindings.jsonl
 ```
 
-Includes hierarchy, tasks/evaluators, conditions/considerations, transitions, property bindings, linked StateTrees, and reflected settings.
-
 ### `ai_properties.jsonl`
 
-Loss-minimizing reflected settings for AI nodes/objects.
+Loss-minimizing reflected settings for supported AI objects/nodes.
 
 ## PCG canonical streams
 
@@ -451,7 +318,7 @@ pcg_edges.jsonl
 pcg_properties.jsonl
 ```
 
-These preserve graph identity, exact topology, settings objects, graph/user state, and reflected node/settings properties.
+The scanner preserves graph identity, nodes, pins, exact topology, settings objects, and reflected node/settings state.
 
 ## Material canonical streams
 
@@ -462,13 +329,96 @@ material_edges.jsonl
 material_properties.jsonl
 ```
 
-They preserve material/function/instance identity, expression objects, root/output wiring, recursive expression-input topology, references, parameters/settings, and reflected properties.
+These preserve Material/MaterialInstance/MaterialFunction identity, expression objects, root/output wiring, recursive expression-input topology, references, and reflected settings.
+
+Materials are a first-class system in schema 12. Niagara/particles are not part of this material model.
 
 ---
 
-# Derived schema 7
+# World scanner schema 12
 
-Everything below is deterministic Python output and may be deleted/regenerated.
+The world pass emits:
+
+```text
+worlds.jsonl
+world_levels.jsonl
+world_actors.jsonl
+world_components.jsonl
+world_instance_properties.jsonl
+world_references.jsonl
+world_data_layers.jsonl
+world_partition_actor_descs.jsonl
+```
+
+## `worlds.jsonl`
+
+World identity/package/persistent-level fields plus World Partition presence and initialization/descriptor-walk facts.
+
+## `world_levels.jsonl`
+
+Persistent-level rows and classic streaming-level relationships, including target world package and streaming class/owner.
+
+## `world_actors.jsonl`
+
+Loaded persistent-level actors with:
+
+- path/name/label/class;
+- actor GUID;
+- folder/tags;
+- transform;
+- attachment/ownership/child-actor facts;
+- Blueprint asset/generated-class identity where available;
+- Data Layer memberships/references.
+
+## `world_components.jsonl`
+
+Actor components with identity/class/archetype/creation method, tags, scene-component attachment/socket information, relative/world transforms, and ownership.
+
+Serialized scene-component world transforms are refreshed from relative/attachment state before extraction because loaded map assets may otherwise retain identity `ComponentToWorld` caches.
+
+## `world_instance_properties.jsonl`
+
+Authored placed-instance property differences from the exact archetype.
+
+The extractor excludes transient/deprecated/skip-serialization state plus fields that cannot represent normal user-authored instance overrides.
+
+## `world_references.jsonl`
+
+Hard and soft UObject references discovered from actor/component properties, with:
+
+```text
+world_path
+actor_path
+owner_kind
+owner_path
+root_property
+property_path
+reference_kind
+target_path
+target_class
+target_kind
+authored_override
+```
+
+Reference recursion and per-owner output are bounded. Truncation/cap policy belongs to the scanner implementation and should remain explicit when expanded in future schemas.
+
+## `world_data_layers.jsonl`
+
+Data Layer instance identity, hierarchy, runtime/editor state, and associated DataLayerAsset information.
+
+## `world_partition_actor_descs.jsonl`
+
+World Partition actor descriptor facts without calling `GetActor()` or loading every external actor.
+
+Includes descriptor GUID, package/soft path, native class, parent GUID, actor-reference GUIDs, transform/bounds, Data Layer membership, and related descriptor metadata.
+
+If a deserialized World Partition must be temporarily initialized for descriptor enumeration, the scanner initializes only when supported and uninitializes afterward.
+
+---
+
+# Derived schema 10
+
+Everything below is deterministic Python output and may be deleted/regenerated from compatible canonical data.
 
 Run:
 
@@ -476,67 +426,33 @@ Run:
 python scripts\uatool.py derive <Project>\.uatool
 ```
 
-`pack` and `bundle` also rerun derivation.
+`pack` and `bundle` rerun derivation automatically.
 
-## `blueprint_functions.jsonl`
-
-Normalized function definitions.
-
-Includes:
+## Blueprint program reconstruction
 
 ```text
-function_id
-blueprint_path
-graph_id
-name
-owner
-resolved_function
-function_flags
-has_exec
-pure_shape
-blueprint_pure
-const_function
-blueprint_callable
-static_function
-event_function
-entry_node_id
-result_node_ids
-inputs
-outputs
-locals
+blueprint_functions.jsonl
+blueprint_events.jsonl
+blueprint_call_edges.jsonl
+blueprint_call_bindings.jsonl
+blueprint_data_dependencies.jsonl
+blueprint_execution_blocks.jsonl
+blueprint_execution_block_edges.jsonl
+blueprint_execution_roots.jsonl
+anim_state_machines.jsonl
+anim_states.jsonl
+anim_transitions.jsonl
+blueprint_relations.jsonl
+blueprint_graph_context.jsonl
+blueprint_summaries.jsonl
+rigvm_editor_links.jsonl
 ```
 
-`blueprint_pure` comes from authoritative `FUNC_BlueprintPure`; it is intentionally separate from structural `has_exec` because UE can retain entry/result exec pins even on BlueprintPure functions.
+### Functions/events and calls
 
-## `blueprint_events.jsonl`
+Functions retain UFunction flags, inputs/outputs/locals, structural purity/exec facts, and graph identity.
 
-Normalized event definitions including custom, override, component-bound, input, and related event kinds.
-
-## `blueprint_call_edges.jsonl`
-
-One row per Blueprint `function_call`.
-
-Important fields:
-
-```text
-call_id
-caller_function_id
-target_function
-target_name
-target_owner
-target_blueprint_path
-target_function_id
-resolution
-candidate_count
-candidate_function_ids
-pure
-const_function
-latent
-interface_call
-function_flags
-```
-
-Resolution values:
+Call edges preserve resolution status:
 
 ```text
 internal
@@ -545,141 +461,28 @@ external
 unresolved
 ```
 
-Ambiguous interface/override definitions are preserved rather than guessed.
+Only uniquely resolved internal calls receive caller/callee parameter bindings.
 
-## `blueprint_call_bindings.jsonl`
+### Data provenance
 
-Derived schema 7 cross-function parameter map for uniquely resolved internal calls.
+`blueprint_data_dependencies.jsonl` traces bounded upstream data producers for execution-relevant sink inputs.
 
-Important fields:
-
-```text
-binding_id
-call_id
-call_node_id
-caller_blueprint_path
-caller_graph_id
-caller_function_id
-target_blueprint_path
-target_function_id
-direction
-call_pin_id
-call_pin_name
-parameter_name
-parameter_pin_ids
-match_kind
-split_suffix
-call_pin_type
-parameter_type
-dependency_ids
-consumer_pin_ids
-```
-
-`direction`:
-
-```text
-argument
-return
-```
-
-`match_kind` includes exact and split-struct matching.
-
-Context pins such as `self`/`Target` are not falsely treated as function parameters.
-
-## `blueprint_data_dependencies.jsonl`
-
-Bounded upstream data provenance for connected non-exec inputs on execution-bearing/result nodes.
-
-Important fields include:
-
-```text
-dependency_id
-blueprint_path
-graph_id
-sink_node_id
-sink_pin_id
-sink_pin_name
-sink_operation
-sink_label
-expression
-expression_text
-variable_reads
-function_calls
-object_references
-boundary_nodes
-cycle
-truncated
-```
-
-Current bounds:
+Current safety bounds:
 
 ```text
 maximum recursive depth: 24
 maximum expression nodes: 64
 ```
 
-Cycles/truncation are explicit rather than silently discarded.
+Cycles and truncation remain explicit.
 
-For legacy schema-10 input, derived schema 7 corrects the known Make/Break/SetFields struct-operation classification in-memory for reconstruction without mutating canonical data.
+### Execution blocks
 
-## Blueprint execution program
+Raw execution-pin links are collapsed into deterministic basic blocks/edges/roots while retaining underlying node IDs.
 
-```text
-blueprint_execution_blocks.jsonl
-blueprint_execution_block_edges.jsonl
-blueprint_execution_roots.jsonl
-```
+### AnimBP state machines
 
-Execution edges are collapsed into deterministic basic blocks.
-
-Blocks preserve ordered node IDs, semantic operations, labels, and compact text.
-
-Block edges preserve source/target node and exec-pin names.
-
-Roots map normalized functions/events to starting blocks. BlueprintPure functions remain explicitly identifiable even if UE keeps structural exec pins.
-
-## Normalized AnimBP state machines
-
-```text
-anim_state_machines.jsonl
-anim_states.jsonl
-anim_transitions.jsonl
-```
-
-The derived layer resolves:
-
-- machine editor graph;
-- entry node and entry state;
-- state/conduit/alias records;
-- exact previous/next transition state IDs;
-- rule/custom transition graph paths;
-- transition settings.
-
-## Blueprint relations/context/summaries
-
-```text
-blueprint_relations.jsonl
-blueprint_graph_context.jsonl
-blueprint_summaries.jsonl
-```
-
-Relations include factual calls, reads/writes, casts, macros, asset references, animation links, bindings, timeline/widget links, and Control Rig/RigVM joins.
-
-Graph context is bounded deterministic text reconstructed from nodes/pins/edges/semantics.
-
-Summaries are factual inventories rather than generated interpretation.
-
-## `rigvm_editor_links.jsonl`
-
-Deterministic joins from Control Rig editor nodes to compact RigVM model nodes.
-
-Join status remains explicit:
-
-```text
-matched
-ambiguous
-unmatched
-```
+Derived state-machine tables resolve editor state/transition topology, entry states, aliases/conduits, transition endpoints, rule/custom-transition graphs, and key transition settings.
 
 ## AI derived views
 
@@ -699,8 +502,6 @@ links_statetree
 references_blueprint
 ```
 
-Blackboard selector resolution respects parent Blackboard inheritance.
-
 ## PCG/material derived views
 
 ```text
@@ -712,13 +513,112 @@ material_graph_context.jsonl
 visual_summaries.jsonl
 ```
 
-PCG `uses_subgraph` is emitted only for a non-self PCGGraph target or a property whose name explicitly identifies a subgraph relationship, avoiding reflected ownership back-reference false positives.
+PCG `uses_subgraph` is emitted only for real non-self graph references or explicitly identified subgraph fields; reflected ownership back-references are not promoted to semantic graph use.
 
-## SQLite
+## Derived world graph — schema 8+
 
-`uat.db` mirrors canonical and derived streams into indexed relational tables.
+```text
+world_relations.jsonl
+world_context.jsonl
+world_summaries.jsonl
+```
 
-It is always regenerable:
+`world_relations` includes factual derived relationships such as:
+
+```text
+has_persistent_level
+streams_world_package
+has_world_partition
+contains_loaded_actor
+owns_component
+attached_to_actor
+attached_to_component
+instantiates_blueprint
+contains_data_layer
+member_of_data_layer
+uses_data_layer_asset
+contains_partition_actor_desc
+describes_loaded_actor
+parent_partition_actor
+references_partition_actor
+hard_object_reference
+soft_object_reference
+```
+
+### LevelInstance / PackedLevelActor child worlds — schema 9
+
+For World Partition LevelInstance/PackedLevelActor descriptors, schema 9 may emit:
+
+```text
+partition_actor -> instantiates_world -> world_package
+```
+
+The join is emitted only when existing canonical package-dependency/world facts resolve exactly one non-owning scanned world package. Ambiguous cases remain unasserted.
+
+## World-to-system bridge — schema 10
+
+### `world_system_relations.jsonl`
+
+Connects a world/placed actor/component to an authored specialist asset.
+
+Current target kinds include:
+
+```text
+blueprint
+animation_blueprint
+control_rig_blueprint
+widget_blueprint
+behavior_tree
+blackboard
+eqs_query
+statetree
+pcg_graph
+material
+material_instance
+material_function
+```
+
+Typical relations include:
+
+```text
+instantiates_blueprint
+references_blueprint
+references_animation_blueprint
+references_control_rig_blueprint
+references_widget_blueprint
+references_behavior_tree
+references_blackboard
+references_eqs_query
+references_statetree
+references_pcg_graph
+references_material
+```
+
+Each row contains stable source/target semantics plus an `evidence` array and `evidence_count`.
+
+Evidence kinds currently include:
+
+```text
+placed_actor_class
+world_reference
+blueprint_relation
+blueprint_asset_dependency
+world_asset_dependency
+```
+
+Multiple proofs for the same semantic relation are aggregated under one stable relation ID.
+
+Generated Blueprint class paths normalize back to the authored Blueprint asset. Package dependency joins are emitted only when the package maps unambiguously to one indexed specialist entity.
+
+World context is augmented with bounded system-link counts/examples while preserving the underlying world summary facts.
+
+---
+
+# SQLite
+
+`uat.db` mirrors canonical and derived streams into indexed relational tables, including schema-10 `world_system_relations`.
+
+It is regenerable:
 
 ```powershell
 python scripts\uatool.py pack <Project>\.uatool
@@ -726,7 +626,7 @@ python scripts\uatool.py pack <Project>\.uatool
 
 ## Upload bundle
 
-The normal bundle includes canonical JSONL and useful derived JSONL.
+The ordinary compact bundle includes canonical JSONL and useful derived JSONL, including world and world-system relations.
 
 It excludes:
 
@@ -737,14 +637,14 @@ rigvm_properties.jsonl
 
 unless raw RigVM properties are explicitly requested.
 
-Create it with:
-
-```powershell
-python scripts\uatool.py bundle <Project>\.uatool
-```
-
 ## Schema compatibility rule
 
-Never silently rewrite canonical old-schema JSONL into new canonical truth.
+Never silently rewrite old canonical JSONL into new canonical truth.
 
-Backward-compatible derived fixes may interpret known old-schema facts differently, but the manifest continues to identify the scanner schema that actually produced the raw data.
+Backward-compatible derived fixes may interpret compatible old facts differently, but manifests must continue to identify the scanner schemas that actually produced the raw data.
+
+## Coverage is not equal to Asset Registry presence
+
+An asset appearing in `assets.jsonl` means UnrealAssetTool knows that it exists and knows its generic Asset Registry facts. It does not mean its internal authored structure is first-class.
+
+For the current first-class/partial/generic-only subsystem matrix, see [coverage.md](coverage.md).
