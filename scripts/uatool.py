@@ -15,6 +15,18 @@ import uatool_systems as systems
 import uatool_project_graph as project_graph
 import uatool_project_graph_finalize as project_graph_finalize
 import uatool_project_neighborhoods as neighborhood_policy
+import uatool_project_neighborhood_compact as neighborhood_compact
+import uatool_canonical_cleanup as canonical_cleanup
+import uatool_build_perf as build_perf
+
+# Schema 14 changes only the representation of bounded project neighborhoods:
+# project_edges remains authoritative, while each neighborhood stores compact
+# edge references instead of duplicating full edge/evidence payloads and text.
+FINAL_DERIVED_SCHEMA_VERSION = 14
+project_graph.DERIVED_SCHEMA_VERSION = FINAL_DERIVED_SCHEMA_VERSION
+
+# Patch core build/staging globals before capturing the composed pipeline.
+build_perf.install(core)
 
 # uatool_runtime installs the structural/world/animation/derived-schema-11
 # pipeline into uatool_core. This composition root adds independently versioned
@@ -82,8 +94,6 @@ def _require_vfx_derived(output: Path) -> None:
         raise RuntimeError(f"VFX derived incomplete: {error}")
     manifest = _require_declared_counts(output, vfx_stitch.DERIVED_FILES, "VFX derived")
     version = int(manifest.get("derived_schema_version", 0) or 0)
-    # VFX relations were introduced in schema 12 and remain valid members of
-    # later derived schemas. Do not make their validator reject schema 13+.
     if version < vfx_stitch.DERIVED_SCHEMA_VERSION:
         raise RuntimeError(
             f"VFX derived incomplete: expected derived schema >= {vfx_stitch.DERIVED_SCHEMA_VERSION}, got {version}"
@@ -97,16 +107,30 @@ def _require_project_graph(output: Path) -> None:
     error = project_graph_finalize.validation_error(output, runtime._rows)
     if error:
         raise RuntimeError(f"project graph incomplete: {error}")
+    error = neighborhood_compact.validation_error(output, runtime._rows)
+    if error:
+        raise RuntimeError(f"project graph incomplete: {error}")
     manifest = _require_declared_counts(output, project_graph.DERIVED_FILES, "project graph")
     version = int(manifest.get("derived_schema_version", 0) or 0)
-    if version != project_graph.DERIVED_SCHEMA_VERSION:
+    if version != FINAL_DERIVED_SCHEMA_VERSION:
         raise RuntimeError(
-            f"project graph incomplete: expected derived schema {project_graph.DERIVED_SCHEMA_VERSION}, got {version}"
+            f"project graph incomplete: expected derived schema {FINAL_DERIVED_SCHEMA_VERSION}, got {version}"
         )
 
 
 def derive_output(output):
     output = Path(output).expanduser().resolve()
+
+    cleanup = canonical_cleanup.apply(output)
+    cleanup_error = canonical_cleanup.validation_error(output)
+    if cleanup_error:
+        raise RuntimeError(f"canonical cleanup incomplete: {cleanup_error}")
+    if cleanup.get("material_expression_guids", 0):
+        print(
+            "canonical cleanup: removed generated MaterialExpressionGuid rows="
+            f"{cleanup['material_expression_guids']}"
+        )
+
     # Raw specialist passes are prerequisites for the unified graph. Gate before
     # rewriting any derived files so failed/old scans cannot look fresh.
     _require_vfx(output)
@@ -128,7 +152,7 @@ def derive_output(output):
     project_nodes, project_edges, _ = project_graph_finalize.finalize(
         output, runtime._rows, project_nodes, project_edges
     )
-    project_neighborhoods = neighborhood_policy.rebuild(
+    expanded_neighborhoods = neighborhood_policy.rebuild(
         project_nodes,
         project_edges,
         quality_rank=project_graph.QUALITY_RANK,
@@ -137,6 +161,7 @@ def derive_output(output):
         max_edges=project_graph.MAX_NEIGHBOR_EDGES,
         max_chars=project_graph.MAX_NEIGHBOR_CHARS,
     )
+    project_neighborhoods = neighborhood_compact.compact(expanded_neighborhoods)
     project_counts = {
         "project_nodes": runtime._write(output / "project_nodes.jsonl", project_nodes),
         "project_edges": runtime._write(output / "project_edges.jsonl", project_edges),
@@ -146,6 +171,9 @@ def derive_output(output):
     if error:
         raise RuntimeError(f"project graph incomplete: {error}")
     error = project_graph_finalize.validation_error(output, runtime._rows)
+    if error:
+        raise RuntimeError(f"project graph incomplete: {error}")
+    error = neighborhood_compact.validation_error(output, runtime._rows)
     if error:
         raise RuntimeError(f"project graph incomplete: {error}")
     counts.update(project_counts)
@@ -168,7 +196,7 @@ def derive_output(output):
             manifest["systems_files"] = systems_manifest.get("files", [])
             manifest["systems_pass"] = systems_manifest.get("pass", "UnrealAssetToolSystems")
 
-        manifest["derived_schema_version"] = project_graph.DERIVED_SCHEMA_VERSION
+        manifest["derived_schema_version"] = FINAL_DERIVED_SCHEMA_VERSION
         declared = manifest.get("derived_counts", {})
         declared = declared if isinstance(declared, dict) else {}
         declared.update(vfx_counts)
@@ -198,6 +226,12 @@ def build_database(output):
         vfx_stitch.load_database(conn, output, runtime._rows)
         systems.load_database(conn, output, runtime._rows)
         project_graph.load_database(conn, output, runtime._rows)
+        neighborhood_compact.enrich_database(
+            conn,
+            output,
+            runtime._rows,
+            max_chars=project_graph.MAX_NEIGHBOR_CHARS,
+        )
         conn.commit()
     finally:
         conn.close()
@@ -294,10 +328,17 @@ def scan(args):
         if "project graph incomplete:" in message:
             print(f"ERROR: {exc}", file=sys.stderr)
             return 28
+        if "canonical cleanup incomplete:" in message:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 29
         raise
     if result != 0:
         return result
 
+    error = canonical_cleanup.validation_error(runtime._output(args))
+    if error:
+        print(f"ERROR: canonical cleanup incomplete: {error}", file=sys.stderr)
+        return 29
     error = vfx.validation_error(runtime._output(args))
     if error:
         print(f"ERROR: VFX scan incomplete: {error}", file=sys.stderr)
@@ -321,7 +362,7 @@ core.derive_output = derive_output
 core.build_database = build_database
 core.query = query
 core.scan = scan
-core.DERIVED_SCHEMA_VERSION = project_graph.DERIVED_SCHEMA_VERSION
+core.DERIVED_SCHEMA_VERSION = FINAL_DERIVED_SCHEMA_VERSION
 core.DEFAULT_BUNDLE_FILES = tuple(dict.fromkeys((
     *core.DEFAULT_BUNDLE_FILES,
     *vfx.RAW_FILES,
