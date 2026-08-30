@@ -17,6 +17,7 @@ import uatool_project_graph_finalize as project_graph_finalize
 import uatool_project_neighborhoods as neighborhood_policy
 import uatool_project_neighborhood_compact as neighborhood_compact
 import uatool_canonical_cleanup as canonical_cleanup
+import uatool_derived_freshness as derived_freshness
 import uatool_build_perf as build_perf
 
 # Schema 14 changes only the representation of bounded project neighborhoods:
@@ -24,6 +25,7 @@ import uatool_build_perf as build_perf
 # edge references instead of duplicating full edge/evidence payloads and text.
 FINAL_DERIVED_SCHEMA_VERSION = 14
 project_graph.DERIVED_SCHEMA_VERSION = FINAL_DERIVED_SCHEMA_VERSION
+SCRIPT_DIR = Path(__file__).resolve().parent
 
 # Patch core build/staging globals before capturing the composed pipeline.
 build_perf.install(core)
@@ -41,6 +43,16 @@ _base_scan = core.scan
 
 def create_schema(conn) -> None:
     _base_create_schema(conn)
+
+    # uat.db is a disposable cache rebuilt from authoritative JSONL.  During a
+    # from-scratch pack, durable WAL journaling only duplicates write traffic.
+    # Build it in bulk with journaling/sync disabled, then restore a normal
+    # persistent mode after the database is complete.
+    conn.execute("PRAGMA journal_mode=OFF")
+    conn.execute("PRAGMA synchronous=OFF")
+    conn.execute("PRAGMA temp_store=MEMORY")
+    conn.execute("PRAGMA cache_size=-262144")
+
     vfx.create_schema(conn)
     vfx_stitch.create_schema(conn)
     systems.create_schema(conn)
@@ -118,6 +130,28 @@ def _require_project_graph(output: Path) -> None:
         )
 
 
+def _derived_is_fresh(output: Path) -> bool:
+    return derived_freshness.is_fresh(
+        output,
+        schema_version=FINAL_DERIVED_SCHEMA_VERSION,
+        script_dir=SCRIPT_DIR,
+    )
+
+
+def _declared_derived_counts(output: Path) -> dict[str, int]:
+    manifest = _read_top_manifest(output)
+    declared = manifest.get("derived_counts", {})
+    if not isinstance(declared, dict):
+        return {}
+    result: dict[str, int] = {}
+    for key, value in declared.items():
+        try:
+            result[str(key)] = int(value)
+        except (TypeError, ValueError):
+            continue
+    return result
+
+
 def derive_output(output):
     output = Path(output).expanduser().resolve()
 
@@ -132,9 +166,14 @@ def derive_output(output):
         )
 
     # Raw specialist passes are prerequisites for the unified graph. Gate before
-    # rewriting any derived files so failed/old scans cannot look fresh.
+    # trusting or rewriting any derived files so failed/old scans cannot look fresh.
     _require_vfx(output)
     _require_systems(output)
+
+    if _derived_is_fresh(output):
+        print(f"derived output current: reusing validated schema {FINAL_DERIVED_SCHEMA_VERSION}")
+        return _declared_derived_counts(output)
+
     counts = dict(_base_derive_output(output))
 
     vfx_relations, vfx_context, vfx_summaries = vfx_stitch.derive(output, runtime._rows)
@@ -152,7 +191,7 @@ def derive_output(output):
     project_nodes, project_edges, _ = project_graph_finalize.finalize(
         output, runtime._rows, project_nodes, project_edges
     )
-    expanded_neighborhoods = neighborhood_policy.rebuild(
+    project_neighborhoods = neighborhood_policy.rebuild(
         project_nodes,
         project_edges,
         quality_rank=project_graph.QUALITY_RANK,
@@ -160,8 +199,8 @@ def derive_output(output):
         max_depth=project_graph.MAX_NEIGHBOR_DEPTH,
         max_edges=project_graph.MAX_NEIGHBOR_EDGES,
         max_chars=project_graph.MAX_NEIGHBOR_CHARS,
+        compact=True,
     )
-    project_neighborhoods = neighborhood_compact.compact(expanded_neighborhoods)
     project_counts = {
         "project_nodes": runtime._write(output / "project_nodes.jsonl", project_nodes),
         "project_edges": runtime._write(output / "project_edges.jsonl", project_edges),
@@ -210,6 +249,11 @@ def derive_output(output):
 
     _require_vfx_derived(output)
     _require_project_graph(output)
+    derived_freshness.mark_fresh(
+        output,
+        schema_version=FINAL_DERIVED_SCHEMA_VERSION,
+        script_dir=SCRIPT_DIR,
+    )
     return counts
 
 
@@ -217,8 +261,15 @@ def build_database(output):
     output = Path(output).expanduser().resolve()
     _require_vfx(output)
     _require_systems(output)
-    _require_vfx_derived(output)
-    _require_project_graph(output)
+
+    # A freshness stamp is written only after full derived validation. When it
+    # matches canonical file metadata, derived file metadata, schema, and Python
+    # source content, reparsing the entire graph solely to validate it again is
+    # redundant before a disposable SQLite rebuild.
+    if not _derived_is_fresh(output):
+        _require_vfx_derived(output)
+        _require_project_graph(output)
+
     db = _base_build_database(output)
     conn = sqlite3.connect(db)
     try:
@@ -230,6 +281,9 @@ def build_database(output):
         # hundreds-of-megabytes copy of neighborhood paths in uat.db.
         project_graph.load_database(conn, output, runtime._rows)
         conn.commit()
+        conn.execute("PRAGMA optimize")
+        conn.execute("PRAGMA journal_mode=DELETE")
+        conn.execute("PRAGMA synchronous=NORMAL")
     finally:
         conn.close()
     return db
