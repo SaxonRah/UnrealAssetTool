@@ -7,11 +7,21 @@ from pathlib import Path
 
 from uatool_vfx_defs import VFX_SCHEMA_VERSION, RAW_FILES, read_manifest, _rows
 
+
 def _count_rows(output: Path) -> dict[str, int]:
     return {
         filename.removesuffix(".jsonl"): sum(1 for _ in _rows(output / filename))
         for filename in RAW_FILES[1:]
     }
+
+
+def _validate_variable_type_rows(rows: list[dict], label: str) -> str | None:
+    for row in rows:
+        type_value = str(row.get("type", ""))
+        type_handle = str(row.get("type_handle", ""))
+        if type_handle and type_value != type_handle:
+            return f"{label} canonical type does not match live type handle"
+    return None
 
 
 def _topology_error(output: Path) -> str | None:
@@ -80,6 +90,13 @@ def _topology_error(output: Path) -> str | None:
         if int(row.get("variable_count", 0)) != variables_by_channel[path]:
             return f"Niagara Data Channel variable count mismatch: {path}"
 
+    type_error = _validate_variable_type_rows(
+        channel_variables,
+        "Niagara Data Channel variable",
+    )
+    if type_error:
+        return type_error
+
     parameters_by_collection = collections.Counter(
         str(row.get("collection_path", "")) for row in collection_parameters
     )
@@ -87,6 +104,13 @@ def _topology_error(output: Path) -> str | None:
         path = str(row.get("collection_path", ""))
         if int(row.get("parameter_count", 0)) != parameters_by_collection[path]:
             return f"Niagara Parameter Collection parameter count mismatch: {path}"
+
+    type_error = _validate_variable_type_rows(
+        collection_parameters,
+        "Niagara Parameter Collection parameter",
+    )
+    if type_error:
+        return type_error
 
     cascade_emitters_by_system = collections.Counter(
         str(row.get("system_path", "")) for row in cascade_emitters
