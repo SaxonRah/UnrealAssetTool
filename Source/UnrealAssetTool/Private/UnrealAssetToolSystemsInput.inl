@@ -1,5 +1,5 @@
 static bool ScanInputProcessorArray(
-    UStruct* Struct,
+    const UStruct* Struct,
     const void* Value,
     UObject* Owner,
     const FName FieldName,
@@ -106,6 +106,67 @@ static bool ScanInputAction(
     return true;
 }
 
+static bool ScanInputMappingArray(
+    const FArrayProperty* MappingsProperty,
+    const void* ArrayValue,
+    UObject* Context,
+    const FString& AssetPath,
+    int32& MappingCount,
+    FWriters& Writers,
+    FCounts& Counts,
+    TSet<FString>& SeenStateOwners)
+{
+    if (!MappingsProperty || !ArrayValue || !Context)
+    {
+        return true;
+    }
+
+    const FStructProperty* StructProperty = CastField<FStructProperty>(MappingsProperty->Inner);
+    if (!StructProperty || !StructProperty->Struct)
+    {
+        return true;
+    }
+
+    FScriptArrayHelper Helper(MappingsProperty, ArrayValue);
+    const int32 Limit = FMath::Min(Helper.Num(), MaxStructuredRowsPerAsset);
+    for (int32 Index = 0; Index < Limit; ++Index)
+    {
+        const void* Item = Helper.GetRawPtr(Index);
+        const UScriptStruct* Struct = StructProperty->Struct;
+        UObject* Action = GetFirstObjectField(Struct, Item, {TEXT("Action")});
+        bool bTruncated = false;
+        const FString Raw = ExportProperty(StructProperty, Item, Context, bTruncated);
+        const int32 MappingIndex = MappingCount++;
+
+        TSharedRef<FJsonObject> Row = MakeShared<FJsonObject>();
+        Row->SetStringField(TEXT("context_path"), AssetPath);
+        Row->SetNumberField(TEXT("mapping_index"), MappingIndex);
+        Row->SetStringField(TEXT("struct_type"), Struct->GetPathName());
+        Row->SetStringField(TEXT("action_path"), Action ? Action->GetPathName() : FString());
+        Row->SetStringField(TEXT("action_class"), Action ? Action->GetClass()->GetPathName() : FString());
+        Row->SetStringField(TEXT("key"), ExportField(Struct, Item, TEXT("Key"), Context));
+        Row->SetNumberField(TEXT("trigger_count"), GetArrayCount(Struct, Item, TEXT("Triggers")));
+        Row->SetNumberField(TEXT("modifier_count"), GetArrayCount(Struct, Item, TEXT("Modifiers")));
+        Row->SetStringField(TEXT("player_mappable_options"), ExportFirstField(
+            Struct, Item, Context, {TEXT("PlayerMappableOptions"), TEXT("PlayerMappableKeySettings")}));
+        Row->SetStringField(TEXT("setting_behavior"), ExportFirstField(
+            Struct, Item, Context, {TEXT("SettingBehavior"), TEXT("PlayerMappableKeySettingBehavior")}));
+        Row->SetStringField(TEXT("raw_value"), Raw);
+        Row->SetBoolField(TEXT("truncated"), bTruncated);
+        if (!Writers.InputMappings.Write(Row))
+        {
+            return false;
+        }
+        ++Counts.InputMappings;
+
+        if (!ScanInputProcessorArray(Struct, Item, Context, TEXT("Triggers"), AssetPath,
+            TEXT("mapping"), MappingIndex, TEXT("trigger"), Writers, Counts, SeenStateOwners)) return false;
+        if (!ScanInputProcessorArray(Struct, Item, Context, TEXT("Modifiers"), AssetPath,
+            TEXT("mapping"), MappingIndex, TEXT("modifier"), Writers, Counts, SeenStateOwners)) return false;
+    }
+    return true;
+}
+
 static bool ScanInputMappingContext(
     UObject* Context,
     const FAssetData& Asset,
@@ -120,48 +181,46 @@ static bool ScanInputMappingContext(
     const FString AssetPath = Asset.GetSoftObjectPath().ToString();
     int32 MappingCount = 0;
 
-    const FArrayProperty* MappingsProperty = CastField<FArrayProperty>(Context->GetClass()->FindPropertyByName(TEXT("Mappings")));
-    if (MappingsProperty)
+    // Older/current runtime views may expose a direct Mappings array. Prefer it
+    // when populated, but UE 5.8 stores authored default mappings in the
+    // DefaultKeyMappings struct while the top-level Mappings array is empty.
+    const FArrayProperty* DirectMappings =
+        CastField<FArrayProperty>(Context->GetClass()->FindPropertyByName(TEXT("Mappings")));
+    if (DirectMappings)
     {
-        const FStructProperty* StructProperty = CastField<FStructProperty>(MappingsProperty->Inner);
-        const void* ArrayValue = MappingsProperty->ContainerPtrToValuePtr<void>(Context);
-        if (StructProperty && StructProperty->Struct && ArrayValue)
+        const void* ArrayValue = DirectMappings->ContainerPtrToValuePtr<void>(Context);
+        if (ArrayValue && FScriptArrayHelper(DirectMappings, ArrayValue).Num() > 0)
         {
-            FScriptArrayHelper Helper(MappingsProperty, ArrayValue);
-            const int32 Limit = FMath::Min(Helper.Num(), MaxStructuredRowsPerAsset);
-            for (int32 Index = 0; Index < Limit; ++Index)
+            if (!ScanInputMappingArray(
+                DirectMappings, ArrayValue, Context, AssetPath, MappingCount,
+                Writers, Counts, SeenStateOwners))
             {
-                const void* Item = Helper.GetRawPtr(Index);
-                UScriptStruct* Struct = StructProperty->Struct;
-                UObject* Action = GetFirstObjectField(Struct, Item, {TEXT("Action")});
-                bool bTruncated = false;
-                const FString Raw = ExportProperty(StructProperty, Item, Context, bTruncated);
+                return false;
+            }
+        }
+    }
 
-                TSharedRef<FJsonObject> Row = MakeShared<FJsonObject>();
-                Row->SetStringField(TEXT("context_path"), AssetPath);
-                Row->SetNumberField(TEXT("mapping_index"), MappingCount++);
-                Row->SetStringField(TEXT("struct_type"), Struct->GetPathName());
-                Row->SetStringField(TEXT("action_path"), Action ? Action->GetPathName() : FString());
-                Row->SetStringField(TEXT("action_class"), Action ? Action->GetClass()->GetPathName() : FString());
-                Row->SetStringField(TEXT("key"), ExportField(Struct, Item, TEXT("Key"), Context));
-                Row->SetNumberField(TEXT("trigger_count"), GetArrayCount(Struct, Item, TEXT("Triggers")));
-                Row->SetNumberField(TEXT("modifier_count"), GetArrayCount(Struct, Item, TEXT("Modifiers")));
-                Row->SetStringField(TEXT("player_mappable_options"), ExportFirstField(
-                    Struct, Item, Context, {TEXT("PlayerMappableOptions"), TEXT("PlayerMappableKeySettings")}));
-                Row->SetStringField(TEXT("setting_behavior"), ExportFirstField(
-                    Struct, Item, Context, {TEXT("SettingBehavior"), TEXT("PlayerMappableKeySettingBehavior")}));
-                Row->SetStringField(TEXT("raw_value"), Raw);
-                Row->SetBoolField(TEXT("truncated"), bTruncated);
-                if (!Writers.InputMappings.Write(Row))
+    if (MappingCount == 0)
+    {
+        const FStructProperty* DefaultsProperty = CastField<FStructProperty>(
+            Context->GetClass()->FindPropertyByName(TEXT("DefaultKeyMappings")));
+        if (DefaultsProperty && DefaultsProperty->Struct)
+        {
+            const void* DefaultsValue = DefaultsProperty->ContainerPtrToValuePtr<void>(Context);
+            const FArrayProperty* NestedMappings = CastField<FArrayProperty>(
+                DefaultsProperty->Struct->FindPropertyByName(TEXT("Mappings")));
+            const void* NestedArrayValue =
+                DefaultsValue && NestedMappings
+                    ? NestedMappings->ContainerPtrToValuePtr<void>(DefaultsValue)
+                    : nullptr;
+            if (NestedMappings && NestedArrayValue)
+            {
+                if (!ScanInputMappingArray(
+                    NestedMappings, NestedArrayValue, Context, AssetPath, MappingCount,
+                    Writers, Counts, SeenStateOwners))
                 {
                     return false;
                 }
-                ++Counts.InputMappings;
-
-                if (!ScanInputProcessorArray(Struct, Item, Context, TEXT("Triggers"), AssetPath,
-                    TEXT("mapping"), Index, TEXT("trigger"), Writers, Counts, SeenStateOwners)) return false;
-                if (!ScanInputProcessorArray(Struct, Item, Context, TEXT("Modifiers"), AssetPath,
-                    TEXT("mapping"), Index, TEXT("modifier"), Writers, Counts, SeenStateOwners)) return false;
             }
         }
     }
