@@ -15,9 +15,34 @@ PACKAGE_PLUMBING_RELATIONS = {
     "depends_on_package",
 }
 
+COMPACT_HOP_FIELDS = (
+    "depth",
+    "direction",
+    "edge_id",
+    "edge_quality",
+    "source_coverage",
+    "target_coverage",
+    "evidence_count",
+)
 
-def rebuild(nodes, edges, *, quality_rank, coverage_rank, max_depth, max_edges, max_chars):
-    """Return deterministic bounded neighborhoods over an existing project graph."""
+
+def rebuild(
+    nodes,
+    edges,
+    *,
+    quality_rank,
+    coverage_rank,
+    max_depth,
+    max_edges,
+    max_chars,
+    compact=False,
+):
+    """Return deterministic bounded neighborhoods over an existing project graph.
+
+    With ``compact=True`` the traversal emits schema-14 hop references directly.
+    This avoids materializing the old expanded source/target/evidence payload and
+    rendered text only to discard it immediately afterward.
+    """
 
     adjacency = collections.defaultdict(list)
     for edge in edges:
@@ -59,6 +84,7 @@ def rebuild(nodes, edges, *, quality_rank, coverage_rank, max_depth, max_edges, 
         seen_edges = set()
         touched_nodes = {root_path}
         hops = []
+        hop_text_chars = 0
         truncated = False
 
         while queue and len(hops) < max_edges:
@@ -72,7 +98,7 @@ def rebuild(nodes, edges, *, quality_rank, coverage_rank, max_depth, max_edges, 
                     continue
                 seen_edges.add(edge_id)
 
-                hops.append({
+                expanded_hop = {
                     "depth": depth + 1,
                     "direction": direction,
                     "edge_id": edge_id,
@@ -86,7 +112,18 @@ def rebuild(nodes, edges, *, quality_rank, coverage_rank, max_depth, max_edges, 
                     "edge_quality": edge["edge_quality"],
                     "evidence_count": edge["evidence_count"],
                     "evidence": edge["evidence"],
-                })
+                }
+                if compact:
+                    hops.append({key: expanded_hop[key] for key in COMPACT_HOP_FIELDS})
+                else:
+                    hops.append(expanded_hop)
+
+                arrow = "->" if direction == "out" else "<-"
+                hop_text_chars += len(
+                    f"d{depth + 1} {edge['source_kind']} {edge['source']} {arrow} {edge['relation']} {arrow} "
+                    f"{edge['target_kind']} {edge['target']} quality={edge['edge_quality']} "
+                    f"coverage={edge['source_coverage']}->{edge['target_coverage']} evidence={edge['evidence_count']}"
+                )
                 touched_nodes.add(other)
 
                 if len(hops) >= max_edges:
@@ -106,25 +143,17 @@ def rebuild(nodes, edges, *, quality_rank, coverage_rank, max_depth, max_edges, 
         if queue:
             truncated = True
 
-        lines = [
+        header_lines = [
             f"Root: {root_path}",
             f"Kind: {root['node_kind']} coverage={root['coverage']}",
             f"Neighborhood: depth<={max_depth} edges={len(hops)} nodes={len(touched_nodes)} truncated={truncated}",
         ]
-        for hop in hops:
-            arrow = "->" if hop["direction"] == "out" else "<-"
-            lines.append(
-                f"d{hop['depth']} {hop['source_kind']} {hop['source']} {arrow} {hop['relation']} {arrow} "
-                f"{hop['target_kind']} {hop['target']} quality={hop['edge_quality']} "
-                f"coverage={hop['source_coverage']}->{hop['target_coverage']} evidence={hop['evidence_count']}"
-            )
-
-        text = "\n".join(lines)
-        if len(text) > max_chars:
-            text = text[:max_chars] + "\n...[truncated]"
+        line_count = len(header_lines) + len(hops)
+        text_chars = sum(len(line) for line in header_lines) + hop_text_chars + max(0, line_count - 1)
+        if text_chars > max_chars:
             truncated = True
 
-        neighborhoods.append({
+        row = {
             "root_path": root_path,
             "root_kind": root["node_kind"],
             "root_coverage": root["coverage"],
@@ -132,8 +161,23 @@ def rebuild(nodes, edges, *, quality_rank, coverage_rank, max_depth, max_edges, 
             "edge_count": len(hops),
             "node_count": len(touched_nodes),
             "truncated": truncated,
-            "text": text,
             "hops": hops,
-        })
+        }
+
+        if not compact:
+            lines = list(header_lines)
+            for hop in hops:
+                arrow = "->" if hop["direction"] == "out" else "<-"
+                lines.append(
+                    f"d{hop['depth']} {hop['source_kind']} {hop['source']} {arrow} {hop['relation']} {arrow} "
+                    f"{hop['target_kind']} {hop['target']} quality={hop['edge_quality']} "
+                    f"coverage={hop['source_coverage']}->{hop['target_coverage']} evidence={hop['evidence_count']}"
+                )
+            text = "\n".join(lines)
+            if len(text) > max_chars:
+                text = text[:max_chars] + "\n...[truncated]"
+            row["text"] = text
+
+        neighborhoods.append(row)
 
     return neighborhoods
