@@ -7,12 +7,14 @@ traversal depth/direction, plus the quality/coverage classification required on
 every hop. Duplicating complete source/target paths and evidence inside every
 root neighborhood can expand a large project by hundreds of megabytes.
 
-SQLite packing reconstructs readable neighborhood text from authoritative edges
-so query behavior remains useful without storing that duplicated text in JSONL.
+SQLite keeps the same compact representation. Human-readable neighborhood text
+is reconstructed on demand at query time by joining compact hop `edge_id`s to
+`project_edges`, avoiding another large duplicated text column in uat.db.
 """
 from __future__ import annotations
 
 import json
+import sqlite3
 
 HOP_FIELDS = (
     "depth",
@@ -47,24 +49,32 @@ def compact(neighborhoods: list[dict]) -> list[dict]:
     return result
 
 
-def _edge_map(conn) -> dict[str, dict]:
-    result = {}
-    for row in conn.execute(
-        "SELECT edge_id,source_kind,source,relation,target_kind,target,source_coverage,target_coverage,edge_quality,evidence_count "
-        "FROM project_edges"
-    ):
-        result[str(row[0])] = {
-            "edge_id": str(row[0]),
-            "source_kind": str(row[1]),
-            "source": str(row[2]),
-            "relation": str(row[3]),
-            "target_kind": str(row[4]),
-            "target": str(row[5]),
-            "source_coverage": str(row[6]),
-            "target_coverage": str(row[7]),
-            "edge_quality": str(row[8]),
-            "evidence_count": int(row[9]),
-        }
+def _edge_map_for_ids(conn, edge_ids: list[str]) -> dict[str, dict]:
+    result: dict[str, dict] = {}
+    unique = sorted({str(edge_id) for edge_id in edge_ids if edge_id})
+    # Stay comfortably below SQLite's traditional bind-variable limit.
+    for start in range(0, len(unique), 800):
+        chunk = unique[start:start + 800]
+        if not chunk:
+            continue
+        placeholders = ",".join("?" for _ in chunk)
+        for row in conn.execute(
+            "SELECT edge_id,source_kind,source,relation,target_kind,target,source_coverage,target_coverage,edge_quality,evidence_count "
+            f"FROM project_edges WHERE edge_id IN ({placeholders})",
+            chunk,
+        ):
+            result[str(row[0])] = {
+                "edge_id": str(row[0]),
+                "source_kind": str(row[1]),
+                "source": str(row[2]),
+                "relation": str(row[3]),
+                "target_kind": str(row[4]),
+                "target": str(row[5]),
+                "source_coverage": str(row[6]),
+                "target_coverage": str(row[7]),
+                "edge_quality": str(row[8]),
+                "evidence_count": int(row[9]),
+            }
     return result
 
 
@@ -92,19 +102,85 @@ def render_text(row: dict, edge_by_id: dict[str, dict], max_chars: int) -> str:
     return text
 
 
-def enrich_database(conn, output, rows, *, max_chars: int) -> None:
-    """Populate SQLite neighborhood text from compact JSONL + project_edges."""
-    edge_by_id = _edge_map(conn)
-    for row in rows(output / "project_neighborhoods.jsonl"):
-        text = render_text(row, edge_by_id, max_chars)
-        conn.execute(
-            "UPDATE project_neighborhoods SET text=?, json=? WHERE root_path=?",
-            (
-                text,
-                json.dumps(row, ensure_ascii=False, separators=(",", ":")),
-                str(row.get("root_path", "")),
-            ),
-        )
+def _matching_neighborhood_rows(conn, pattern: str, limit: int):
+    """Find roots by root metadata or by any authoritative edge in their hops."""
+    try:
+        return list(conn.execute(
+            """
+            SELECT DISTINCT n.root_path,n.root_kind,n.root_coverage,n.edge_count,n.node_count,n.truncated,n.json
+            FROM project_neighborhoods n
+            WHERE n.root_path LIKE ? OR n.root_kind LIKE ?
+               OR EXISTS (
+                    SELECT 1
+                    FROM json_each(n.json, '$.hops') h
+                    JOIN project_edges e ON e.edge_id=json_extract(h.value, '$.edge_id')
+                    WHERE e.source LIKE ? OR e.relation LIKE ? OR e.target LIKE ?
+                       OR e.edge_quality LIKE ? OR e.evidence_json LIKE ?
+               )
+            LIMIT ?
+            """,
+            (pattern, pattern, pattern, pattern, pattern, pattern, pattern, limit),
+        ))
+    except sqlite3.OperationalError:
+        # Very old SQLite builds may lack JSON1. Root search still works and the
+        # separate project-edge query remains fully available.
+        return list(conn.execute(
+            """
+            SELECT root_path,root_kind,root_coverage,edge_count,node_count,truncated,json
+            FROM project_neighborhoods
+            WHERE root_path LIKE ? OR root_kind LIKE ?
+            LIMIT ?
+            """,
+            (pattern, pattern, limit),
+        ))
+
+
+def query(conn, print_rows, pattern: str, limit: int, *, max_chars: int) -> None:
+    """Schema-14 project query with neighborhood text rendered on demand."""
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='project_nodes'").fetchone():
+        return
+
+    print("\n[project nodes]")
+    print_rows(conn.execute(
+        "SELECT node_kind,path,coverage,family,class_path FROM project_nodes "
+        "WHERE path LIKE ? OR node_kind LIKE ? OR family LIKE ? OR class_path LIKE ? LIMIT ?",
+        (pattern, pattern, pattern, pattern, limit),
+    ), ("node_kind", "path", "coverage", "family", "class_path"))
+
+    print("\n[project edges]")
+    print_rows(conn.execute(
+        "SELECT source_kind,source,relation,target_kind,target,edge_quality,source_coverage,target_coverage "
+        "FROM project_edges WHERE source LIKE ? OR relation LIKE ? OR target LIKE ? "
+        "OR edge_quality LIKE ? OR evidence_json LIKE ? LIMIT ?",
+        (pattern, pattern, pattern, pattern, pattern, limit),
+    ), ("source_kind", "source", "relation", "target_kind", "target", "edge_quality", "source_coverage", "target_coverage"))
+
+    print("\n[project neighborhoods]")
+    rendered = []
+    for db_row in _matching_neighborhood_rows(conn, pattern, limit):
+        try:
+            row = json.loads(str(db_row[6]))
+        except (TypeError, json.JSONDecodeError):
+            continue
+        edge_ids = [
+            str(hop.get("edge_id", ""))
+            for hop in row.get("hops", [])
+            if isinstance(hop, dict) and hop.get("edge_id")
+        ]
+        edge_by_id = _edge_map_for_ids(conn, edge_ids)
+        rendered.append({
+            "root_path": str(db_row[0]),
+            "root_kind": str(db_row[1]),
+            "root_coverage": str(db_row[2]),
+            "edge_count": int(db_row[3]),
+            "node_count": int(db_row[4]),
+            "truncated": int(db_row[5]),
+            "text": render_text(row, edge_by_id, max_chars),
+        })
+    print_rows(
+        rendered,
+        ("root_path", "root_kind", "root_coverage", "edge_count", "node_count", "truncated", "text"),
+    )
 
 
 def validation_error(output, rows) -> str | None:
