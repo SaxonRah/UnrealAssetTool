@@ -171,6 +171,10 @@ NiagaraParameterCollection  1
 
 The same pack also broadens future regression coverage with Enhanced Input, Level Sequence, Control Rig, Animation Blueprint, Animated Sparse Volume Texture, materials, meshes and gameplay Blueprints.
 
+### City Sample
+
+City Sample is intentionally not part of the immediate VFX-schema gate. Once available, it will be retained as a large production-scale corpus for later scale/performance and subsystem integration work, especially World Partition, Mass/traffic/crowds, geometry/streaming density, audio, cinematics, dependency-graph scale, and final 1.0-beta regression. It should not block the smaller evidence-driven schema passes that come first.
+
 ## Current validation state
 
 The first uploaded Content Examples and StackOBot+NiagaraExamples bundles after PR #8 was opened are valid structural/world/animation/derived-schema-11 regression artifacts: all 144 files in each bundle parse cleanly and their existing schema invariants remain intact.
