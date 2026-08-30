@@ -14,6 +14,7 @@ import uatool_vfx_stitch as vfx_stitch
 import uatool_systems as systems
 import uatool_project_graph as project_graph
 import uatool_project_graph_finalize as project_graph_finalize
+import uatool_project_neighborhoods as neighborhood_policy
 
 # uatool_runtime installs the structural/world/animation/derived-schema-11
 # pipeline into uatool_core. This composition root adds independently versioned
@@ -124,8 +125,17 @@ def derive_output(output):
     counts.update(vfx_counts)
 
     project_nodes, project_edges, _ = project_graph.derive(output, runtime._rows)
-    project_nodes, project_edges, project_neighborhoods = project_graph_finalize.finalize(
+    project_nodes, project_edges, _ = project_graph_finalize.finalize(
         output, runtime._rows, project_nodes, project_edges
+    )
+    project_neighborhoods = neighborhood_policy.rebuild(
+        project_nodes,
+        project_edges,
+        quality_rank=project_graph.QUALITY_RANK,
+        coverage_rank=project_graph.COVERAGE_RANK,
+        max_depth=project_graph.MAX_NEIGHBOR_DEPTH,
+        max_edges=project_graph.MAX_NEIGHBOR_EDGES,
+        max_chars=project_graph.MAX_NEIGHBOR_CHARS,
     )
     project_counts = {
         "project_nodes": runtime._write(output / "project_nodes.jsonl", project_nodes),
