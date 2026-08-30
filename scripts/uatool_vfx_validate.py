@@ -24,6 +24,30 @@ def _validate_variable_type_rows(rows: list[dict], label: str) -> str | None:
     return None
 
 
+def _validate_stable_authored_facts(output: Path, channel_variables: list[dict]) -> str | None:
+    # FNiagaraDataChannelVariable::Version is generated while loading the same
+    # unchanged UE 5.8 asset. It must not escape into the authored schema.
+    for row in channel_variables:
+        if str(row.get("version", "")):
+            return "Niagara Data Channel variable contains generated Version GUID"
+        if "Version=" in str(row.get("raw_value", "")):
+            return "Niagara Data Channel variable raw value contains generated Version GUID"
+
+    # These reflected Niagara bookkeeping fields were proven to change between
+    # back-to-back scans of the unchanged StackOBot + Niagara Examples corpus.
+    unstable_pairs = {
+        ("niagara_stateless_module", "MergeId"),
+        ("niagara_emitter", "ChangeId"),
+        ("niagara_data_channel_definition", "ChannelVariables"),
+    }
+    for row in _rows(output / "vfx_properties.jsonl"):
+        key = (str(row.get("owner_kind", "")), str(row.get("property_name", "")))
+        if key in unstable_pairs:
+            return f"generated Niagara bookkeeping leaked into authored state: {key[0]}.{key[1]}"
+
+    return None
+
+
 def _topology_error(output: Path) -> str | None:
     systems = list(_rows(output / "niagara_systems.jsonl"))
     handles = list(_rows(output / "niagara_system_emitters.jsonl"))
@@ -96,6 +120,10 @@ def _topology_error(output: Path) -> str | None:
     )
     if type_error:
         return type_error
+
+    stable_error = _validate_stable_authored_facts(output, channel_variables)
+    if stable_error:
+        return stable_error
 
     parameters_by_collection = collections.Counter(
         str(row.get("collection_path", "")) for row in collection_parameters
