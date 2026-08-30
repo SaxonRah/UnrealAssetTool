@@ -6,7 +6,7 @@ VFX schema 1 is the independently versioned canonical authored-effects layer for
 structural schema: 12
 world schema:      12
 animation schema:   1
-vfx schema:         1   # under validation
+vfx schema:         1
 derived schema:    11
 ```
 
@@ -17,6 +17,8 @@ The VFX pass runs alongside the world/animation commandlet work and writes `vfx_
 Niagara is deliberately inspected through Unreal reflection instead of adding a hard `Niagara` module dependency. A project that does not enable Niagara must still be able to build UnrealAssetTool. Concrete Niagara class names and reflected authored properties/references are retained without guessing semantics from display text.
 
 Legacy Cascade uses the same reflection-backed mechanism. Its emitter/LOD/module hierarchy is normalized because those relationships are directly represented by serialized UObject properties.
+
+Raw VFX schema 1 intentionally stops at authored VFX facts. Exact world/component/Blueprint -> VFX stitching belongs to the separately versioned derived layer.
 
 ## Canonical streams
 
@@ -72,7 +74,7 @@ UE 5.8 systems can select `UNiagaraStatelessEmitter` handles. These are normaliz
 - child enabled state where reflected
 - bounded authored properties/references for each child UObject
 
-This topology was promoted after the first real Content Examples scan proved 12 stateless emitters with substantial child module state that a parent-only reflection pass would underspecify.
+The first real Content Examples scan proved 12 stateless emitters with substantial child state. StackOBot + Niagara Examples expanded this to 51 stateless emitters and exercised Sprite, Mesh, Decal and Light stateless renderer families.
 
 ### Scripts
 
@@ -85,10 +87,16 @@ This topology was promoted after the first real Content Examples scan proved 12 
 
 - DataChannelAsset -> definition object
 - ordered channel variables
-- variable version, name, type and bounded raw value
+- variable name and exact live serialized type handle
+- explicitly labelled legacy/deprecated type-definition evidence
+- stable canonical raw value
 - definition properties/references
 
-UE 5.8 serializes the payload array as `ChannelVariables`; `Variables` remains a reflection fallback for compatibility. The first Content Examples scan exposed this exact shape and proved 22 variables across six channel assets.
+UE 5.8 serializes the payload array as `ChannelVariables`; `Variables` remains a reflection fallback for compatibility. Content Examples proves 22 variables across six channel assets; StackOBot + Niagara Examples proves 16 variables across two channel assets.
+
+The canonical `type` value is the exact reflected `TypeDefHandle` when present. `legacy_type_definition` preserves `TypeDef_DEPRECATED`/historical `TypeDef` only as labelled evidence; it is never allowed to override the live handle. UnrealAssetTool deliberately does not hard-link Niagara merely to resolve the registry index into a semantic runtime type.
+
+Per-variable `Version` GUIDs were proven by repeated unchanged StackOBot scans to be load-generated bookkeeping, so schema 1 does not treat them as authored state. The dedicated variable stream keeps the stable semantic facts instead.
 
 ### Parameter Collections
 
@@ -96,11 +104,13 @@ UE 5.8 serializes the payload array as `ChannelVariables`; `Variables` remains a
 
 - collection identity/package/namespace
 - ordered parameter list
-- parameter name/type/raw authored value
+- parameter name and exact live serialized type handle
+- explicitly labelled legacy/deprecated type-definition evidence
+- raw authored parameter value
 - source Material Parameter Collection when present
 - default-instance identity/state when present
 
-This family was promoted because StackOBot + the separately installable Fab Niagara Examples pack contains a project-authored Parameter Collection that Content Examples does not exercise.
+StackOBot + Niagara Examples proves one Parameter Collection with six parameters, an exact source Material Parameter Collection, and an exact Niagara default-instance object.
 
 ### Effect Types
 
@@ -131,90 +141,157 @@ The normalized rows retain emitter/LOD order, emitter name/significance, LOD ena
 - hard/soft UObject references are recursively normalized through arrays, sets, maps and structs;
 - uncommon renderer/module/plugin-specific state remains available even before receiving dedicated normalized fields.
 
-The corpus validator additionally checks manifest row counts and normalized topology counts before derive/pack/bundle is allowed to proceed.
+Repeated unchanged StackOBot scans also proved three Niagara bookkeeping cases are not stable authored facts and must not enter the canonical property fallback:
+
+```text
+niagara_stateless_module.MergeId
+niagara_emitter.ChangeId
+niagara_data_channel_definition.ChannelVariables
+```
+
+`ChannelVariables` is excluded only from the aggregate fallback because its per-variable semantic content is already represented by `niagara_data_channel_variables.jsonl`. Other `MergeId` fields remain available where repeated scans proved them stable; GUID-like fields are not suppressed globally.
+
+The validator checks manifest row counts, normalized topology, live-type-handle canonicalization, and these generated-ID exclusions before derive/pack/bundle is allowed to proceed.
 
 ## Validation corpora
 
-### Content Examples
+### Content Examples — primary mixed Niagara + Cascade corpus
 
-Content Examples is the primary mixed Niagara + Cascade breadth corpus. Generic inventory before VFX normalization:
-
-```text
-NiagaraSystem             84
-NiagaraEmitter            14
-NiagaraDataChannelAsset    6
-NiagaraScript              3
-NiagaraEffectType          1
-ParticleSystem            29
-```
-
-The first true UE 5.8.2 VFX-schema-1 scan produced a 162-file bundle with correct top-level VFX provenance and every JSON/JSONL file parseable:
+Final validated UE 5.8.2 VFX schema-1 counts:
 
 ```text
-vfx_assets                       137
-vfx_properties                 48999
-vfx_references                  6313
-niagara_systems                   84
-niagara_system_emitters          141
-niagara_emitters                 155
-niagara_emitter_versions         155
-niagara_renderers                225
-niagara_simulation_stages        386
-niagara_scripts                    3
-niagara_data_channels              6
-niagara_data_channel_variables     0   # first-pass bug; raw facts prove 22
-niagara_effect_types               1
-cascade_systems                    29
-cascade_emitters                   76
-cascade_lods                       76
-cascade_modules                   694
+vfx_assets                             137
+vfx_properties                       51834
+vfx_references                        6325
+niagara_systems                         84
+niagara_system_emitters                141
+niagara_emitters                       155
+niagara_emitter_versions               155
+niagara_renderers                      225
+niagara_simulation_stages              386
+niagara_stateless_emitters              12
+niagara_stateless_modules              300
+niagara_stateless_renderers             12
+niagara_scripts                          3
+niagara_data_channels                    6
+niagara_data_channel_variables          22
+niagara_parameter_collections            0
+niagara_parameter_collection_parameters  0
+niagara_effect_types                     1
+cascade_systems                         29
+cascade_emitters                        76
+cascade_lods                            76
+cascade_modules                        694
 ```
 
-Validated from that corpus:
+Validated invariants:
 
-- every system emitter count matched its emitted handle rows;
-- all 141 handle targets were distinct embedded emitters;
-- every emitter version count matched emitted version rows;
-- every declared renderer/stage count matched the 225 renderer / 386 stage rows;
-- renderer families included Sprite, Mesh, Ribbon, Volume and Component renderers;
-- every Cascade system/emitter/LOD count matched its normalized topology;
-- no reflected property value was truncated;
-- no reference root reached the 4096-row bound.
+- all 167 bundle files parse cleanly;
+- top-level and VFX manifests agree exactly;
+- every VFX manifest count equals its JSONL row count;
+- all system/emitter/version/renderer/stage hierarchy counts reconcile;
+- all 12 stateless emitter module/renderer counts reconcile;
+- stateless topology contains 300 module rows (25 slots per emitter), 52 enabled and 248 disabled;
+- all 12 stateless renderers are enabled: 10 Sprite, 1 Mesh, 1 Ribbon;
+- all six Data Channel counts reconcile with 22 variables;
+- all Cascade system/emitter/LOD counts reconcile;
+- no VFX property row is truncated;
+- the largest reference root is 41 rows, far below the 4096 safety bound.
 
-Two evidence-driven fixes came directly from the scan:
+Renderer coverage includes Sprite, Mesh, Ribbon, Volume and Component renderers.
 
-1. Data Channels use UE 5.8 `ChannelVariables`, yielding an expected 22 normalized variables on the rerun.
-2. Twelve stateless emitters expose exact `Modules[]` and `RendererProperties[]` child topology, so schema 1 now descends into those child UObjects instead of retaining only parent references.
+### StackOBot + Fab Niagara Examples — independent Niagara corpus
 
-### StackOBot + Niagara Examples
+The separately installable Fab Niagara Examples content supplies independently authored Niagara shapes and the Parameter Collection family that Content Examples does not exercise.
 
-The separately installable Fab Niagara Examples content was added to StackOBot. The pack contributes 669 project assets and provides an independently authored gameplay-oriented Niagara corpus rather than duplicating Content Examples.
-
-Whole-project Niagara-related inventory before VFX normalization:
+Final validated UE 5.8.2 VFX schema-1 counts:
 
 ```text
-NiagaraSystem              73
-NiagaraEmitter             21
-NiagaraEffectType           7
-NiagaraScript               3
-NiagaraDataChannelAsset     2
-NiagaraParameterCollection  1
+vfx_assets                             107
+vfx_properties                       35196
+vfx_references                        5962
+niagara_systems                         73
+niagara_system_emitters                216
+niagara_emitters                       237
+niagara_emitter_versions               237
+niagara_renderers                      259
+niagara_simulation_stages               36
+niagara_stateless_emitters              51
+niagara_stateless_modules             1275
+niagara_stateless_renderers             78
+niagara_scripts                          3
+niagara_data_channels                    2
+niagara_data_channel_variables          16
+niagara_parameter_collections            1
+niagara_parameter_collection_parameters  6
+niagara_effect_types                     7
+cascade_systems                          0
+cascade_emitters                         0
+cascade_lods                             0
+cascade_modules                          0
 ```
 
-The `/Game/NiagaraExamples/` pack itself contains 59 Systems, 21 Emitters, 5 Effect Types, 3 Scripts, 2 Data Channels and the one Parameter Collection. It also broadens future regression coverage with Enhanced Input, Level Sequence, Control Rig, Animation Blueprint, Animated Sparse Volume Texture, materials, meshes and gameplay Blueprints.
+Validated invariants:
 
-World-placement facts remain outside raw VFX asset identity. StackOBot currently provides 18 loaded NiagaraActor placements; those are reserved for the later exact world -> VFX derived bridge.
+- all 167 bundle files parse cleanly;
+- top-level and VFX manifests agree exactly;
+- every manifest count equals its JSONL row count;
+- 216 system handles resolve with zero missing targets: 165 Standard and 51 Stateless;
+- all 51 stateless handles resolve exactly to first-class stateless-emitter rows;
+- every system/emitter/version/renderer/stage/stateless/Data Channel/Parameter Collection topology count reconciles;
+- the one Parameter Collection has six parameters, exact source Material Parameter Collection and exact default-instance identity;
+- the 16 Data Channel variables contain six distinct live `TypeDefHandle` registry values;
+- all six Parameter Collection parameters carry live handles (two distinct registry values);
+- `type == type_handle` on every row that has a live handle;
+- no Data Channel canonical raw value contains the load-generated Version GUID;
+- no VFX property/variable/parameter row is truncated;
+- the largest reference root is 32 rows.
+
+Stateful renderer coverage includes Sprite, Mesh, Component, Decal, Ribbon, Light and Volume. Stateless renderer coverage includes Sprite, Mesh, Decal and Light.
+
+#### Determinism regression
+
+Two consecutive unchanged StackOBot scans exposed generated Niagara bookkeeping. The final scanner removed exactly:
+
+```text
+1275 niagara_stateless_module.MergeId rows
+ 237 niagara_emitter.ChangeId rows
+   2 niagara_data_channel_definition.ChannelVariables aggregate rows
+----
+1514 rows total
+```
+
+The final `vfx_properties` count therefore changed from 36710 to 35196. This is the exact intended delta.
+
+Between the pre-filter and final runs:
+
+- 20 of 22 VFX JSONL streams are byte-for-byte identical;
+- every surviving common `vfx_properties` row is byte-for-byte identical;
+- no property rows were added;
+- `niagara_data_channel_variables.jsonl` changed only in `version` and stable canonical `raw_value`;
+- `vfx_manifest.json` differs only in generation timestamp and the `vfx_properties` count.
+
+This closes the raw VFX determinism gate.
+
+World-placement facts remain outside raw VFX identity. StackOBot provides loaded NiagaraActor placements that are reserved for the later exact world/component -> VFX derived bridge.
 
 ### City Sample
 
-City Sample is intentionally not part of the immediate VFX-schema gate. Once available, it will be retained as a production-scale corpus for later World Partition, Mass/traffic/crowds, geometry/streaming density, audio, cinematics, dependency-graph scale, performance and final 1.0-beta regression.
+City Sample is intentionally not part of the raw VFX-schema gate. It remains a production-scale corpus for later World Partition, Mass/traffic/crowds, geometry/streaming density, audio, cinematics, dependency-graph scale, performance and final 1.0-beta regression.
 
-## Current validation state
+## Validation state
 
-The first true Content Examples scan validates the stateful Niagara and Cascade architecture. The branch now contains the corpus-driven Data Channel fix, first-class stateless topology, Parameter Collection support, stronger count/topology validation, and scan/pack completeness gating.
+**Raw VFX schema 1 is stable on the current UE 5.8.2 validation corpora.**
 
-The remaining raw-schema gate is:
+The validated surface covers mixed Niagara/Cascade assets, stateful and stateless Niagara emitter topology, renderer families, simulation stages, Data Channels, Parameter Collections, Effect Types, reflection fallback, exact object references, live Niagara type-handle provenance, and repeated-scan determinism.
 
-1. rerun Content Examples and verify the expanded streams, especially 22 Data Channel variables and stateless emitter child counts;
-2. run StackOBot + Niagara Examples and validate the second-corpus Parameter Collection and Niagara shapes;
-3. fix only corpus-proven mismatches before declaring VFX schema 1 stable.
+The next separate feature collection is derived VFX relations/context. That layer can stitch exact authored evidence such as:
+
+- Niagara System -> stateful/stateless emitter
+- emitter -> renderer/resource
+- system -> Effect Type
+- Niagara Parameter Collection -> Material Parameter Collection
+- world actor/component -> Niagara/Cascade system
+- Blueprint -> exact VFX references
+
+Generic package dependencies remain fallback graph evidence and must not be promoted to strong semantic VFX relations without exact authored reference evidence.
