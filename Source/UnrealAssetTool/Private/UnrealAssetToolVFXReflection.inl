@@ -1,3 +1,35 @@
+static bool ShouldWriteAuthoredProperty(const FString& OwnerKind, const FProperty* Property)
+{
+    if (!ShouldInspectProperty(Property))
+    {
+        return false;
+    }
+
+    const FName PropertyName = Property->GetFName();
+
+    // These Niagara bookkeeping values are regenerated while loading or
+    // compiling unchanged assets and therefore are not stable authored facts.
+    // Keep this filter intentionally narrow and evidence-backed.
+    if (OwnerKind == TEXT("niagara_stateless_module") && PropertyName == TEXT("MergeId"))
+    {
+        return false;
+    }
+    if (OwnerKind == TEXT("niagara_emitter") && PropertyName == TEXT("ChangeId"))
+    {
+        return false;
+    }
+
+    // UE 5.8 ChannelVariables embeds a per-load Version GUID for every row.
+    // The dedicated niagara_data_channel_variables stream preserves the stable
+    // authored Name and live TypeDefHandle instead of serializing those GUIDs.
+    if (OwnerKind == TEXT("niagara_data_channel_definition") && PropertyName == TEXT("ChannelVariables"))
+    {
+        return false;
+    }
+
+    return true;
+}
+
 static bool WriteProperties(
     UObject* Object,
     const FString& AssetPath,
@@ -16,7 +48,7 @@ static bool WriteProperties(
         for (TFieldIterator<FProperty> It(Class, EFieldIterationFlags::None); It; ++It)
         {
             FProperty* Property = *It;
-            if (!ShouldInspectProperty(Property))
+            if (!ShouldWriteAuthoredProperty(OwnerKind, Property))
             {
                 continue;
             }
