@@ -20,6 +20,15 @@ static bool WriteProperties(
             {
                 continue;
             }
+            // UMovieSceneSignedObject::Signature is a generated change-tracking
+            // GUID. UE explicitly documents that equivalent object state does
+            // not produce the same signature, so it is not a canonical authored
+            // fact and would make identical scans nondeterministic.
+            if (Class->GetPathName() == TEXT("/Script/MovieScene.MovieSceneSignedObject") &&
+                Property->GetFName() == FName(TEXT("Signature")))
+            {
+                continue;
+            }
 
             const FString Key = Class->GetPathName() + TEXT("::") + Property->GetName();
             if (Seen.Contains(Key))
@@ -233,6 +242,11 @@ static void WriteReferences(
         {
             FProperty* Property = *It;
             if (!ShouldInspectProperty(Property))
+            {
+                continue;
+            }
+            if (Class->GetPathName() == TEXT("/Script/MovieScene.MovieSceneSignedObject") &&
+                Property->GetFName() == FName(TEXT("Signature")))
             {
                 continue;
             }
