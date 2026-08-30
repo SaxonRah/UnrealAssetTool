@@ -30,7 +30,7 @@ and then invoked the same target again with:
 -Module=UnrealAssetTool
 ```
 
-This is robust for a never-built project, but redundant after the target already has a valid runtime module manifest/BuildId.
+This is robust for a never-built project, but redundant after the target already has a valid, current runtime module manifest/BuildId.
 
 ### Project neighborhoods dominated derived output size
 
@@ -63,7 +63,7 @@ are moved to:
 
 before the temporary plugin stage is removed. They are moved back into the same stable plugin path before the next build. Project-local canonical builds are unchanged because their build products already persist normally.
 
-Standalone PDB files under the cached plugin `Binaries` tree are discarded because the runtime scanner does not consume them. Object/PCH/intermediate inputs are retained for incremental compilation.
+All UBT-declared build products are retained in this local cache. In particular, PDBs are kept because deleting a declared output can turn a would-be warm no-op into a relink. The cache deliberately trades some target-local `Saved` disk space for faster repeated builds; upload/output size is addressed independently below.
 
 Set:
 
@@ -73,17 +73,24 @@ UATOOL_BUILD_CACHE=0
 
 to disable this cache for a run.
 
-### Prefer module-only UBT builds
+### Prefer a freshness-safe module-only UBT build
 
-If the target already has a valid runtime module manifest containing a BuildId, the launcher skips the full Editor-target build and invokes only:
+The launcher first checks the target project's runtime module manifest. The module-only fast path is used only when:
+
+1. the runtime manifest exists and contains a valid BuildId; and
+2. the `.uproject`, project `Source`, and non-UnrealAssetTool project-plugin native/build inputs are not newer than that manifest.
+
+The temporary UnrealAssetTool stage is deliberately excluded from this freshness check because it is the module about to be rebuilt.
+
+When those conditions hold, the launcher skips the full Editor-target build and invokes only:
 
 ```text
 -Module=UnrealAssetTool -ForceUnity
 ```
 
-This avoids recompiling unrelated project code and forces the scanner module into unity compilation instead of allowing a temporary/untracked stage to be classified entirely as the adaptive non-unity working set.
+This avoids rebuilding unrelated project code and forces the scanner module into unity compilation instead of allowing a temporary/untracked stage to be classified entirely as the adaptive non-unity working set.
 
-If module-only compilation fails, the launcher automatically falls back to the original full-target build. If the full target already produced the plugin DLL, the redundant second module UBT invocation is skipped.
+If target-owned native/build inputs changed, the normal full Editor target is rebuilt. If module-only compilation fails for any other reason, the launcher also automatically falls back to the original full-target build. If that full target already produced the plugin DLL, the redundant second module UBT invocation is skipped.
 
 The launcher prints elapsed wall time for each UBT step so corpus runs provide directly comparable before/after measurements.
 
