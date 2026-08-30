@@ -44,6 +44,8 @@ Measured from validated UE 5.8.2 corpora:
 | GASP | 108.8 MB | 2237.9 MB | 751.2 MB | 39.6 MB |
 | StackOBot | 33.7 MB | 649.7 MB | 167.0 MB | 12.8 MB |
 
+In ContentExamples alone, the duplicate rendered neighborhood `text` fields account for about 153 MB of that JSONL before compression. Persisting the same expanded text in SQLite would duplicate it again locally.
+
 ## Changes
 
 ### Persistent staged-plugin build cache
@@ -118,7 +120,7 @@ evidence_count
 
 This keeps the required quality/coverage classification directly on every hop while using `edge_id` as the provenance reference into `project_edges.jsonl`.
 
-The JSONL neighborhood no longer embeds a second rendered text copy. During SQLite packing, readable neighborhood text is reconstructed by joining the compact hops to the authoritative edge table, so `uatool query` remains readable.
+The JSONL neighborhood no longer embeds a second rendered text copy. SQLite also stores the compact neighborhood instead of expanding the text again. `uatool query` joins each selected hop's `edge_id` to `project_edges` and renders the human-readable neighborhood on demand. This keeps the query surface while avoiding the duplicated text in both the upload bundle and local `uat.db`.
 
 Replaying the compact representation over the validated corpora produces:
 
@@ -128,7 +130,7 @@ Replaying the compact representation over the validated corpora produces:
 | GASP | 751.2 MB | 140.6 MB | 81.3% | 39.6 MB -> 12.9 MB |
 | StackOBot | 167.0 MB | 34.6 MB | 79.3% | 12.8 MB -> 3.2 MB |
 
-This also reduces JSON serialization, disk writes, ZIP compression work, and upload size.
+This also reduces JSON serialization, disk writes, SQLite writes, ZIP compression work, local database size, and upload size.
 
 ## Material expression GUID cleanup
 
