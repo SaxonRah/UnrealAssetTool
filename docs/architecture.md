@@ -2,225 +2,224 @@
 
 ## Principle
 
-UnrealAssetTool separates **extraction**, **storage**, and **interpretation**.
+UnrealAssetTool separates **extraction**, **storage**, **derivation**, and **retrieval**.
 
 ```text
                          Unreal Editor 5.8+
                                |
-                 UUnrealAssetToolCommandlet
+        +----------------------+----------------------+
+        |                                             |
+UUnrealAssetToolCommandlet                UUnrealAssetToolWorldCommandlet
+        |                                             |
+project/assets/program facts                   world/placement facts
+        |                                             |
+        +----------------------+----------------------+
                                |
-       +-----------------------+------------------------+
-       |                       |                        |
- filesystem facts       Asset Registry facts     loaded editor objects
-       |                       |                        |
- source/config          assets/dependencies       Blueprints/AI/PCG/etc.
-       +-----------------------+------------------------+
-                               |
-                   canonical scanner JSONL
-                      scanner schema 11
+                    canonical schema-12 JSONL
                                |
                         scripts/uatool.py
                                |
-                 deterministic derived JSONL
-                      derived schema 7
+               deterministic derived schema 10
+                               |
+           +-------------------+-------------------+
+           |                   |                   |
+     specialist views      world graph      world-system bridge
+           |                   |                   |
+           +-------------------+-------------------+
                                |
                              SQLite
                                |
-             retrieval / AI context / graph analysis
+               retrieval / AI context / traversal
 ```
 
-The Unreal commandlet is authoritative for facts that require Unreal's serializer, reflection system, editor graph objects, or asset-specific runtime/editor structures.
+The main rule is simple:
 
-Python-derived views are disposable interpretations of those facts.
+> If Unreal can state a fact exactly, extract that fact first. Interpretation belongs in a derived layer unless Unreal itself is required to determine it.
 
-## Facts first
-
-If Unreal can state something exactly, UnrealAssetTool should record that fact rather than infer it from presentation.
-
-Examples:
+## Current version layers
 
 ```text
-Blueprint parent class
-node concrete class
-pin type
-pin default
-pin link
-UFunction flags
-struct type
-state transition endpoints
-Behavior Tree hierarchy
-StateTree binding path
-PCG edge
-material expression input
-asset reference
-actor transform
+UnrealAssetTool:          0.7.0
+structural schema:       12
+world schema:            12
+derived schema:          10
+validated engine:        UE 5.8.2
 ```
 
-Higher-level reconstruction can then derive:
+### Structural schema
 
-```text
-calls
-basic blocks
-parameter bindings
-data provenance
-cross-system relations
-readable context
-summaries
-```
+The main Unreal commandlet owns facts about:
 
-A derived result never replaces the canonical graph facts used to verify it.
+- physical files/source chunks;
+- Asset Registry assets/dependencies;
+- Blueprint/K2/UMG/AnimBP graphs;
+- Control Rig/RigVM;
+- Behavior Trees, Blackboards, EQS, StateTrees;
+- PCG;
+- materials.
 
-## Why extraction runs inside Unreal
+### World schema
 
-`.uasset` and `.umap` packages are Unreal serialization formats whose layout and editor/runtime objects vary by engine version and asset family.
+The world commandlet owns facts about:
 
-Using Unreal itself provides:
-
-- package loading;
-- version handling;
-- Asset Registry;
-- Blueprint editor graphs;
-- reflection;
-- plugin/project mount points;
-- editor-only authored data;
-- UE-version-compatible object interpretation.
-
-The project therefore avoids building an external `.uasset` reverse-engineering stack.
-
-## Why canonical output is JSONL
-
-A monolithic project JSON document becomes impractical on real projects.
-
-JSONL provides:
-
-- streaming writes from the commandlet;
-- bounded memory use;
-- partial reads;
-- sharding by fact family;
-- diffability;
-- independent derived regeneration;
-- easy ingestion into SQLite/search/vector systems;
-- records that can be retrieved without sending a full project to an AI.
-
-`uat.db` is an index, not the source of truth.
-
-## Two schema layers
-
-### Scanner schema
-
-Scanner schema versions Unreal-extracted canonical facts.
-
-Current: **11**
-
-A scanner-schema change normally requires an Unreal rescan.
+- worlds/maps/levels;
+- loaded actors and components;
+- transforms/attachments/ownership;
+- authored instance overrides;
+- hard/soft UObject references;
+- Data Layers;
+- World Partition descriptors and descriptor relationships.
 
 ### Derived schema
 
-Derived schema versions deterministic Python reconstruction.
+Python reconstructs disposable deterministic views such as:
 
-Current: **7**
+- Blueprint functions/events/calls;
+- caller/callee parameter bindings;
+- bounded data provenance;
+- execution blocks;
+- normalized AnimBP state machines;
+- AI/PCG/material relations/context;
+- world relations/context/summaries;
+- LevelInstance/PackedLevelActor child-world joins;
+- placement -> authored-system bridge relations.
 
-A derived-schema change normally requires only:
+A scanner-schema change normally requires Unreal. A derived-schema change normally requires only `derive`, `pack`, or `bundle`.
 
-```powershell
-python scripts\uatool.py derive <output>
-```
+## Why extraction runs inside Unreal
 
-or `pack`/`bundle`, which rerun derivation.
+`.uasset` and `.umap` are Unreal serialization formats whose editor/runtime structures vary by engine version and asset family.
 
-Keeping these versions separate lets interpretation evolve without needlessly rescanning large projects.
+Using Unreal itself gives the indexer authoritative access to:
 
-## Blueprint understanding model
+- package loading and version handling;
+- Asset Registry;
+- editor-only Blueprint graphs;
+- reflection;
+- project/plugin mount points;
+- World/Level/Actor objects;
+- World Partition descriptor APIs;
+- asset-family-specific authored structures.
 
-Blueprint understanding is built in layers.
+The project intentionally avoids building an external `.uasset` reverse-engineering stack.
 
-### Layer 1 — exact graph structure
+## Why canonical output is JSONL
+
+A large Unreal project cannot sensibly be represented as one monolithic JSON document.
+
+JSONL gives:
+
+- streaming writes;
+- bounded memory use;
+- independent subsystem shards;
+- partial retrieval;
+- diffability;
+- independent derived regeneration;
+- easy SQLite/search ingestion;
+- small context slices for AI tools.
+
+`uat.db` is an index, not the source of truth.
+
+## Facts-first examples
 
 Canonical facts:
 
-- graph identity;
+```text
+Blueprint node concrete class
+pin type/default/link
+UFunction flags
+struct type
+AnimBP transition endpoints
+Behavior Tree child order
+StateTree binding path
+PCG edge
+material expression input
+asset/object reference
+actor/component transform
+World Partition descriptor GUID
+Data Layer membership
+```
+
+Derived facts:
+
+```text
+function-call resolution
+caller/callee parameter bindings
+basic blocks
+data provenance
+normalized state-machine topology
+world contains/attachment relations
+LevelInstance -> child world
+placed actor -> referenced StateTree/PCG/material/AnimBP
+readable context/summaries
+```
+
+A derived result never replaces the canonical facts that justify it.
+
+## Blueprint understanding model
+
+Blueprint understanding is layered.
+
+### Layer 1 — exact graph truth
+
+Canonical extraction stores:
+
+- graph identity and nesting;
 - node identity/class;
-- pins and types;
-- default values;
-- exact links;
-- variables;
-- components;
-- interfaces;
-- reflected node state;
-- object references;
-- authored defaults/overrides.
+- pins and normalized types/defaults;
+- exact execution/data links;
+- variables/components/interfaces;
+- node reflected state;
+- UObject references;
+- authored CDO/component-template state;
+- Timelines;
+- UMG structure and animation data.
 
 This is the verification layer.
 
 ### Layer 2 — normalized semantics
 
-Common Unreal graph-node classes are promoted to factual operations such as:
+Common graph-node classes are promoted to factual operations such as:
 
 ```text
 function_call
 variable_get
 variable_set
 branch
-event
+switch
 dynamic_cast
 spawn_actor
 make_struct
 break_struct
 set_fields_in_struct
+anim_state_machine
 anim_transition
 anim_sequence_player
-property_access
+anim_motion_matching
+anim_control_rig
 ```
 
-The classifier uses concrete Unreal classes/APIs and reflected fields. Display titles are not treated as authoritative behavior.
+Classification is driven by Unreal classes/APIs/reflected fields, not display-title guessing.
 
-Schema 11's struct-operation fix is an example of this rule: Make/Break/SetFields are identified from their class hierarchy and exact `StructType`, not from text like "Make Linear Color".
+Plugin-defined or uncommon nodes remain generically preserved when no safe specialization exists.
 
-### Layer 3 — executable reconstruction
+### Layer 3 — program reconstruction
 
-Derived schema 7 builds:
+Derived reconstruction builds:
 
-- normalized functions/events;
-- call graph;
-- internal call parameter bindings;
-- upstream data provenance;
-- execution basic blocks;
-- execution roots;
-- normalized AnimBP state machines;
-- graph context and summaries.
+- functions/events;
+- call edges;
+- unique internal call bindings;
+- bounded upstream expression/provenance trees;
+- execution basic blocks and roots;
+- AnimBP state-machine topology;
+- semantic relations/context/summaries.
 
-This is now implemented rather than future work.
+Ambiguous interface/override calls stay ambiguous rather than being forced to one target.
 
-## Control flow
+## Interprocedural flow
 
-Raw execution-pin edges remain canonical.
-
-The derived layer groups linear execution chains into deterministic basic blocks. It starts blocks at semantic roots, joins/splits, and branch successors and preserves closed-cycle safety.
-
-The result makes graph behavior easier to retrieve while retaining source node/pin IDs.
-
-## Data flow and provenance
-
-Raw data-pin edges remain canonical.
-
-For execution-relevant sink pins, derived schema 7 recursively traces upstream producers through pure/data-only nodes.
-
-The expression tree is bounded and records cycles/truncation explicitly.
-
-This gives retrieval a compact answer to questions such as:
-
-```text
-What feeds this Branch condition?
-Where does this setter value come from?
-Which pure calls compute this impure call argument?
-What feeds a function return value?
-```
-
-without deleting the raw wiring used to verify it.
-
-## Interprocedural Blueprint flow
-
-`blueprint_call_edges` resolves each function-call node as:
+`blueprint_call_edges` preserves whether a call target is:
 
 ```text
 internal
@@ -229,56 +228,183 @@ external
 unresolved
 ```
 
-Only uniquely resolved internal calls are eligible for `blueprint_call_bindings`.
+Only unique internal calls receive argument/return parameter bindings.
 
-The binding layer maps:
+Future recursive/interprocedural provenance should build on those bindings. It should not infer cross-function flow independently from weaker naming heuristics.
 
-```text
-caller argument pin -> callee input parameter pin(s)
-callee return parameter pin(s) -> caller output pin
-```
+## Animation architecture
 
-Split struct pins are normalized to their parent function parameter.
+Animation currently has two very different coverage levels.
 
-Ambiguous interfaces/overrides remain ambiguous. The system should not manufacture a call target simply to make traversal easier.
+### Strong: Animation Blueprint program structure
 
-The next provenance improvements should build on these bindings rather than inventing a separate interprocedural graph.
+The Blueprint/derived layers understand:
 
-## Animation Blueprints
+- AnimGraphs;
+- state machines/states/transitions/conduits/aliases;
+- cached poses;
+- linked layers/input poses;
+- slots;
+- common sequence/BlendSpace/Motion Matching/Control Rig graph nodes;
+- property bindings;
+- exact graph and transition topology.
 
-Animation extraction combines exact editor graph facts with normalized derived state-machine topology.
+### Gap: animation asset internals
 
-Canonical coverage includes AnimGraph/state-machine node semantics, state/transition settings, aliases/conduits, linked layers, cached poses, slots, sequence assets, property bindings, and reflected runtime-node state.
+Referenced assets such as AnimSequence, AnimMontage, BlendSpace, Skeleton, Pose Search Schema/Database, Chooser, ProxyTable, IK Rig, and IK Retargeter are currently mostly generic Asset Registry entities.
 
-Derived state-machine views resolve entries and transition endpoint IDs.
+That gap is especially important for UE 5.8 Motion Matching. Recognizing a Motion Matching AnimGraph node is not enough; the project graph also needs the Pose Search database/schema/channel and source-animation structure behind it.
 
-Control Rig graphs are connected to the underlying compact RigVM model rather than treating editor nodes as the whole program.
+See `docs/coverage.md`.
 
-## AI gameplay extraction
+## Control Rig / RigVM
 
-Behavior Trees, Blackboards, EQS, and StateTrees are treated as connected authored programs rather than generic flat UObject dumps.
+Control Rig keeps both editor presentation and compact RigVM model truth.
 
-The scanner preserves hierarchy/topology/settings. The derived layer creates factual cross-asset relations such as Blackboard usage, selector resolution, EQS execution, StateTree transitions, and linked assets.
+The editor graph is useful for authored layout/context. RigVM objects/pins/links/references are useful for actual model structure. Derived joins connect the two instead of treating either representation as complete by itself.
 
-Reflection-first extraction avoids hard dependencies on every editor module while still reading Unreal-owned serialized data.
+## AI gameplay systems
+
+Behavior Trees, Blackboards, EQS, and StateTrees are specialist authored programs rather than flat UObject dumps.
+
+The scanner preserves topology/settings/bindings; derived relations connect them to one another and to Blueprint content.
 
 ## PCG and materials
 
-PCG and material graphs follow the same architecture:
+PCG and material graphs follow the same facts-first pattern:
 
 ```text
-exact nodes/pins/edges/properties
-             +
-normalized references/parameters
-             +
-derived relations/context
+exact nodes/expressions/pins/edges/settings
+                +
+       normalized references/parameters
+                +
+        derived relations/context
 ```
 
-Reflection ownership pointers are not automatically interpreted as semantic graph relations. The PCG self-subgraph bug found during corpus testing is why this distinction matters.
+Materials are already a first-class subsystem. Niagara is not part of the material model and remains a separate VFX gap.
+
+## World and placement architecture
+
+World extraction is intentionally separate from the structural commandlet because maps and World Partition need different loading and lifecycle rules.
+
+### Loaded world objects
+
+The world pass records loaded persistent-level actors/components and their authored state.
+
+Scene component world transforms are refreshed from serialized relative transform + attachment state before extraction because passive map loading can leave stale identity `ComponentToWorld` caches.
+
+### World Partition
+
+World Partition scanning prefers descriptor APIs.
+
+Rules:
+
+- initialize a deserialized `UWorldPartition` only when needed and allowed;
+- iterate descriptor instances;
+- do not call `GetActor()` merely to inspect descriptors;
+- do not use actor-loading enumeration as the normal scan path;
+- uninitialize only when the scanner initialized it.
+
+Descriptor GUIDs, parent GUIDs, reference GUIDs, packages, soft paths, class, transform/bounds, and Data Layer information remain canonical.
+
+### LevelInstance / PackedLevelActor
+
+Derived schema 9 connects World Partition LevelInstance/PackedLevelActor descriptors to child/source world packages from existing canonical descriptor + Asset Registry facts.
+
+The relation is asserted only when one non-owning scanned world package resolves uniquely.
+
+## World-to-system stitching
+
+Derived schema 10 is the first explicit bridge between placement and specialist authored systems.
+
+Example:
+
+```text
+placed actor
+    -> instantiates_blueprint
+    -> BP_NPC
+
+placed actor/component
+    -> references_animation_blueprint
+    -> ABP_NPC
+
+placed actor/component
+    -> references_statetree
+    -> ST_NPC
+
+placed actor/component
+    -> references_pcg_graph
+    -> PCG_Forest
+
+placed actor/component
+    -> references_material
+    -> MI_NPC
+```
+
+Bridge rows keep evidence rather than only the conclusion.
+
+Current evidence sources include:
+
+- placed actor Blueprint identity;
+- direct world actor/component UObject references;
+- Blueprint semantic relations;
+- Blueprint package dependencies;
+- world package dependencies.
+
+Generated Blueprint classes normalize to authored Blueprint assets. Ambiguous package-to-specialist mappings are not guessed.
+
+## Semantic coverage quality
+
+The eventual project graph must distinguish **existence** from **understanding**.
+
+Every Unreal asset has at least generic Asset Registry identity/dependencies. Only some families have first-class internal semantics.
+
+Useful traversal quality levels are:
+
+```text
+canonical-structural
+canonical-reference
+derived-exact-join
+generic-package-dependency
+```
+
+A future neighborhood query should carry this quality/provenance on every hop.
+
+For example:
+
+```text
+Actor -> Material
+```
+
+can lead to a first-class material graph today, while:
+
+```text
+Actor/World -> NiagaraSystem
+```
+
+may currently terminate at a generic asset record because Niagara internals are not yet extracted.
+
+See `docs/coverage.md` for the maintained subsystem matrix.
+
+## Coverage gate before broad universal traversal
+
+A universal graph API is architecturally useful now, but filling major subsystem blind spots first will make it much more valuable.
+
+Priority:
+
+1. animation asset internals, especially Pose Search/Motion Matching/Chooser plus sequence/montage/blend/skeleton data;
+2. Niagara + legacy Cascade particles;
+3. Sequencer;
+4. MetaSounds + SoundCue/audio routing;
+5. Enhanced Input/common gameplay-data assets where useful;
+6. project-level typed bounded neighborhoods/traversal with per-hop provenance/coverage quality;
+7. additional geometry/physics/rendering/plugin asset families when real corpora justify them.
+
+Traversal can evolve in parallel, but unsupported subsystem internals must remain visible as unsupported rather than being disguised as semantically complete generic dependency edges.
 
 ## Long-term universal entity/edge graph
 
-Specialist tables remain valuable for exact queries, but the database should continue converging toward two universal concepts.
+Specialist tables should remain. A universal graph should sit over them rather than replace them.
 
 ### Entity
 
@@ -289,27 +415,32 @@ name
 path
 class/type
 source
+coverage_level
 properties
 ```
 
-Examples:
+Potential entities include:
 
 ```text
 file
 asset
-Blueprint
-graph
-node
-pin
-function
-AnimBP state
-Behavior Tree node
-StateTree state
 world
 level
 actor
 component
-Data Layer
+Blueprint
+graph
+node
+pin
+function/event
+AnimBP state
+Behavior Tree node
+StateTree state
+PCG node
+material expression
+Niagara emitter/module
+Sequencer binding/track/section
+MetaSound node
 ```
 
 ### Edge
@@ -318,10 +449,12 @@ Data Layer
 source_id
 edge_kind
 target_id
+provenance
+quality
 properties
 ```
 
-Examples:
+Potential edges include:
 
 ```text
 contains
@@ -331,214 +464,98 @@ references
 calls
 binds_argument
 binds_return
-reads
-writes
 execution_flow
 data_flow
 owns_component
 attached_to
 placed_in
 transitions_to
+instantiates_world
 ```
 
-This gives an AI a common traversal model while specialist tables retain exact system semantics.
+The graph layer should provide bounded neighborhoods without flattening away specialist details.
 
 ## Cross-project launcher architecture
 
-The canonical workflow is one UnrealAssetTool checkout used against many `.uproject` files.
+One canonical checkout can scan many `.uproject` files.
 
-For an external target, the launcher temporarily stages the canonical checkout's descriptor and `Source/` tree at:
+For an external target, the launcher temporarily stages:
+
+```text
+UnrealAssetTool.uplugin
+Source/
+```
+
+under:
 
 ```text
 <TargetProject>/Plugins/UnrealAssetTool
 ```
 
-This deliberately uses UnrealBuildTool's normal project-plugin discovery path instead of relying on foreign-plugin target modes.
+It then performs normal target/module builds, resolves the actual generated module DLL, repairs the staged/local runtime `.modules` manifest using the target project's BuildId, runs both commandlets, and removes/restores temporary plugin directories afterward.
 
-If the target already contains UnrealAssetTool plugin directories, the launcher moves those directories completely outside `Plugins`, stages the canonical copy, and restores the originals afterward.
-
-The staging transaction lasts through build **and** commandlet execution. The temporary stage is deleted on success or failure.
-
-The target project's `.uatool` output and bundle still live with the target project.
+This uses UnrealBuildTool's normal project-plugin discovery path rather than depending on foreign-plugin target modes.
 
 See `docs/cross-project-workflow.md`.
 
 ## UE 5.8 DebugGame module loading
 
-UE 5.8 DebugGame does not provide one safe hard-coded UnrealAssetTool DLL naming rule across all plugin build contexts.
+Do not hard-code one UnrealAssetTool DLL name for DebugGame.
 
-Validated builds have produced both:
+The launcher resolves the actual DLL through generated `.modules` metadata and accepts a filesystem fallback only when one candidate is unambiguous.
 
-```text
-UnrealEditor-UnrealAssetTool.dll
-```
+The running process consumes the target project's runtime BuildId, so the plugin runtime manifest is repaired to match that target.
 
-and:
-
-```text
-UnrealEditor-UnrealAssetTool-Win64-DebugGame.dll
-```
-
-The running DebugGame process consumes:
-
-```text
-UnrealEditor-Win64-DebugGame.modules
-```
-
-The launcher therefore resolves the plugin DLL from generated `.modules` metadata first and only falls back to a single unambiguous UBT-produced DLL.
-
-The plugin-local/staged runtime manifest is then repaired using:
-
-```text
-BuildId = target project's runtime BuildId
-Modules.UnrealAssetTool = actual UBT-produced DLL filename
-```
-
-This behavior is launcher infrastructure, not scanner schema.
+This is launcher infrastructure, not scanner schema.
 
 ## Build/read lifecycle
 
-A normal cross-project scan is:
+A normal scan is:
 
 ```text
 target .uproject
     |
 validate explicit editor path
     |
-stage canonical descriptor + Source under target Plugins if external
+stage canonical plugin source if target is external
     |
-temporarily move any duplicate target plugin outside Plugins
+build target Editor + UnrealAssetTool module
     |
-build target Editor
+resolve/repair runtime module metadata
     |
-build -Module=UnrealAssetTool
+run structural commandlet -> schema 12
     |
-resolve actual generated module DLL
+run world commandlet -> world schema 12
     |
-repair runtime module manifest from target BuildId
-    |
-run UnrealAssetTool commandlet with staged plugin still present
-    |
-canonical schema-11 JSONL
-    |
-derive schema-7 views
+derive schema 10
     |
 pack SQLite
     |
 create compact upload ZIP
     |
-remove staged plugin and restore any original target plugin
+remove stage / restore target plugin copies
 ```
 
-A failed commandlet run deletes/does not trust stale `manifest.json`; old output must not be mistaken for a new successful scan.
+A failed scan must not leave stale manifests that can be mistaken for a fresh successful run.
 
 ## Incremental indexing
 
-Full scans are acceptable for current development but should not be the final workflow.
+Full scans remain acceptable for current development, but long-term indexing should avoid reprocessing unchanged packages.
 
-Future incremental indexing should hash:
+Potential invalidation keys include:
 
-- physical text files;
-- package files;
+- physical source/config hashes;
+- package file hashes/timestamps;
 - Blueprint graph structure;
-- selected authored object state.
+- selected authored object state;
+- world package/external actor changes.
 
-Unchanged facts can then be retained and only affected dependency neighborhoods re-derived.
-
-Incremental work should come after the world/placement model is established; optimizing incomplete semantics would be premature.
+Incremental indexing should preserve the same canonical/derived separation.
 
 ## Native C++ understanding
 
-Raw source chunks are currently the safe and useful baseline.
+Raw source chunks are the current safe baseline.
 
-A later semantic source pass should use Clang tooling rather than regex because Unreal C++ includes generated headers, macros, platform conditionals, reflection annotations, and build-specific compile environments.
+A later semantic source pass should use Clang tooling rather than regex because Unreal C++ depends on generated headers, macros, platform conditions, reflection annotations, and target-specific compile environments.
 
-Potential native entities:
-
-```text
-module
-namespace
-class/struct/enum
-inheritance
-function/method
-field
-UCLASS/USTRUCT/UENUM/UFUNCTION/UPROPERTY
-include
-call/reference
-```
-
-This remains secondary to visual-program/world understanding.
-
-## Next development priority: world and placement
-
-The next broad extractor after 0.6.4 should connect existing gameplay semantics to where they are instantiated.
-
-The goal is not merely "list maps." It is to answer:
-
-```text
-Which worlds/maps exist?
-Which levels/sublevels belong to them?
-Which actor classes are placed?
-Where are actors placed?
-What components and authored overrides exist on placed actors?
-Which assets/Blueprints/AI/PCG/materials are referenced from those instances?
-Which Data Layers contain them?
-What can be learned from World Partition descriptors without loading every actor?
-```
-
-### World-scanner design rules
-
-Prefer metadata/descriptor APIs first.
-
-Avoid blindly loading every World Partition external actor.
-
-Canonical facts should include, as available:
-
-```text
-world/map identity
-level hierarchy
-actor GUID/path/name/label
-actor class
-folder
-tags
-transform
-component identity/class
-component attachment
-instance property overrides
-Data Layers
-World Partition descriptor facts
-soft/hard asset references
-actor references
-```
-
-Placement must remain canonical Unreal-extracted fact, not inferred from filenames or Blueprint names.
-
-### Derived world context
-
-Once canonical placement exists, Python can derive:
-
-```text
-world -> actor -> Blueprint/class
-actor -> component -> asset
-actor -> AI graph
-actor -> material
-actor -> PCG graph
-placed gameplay clusters
-per-map summaries
-cross-system retrieval neighborhoods
-```
-
-That will let an AI connect the program model built in 0.6.4 to the actual playable space.
-
-## Priority after world placement
-
-After the world model is established:
-
-1. deepen cross-system provenance where real gaps remain;
-2. Sequencer where gameplay/cinematics require it;
-3. Niagara where VFX structure materially affects understanding;
-4. MetaSounds where authored audio graphs materially affect understanding;
-5. native source semantics;
-6. incremental indexing/query-service work.
-
-Priority should continue to be evidence-driven by real project corpora rather than coverage-count driven.
+This remains secondary to visual-program/world/subsystem understanding.
