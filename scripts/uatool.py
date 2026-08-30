@@ -27,8 +27,17 @@ def create_schema(conn) -> None:
     vfx.create_schema(conn)
 
 
+def _require_vfx(output: Path) -> None:
+    error = vfx.validation_error(output)
+    if error:
+        raise RuntimeError(f"VFX scan incomplete: {error}")
+
+
 def derive_output(output):
     output = Path(output).expanduser().resolve()
+    # Gate before any derived files/manifest are rewritten. This prevents a
+    # missing VFX pass from leaving a fresh-looking schema-11-only bundle.
+    _require_vfx(output)
     counts = dict(_base_derive_output(output))
     manifest_path = output / "manifest.json"
     if manifest_path.is_file():
@@ -49,6 +58,8 @@ def derive_output(output):
 
 def build_database(output):
     output = Path(output).expanduser().resolve()
+    # Direct `pack` is subject to the same completeness gate as `scan`.
+    _require_vfx(output)
     db = _base_build_database(output)
     conn = sqlite3.connect(db)
     try:
@@ -95,7 +106,13 @@ def _vfx_summary(args) -> None:
 
 
 def scan(args):
-    result = int(_base_scan(args))
+    try:
+        result = int(_base_scan(args))
+    except RuntimeError as exc:
+        if "VFX scan incomplete:" in str(exc):
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 25
+        raise
     if result != 0:
         return result
     error = vfx.validation_error(runtime._output(args))
