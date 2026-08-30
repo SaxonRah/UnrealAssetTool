@@ -1,3 +1,42 @@
+static void GetNiagaraVariableTypeFacts(
+    UStruct* VariableStruct,
+    const void* Variable,
+    UObject* Owner,
+    FString& OutType,
+    FString& OutTypeHandle,
+    FString& OutLegacyTypeDefinition)
+{
+    OutTypeHandle = ExportField(
+        VariableStruct,
+        Variable,
+        TEXT("TypeDefHandle"),
+        Owner);
+
+    // FNiagaraVariableBase::TypeDef_DEPRECATED is not the live type in UE 5.8.
+    // Preserve it only as an explicitly-labelled legacy fact. The live type is
+    // represented by TypeDefHandle and resolved by Niagara's non-reflected
+    // GetType() API, which we deliberately do not hard-link against.
+    OutLegacyTypeDefinition = ExportField(
+        VariableStruct,
+        Variable,
+        TEXT("TypeDef_DEPRECATED"),
+        Owner);
+    if (OutLegacyTypeDefinition.IsEmpty())
+    {
+        // Older/custom Niagara implementations may expose the old field under
+        // its historical name. Keep that as legacy evidence only.
+        OutLegacyTypeDefinition = ExportField(
+            VariableStruct,
+            Variable,
+            TEXT("TypeDef"),
+            Owner);
+    }
+
+    OutType = !OutTypeHandle.IsEmpty()
+        ? OutTypeHandle
+        : OutLegacyTypeDefinition;
+}
+
 static bool ScanNiagaraScript(
     UObject* Object,
     const FAssetData& Asset,
@@ -53,19 +92,16 @@ static bool ScanNiagaraDataChannel(
             for (int32 Index = 0; Index < Helper.Num(); ++Index)
             {
                 const void* Variable = Helper.GetRawPtr(Index);
-                FString Type = ExportField(
+                FString Type;
+                FString TypeHandle;
+                FString LegacyTypeDefinition;
+                GetNiagaraVariableTypeFacts(
                     VariableStruct->Struct,
                     Variable,
-                    TEXT("TypeDef"),
-                    DataChannel);
-                if (Type.IsEmpty())
-                {
-                    Type = ExportField(
-                        VariableStruct->Struct,
-                        Variable,
-                        TEXT("TypeDefHandle"),
-                        DataChannel);
-                }
+                    DataChannel,
+                    Type,
+                    TypeHandle,
+                    LegacyTypeDefinition);
 
                 bool bTruncated = false;
                 TSharedRef<FJsonObject> Row = MakeShared<FJsonObject>();
@@ -82,6 +118,8 @@ static bool ScanNiagaraDataChannel(
                     TEXT("Name"),
                     DataChannel));
                 Row->SetStringField(TEXT("type"), Type);
+                Row->SetStringField(TEXT("type_handle"), TypeHandle);
+                Row->SetStringField(TEXT("legacy_type_definition"), LegacyTypeDefinition);
                 Row->SetStringField(
                     TEXT("raw_value"),
                     ExportProperty(Variables->Inner, Variable, DataChannel, bTruncated));
@@ -145,19 +183,16 @@ static bool ScanNiagaraParameterCollection(
         for (int32 Index = 0; Index < Helper.Num(); ++Index)
         {
             const void* Parameter = Helper.GetRawPtr(Index);
-            FString Type = ExportField(
+            FString Type;
+            FString TypeHandle;
+            FString LegacyTypeDefinition;
+            GetNiagaraVariableTypeFacts(
                 ParameterStruct->Struct,
                 Parameter,
-                TEXT("TypeDef"),
-                Object);
-            if (Type.IsEmpty())
-            {
-                Type = ExportField(
-                    ParameterStruct->Struct,
-                    Parameter,
-                    TEXT("TypeDefHandle"),
-                    Object);
-            }
+                Object,
+                Type,
+                TypeHandle,
+                LegacyTypeDefinition);
 
             bool bTruncated = false;
             TSharedRef<FJsonObject> Row = MakeShared<FJsonObject>();
@@ -169,6 +204,8 @@ static bool ScanNiagaraParameterCollection(
                 TEXT("Name"),
                 Object));
             Row->SetStringField(TEXT("type"), Type);
+            Row->SetStringField(TEXT("type_handle"), TypeHandle);
+            Row->SetStringField(TEXT("legacy_type_definition"), LegacyTypeDefinition);
             Row->SetStringField(
                 TEXT("raw_value"),
                 ExportProperty(Parameters->Inner, Parameter, Object, bTruncated));
