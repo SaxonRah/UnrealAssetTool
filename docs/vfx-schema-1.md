@@ -184,4 +184,6 @@ vfx_files
 vfx_pass
 ```
 
+The safest validation procedure is to switch explicitly to `vfx1-niagara-cascade`, confirm `git branch --show-current`, and then run the canonical `scan` command. If the new launcher is actually active and the C++ VFX pass fails to emit a manifest, `scan` must return error 25 rather than silently bundling schema-11-only output.
+
 The first true UE 5.8.2 VFX-schema scans from both corpora will validate serialized container shapes and drive evidence-based normalization fixes, following the same process used for animation schema 1.
