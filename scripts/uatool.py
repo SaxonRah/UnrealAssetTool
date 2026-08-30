@@ -259,14 +259,15 @@ def derive_output(output):
 
 def build_database(output):
     output = Path(output).expanduser().resolve()
-    _require_vfx(output)
-    _require_systems(output)
+    fresh = _derived_is_fresh(output)
 
-    # A freshness stamp is written only after full derived validation. When it
-    # matches canonical file metadata, derived file metadata, schema, and Python
-    # source content, reparsing the entire graph solely to validate it again is
-    # redundant before a disposable SQLite rebuild.
-    if not _derived_is_fresh(output):
+    # A freshness stamp is written only after all raw and derived validation has
+    # succeeded. If it is current, reparsing those same streams immediately
+    # before a disposable SQLite rebuild adds no safety. The conservative path
+    # remains for direct/old/stale build_database callers.
+    if not fresh:
+        _require_vfx(output)
+        _require_systems(output)
         _require_vfx_derived(output)
         _require_project_graph(output)
 
