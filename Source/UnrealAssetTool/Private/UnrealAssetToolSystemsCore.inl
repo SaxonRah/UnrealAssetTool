@@ -352,7 +352,8 @@ static FString DirectKindForClassPath(const FString& ClassPath)
     if (ClassPath == TEXT("/Script/EnhancedInput.EnhancedInputPlatformData")) return TEXT("enhanced_input_platform_data");
 
     if (ClassPath == TEXT("/Script/Engine.PrimaryAssetLabel")) return TEXT("primary_asset_label");
-    if (ClassPath.Contains(TEXT("CommonGenericInputActionDataTable"))) return TEXT("common_input_action_table");
+    if (ClassPath == TEXT("/Script/CommonInput.CommonInputActionDomain")) return TEXT("common_input_action_domain");
+    if (ClassPath == TEXT("/Script/CommonInput.CommonInputActionDomainTable")) return TEXT("common_input_action_domain_table");
     return FString();
 }
 
@@ -389,6 +390,10 @@ static FString KindForLoadedObject(UObject* Object, const FString& ClassPath)
             if (RowStructPath.Contains(TEXT("GameplayTagTableRow")))
             {
                 return TEXT("gameplay_tag_table");
+            }
+            if (RowStructPath.Contains(TEXT("CommonInputActionDataBase")))
+            {
+                return TEXT("common_input_action_table");
             }
         }
     }
