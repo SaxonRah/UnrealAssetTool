@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Canonical UnrealAssetTool CLI extended with derived world schema 9."""
+"""Canonical UnrealAssetTool CLI extended with derived world schema 10."""
 from __future__ import annotations
 import builtins, collections, hashlib, json, sqlite3
 from pathlib import Path
 import uatool_core as core
+import uatool_world_stitch as world_stitch
 
-DERIVED_SCHEMA_VERSION = 9
-WORLD_DERIVED_FILES = ("world_relations.jsonl","world_context.jsonl","world_summaries.jsonl")
+DERIVED_SCHEMA_VERSION = 10
+WORLD_DERIVED_FILES = ("world_relations.jsonl","world_context.jsonl","world_summaries.jsonl",world_stitch.SYSTEM_DERIVED_FILE)
 
 def _rows(path):
     if not path.exists(): return
@@ -58,7 +59,7 @@ def _derive_world(output):
     for x in levels:
         if x.get("level_kind")!="persistent":
             w=x.get("world_path",""); add(w,"world",w,"streams_world_package","world_package",x.get("target_world_package",""),
-                {"streaming_class":x.get("streaming_class",""),"streaming_owner_path":x.get("streaming_owner_path","")})
+                {"streaming_class":x.get("streaming_class","")+"","streaming_owner_path":x.get("streaming_owner_path","")})
     for x in actors:
         w=x.get("world_path",""); a=x.get("actor_path","")
         add(w,"world",w,"contains_loaded_actor","actor",a,{"class":x.get("actor_class",""),"guid":x.get("actor_guid","")})
@@ -77,16 +78,16 @@ def _derive_world(output):
     for x in refs:
         k=x.get("reference_kind",""); rr={"hard_object":"hard_object_reference","soft_object":"soft_object_reference"}.get(k,"object_reference")
         add(x.get("world_path",""),x.get("owner_kind","object"),x.get("owner_path",""),rr,x.get("target_kind","object"),x.get("target_path",""),
-            {"root_property":x.get("root_property",""),"property_path":x.get("property_path",""),"target_class":x.get("target_class",""),
+            {"root_property":x.get("root_property","")+"","property_path":x.get("property_path","")+"","target_class":x.get("target_class",""),
              "reference_kind":k,"authored_override":bool(x.get("authored_override",False))})
     for x in dls:
         w=x.get("world_path",""); p=x.get("instance_path","")
-        add(w,"world",w,"contains_data_layer","data_layer_instance",p,{"name":x.get("short_name",""),"runtime":bool(x.get("runtime",False))})
+        add(w,"world",w,"contains_data_layer","data_layer_instance",p,{"name":x.get("short_name","")+"","runtime":bool(x.get("runtime",False))})
         if x.get("parent_instance_path"):add(w,"data_layer_instance",p,"child_of_data_layer","data_layer_instance",x["parent_instance_path"])
         if x.get("asset_path"):add(w,"data_layer_instance",p,"uses_data_layer_asset","data_layer_asset",x["asset_path"],{"asset_class":x.get("asset_class","")})
     for x in descs:
         w=x.get("world_path",""); s=x.get("actor_soft_path",""); g=x.get("actor_guid","")
-        add(w,"world",w,"contains_partition_actor_desc","partition_actor",s,{"guid":g,"package":x.get("actor_package",""),"class":x.get("native_class","")})
+        add(w,"world",w,"contains_partition_actor_desc","partition_actor",s,{"guid":g,"package":x.get("actor_package","")+"","class":x.get("native_class","")})
         instance_kind=world_instance_classes.get(x.get("native_class",""))
         if instance_kind:
             owner_package=w.split(".",1)[0]
@@ -102,7 +103,7 @@ def _derive_world(output):
                 add(w,"partition_actor",s,"instantiates_world","world_package",target,{
                     "instance_kind":instance_kind,
                     "resolution":"unique_world_asset_dependency",
-                    "actor_package":x.get("actor_package",""),
+                    "actor_package":x.get("actor_package","")+"",
                     "dependency_categories":sorted(candidates[target]),
                 })
         q=loaded.get((w,g))
@@ -132,7 +133,7 @@ def _derive_world(output):
         w=x.get("world_path",""); la=aw[w]; ds=dd[w]; overlap=len({a.get("actor_guid") for a in la if a.get("actor_guid")} & {d.get("actor_guid") for d in ds if d.get("actor_guid")})
         stream=sum(1 for z in lw[w] if z.get("level_kind")!="persistent")
         rc=collections.Counter(z["relation"] for z in rr[w])
-        s={"world_path":w,"world_name":x.get("world_name",""),"package_name":x.get("package_name",""),"persistent_level_path":x.get("persistent_level_path",""),
+        s={"world_path":w,"world_name":x.get("world_name","")+"","package_name":x.get("package_name","")+"","persistent_level_path":x.get("persistent_level_path","")+"",
            "world_partitioned":bool(x.get("world_partitioned",False)),"level_count":len(lw[w]),"streaming_relationship_count":stream,
            "loaded_actor_count":len(la),"partition_actor_desc_count":len(ds),"descriptor_loaded_overlap_count":overlap,"logical_actor_count":len(la)+len(ds)-overlap,
            "component_count":len(cw[w]),"instance_override_count":len(pw[w]),"reference_count":len(rw[w]),"data_layer_count":len(dw[w]),
@@ -153,8 +154,8 @@ def _derive_world(output):
         if wi:
             lines.append("World instances:")
             lines += [f"  {z.get('source_id','')} -> {z.get('target','')} ({z.get('detail',{}).get('instance_kind','')})" for z in wi]
-        lines.append("Loaded actors:"); lines += [f"  {z.get('actor_label','')} | {z.get('actor_class','')} | {z.get('actor_path','')}" for z in sorted(aw[w],key=lambda z:str(z.get("actor_path","")))]
-        if dd[w]: lines.append("Partition descriptors:"); lines += [f"  {z.get('actor_label','')} | {z.get('native_class','')} | {z.get('actor_soft_path','')}" for z in sorted(dd[w],key=lambda z:str(z.get("actor_soft_path","")))]
+        lines.append("Loaded actors:"); lines += [f"  {z.get('actor_label','')} | {z.get('actor_class','')} | {z.get('actor_path','')}" for z in sorted(aw[w],key=lambda z:str(z.get("actor_path","")+""))]
+        if dd[w]: lines.append("Partition descriptors:"); lines += [f"  {z.get('actor_label','')} | {z.get('native_class','')} | {z.get('actor_soft_path','')}" for z in sorted(dd[w],key=lambda z:str(z.get("actor_soft_path","")+""))]
         text="\n".join(lines); trunc=len(text)>524288
         if trunc:text=text[:524288]+"\n...[truncated]"
         ctx.append({"world_path":w,"world_name":s["world_name"],"world_partitioned":s["world_partitioned"],"loaded_actor_count":s["loaded_actor_count"],
@@ -168,10 +169,12 @@ CREATE TABLE world_context(world_path TEXT PRIMARY KEY,world_name TEXT NOT NULL,
 CREATE TABLE world_summaries(world_path TEXT PRIMARY KEY,world_name TEXT NOT NULL,package_name TEXT NOT NULL,persistent_level_path TEXT NOT NULL,world_partitioned INTEGER NOT NULL,level_count INTEGER NOT NULL,streaming_relationship_count INTEGER NOT NULL,loaded_actor_count INTEGER NOT NULL,partition_actor_desc_count INTEGER NOT NULL,descriptor_loaded_overlap_count INTEGER NOT NULL,logical_actor_count INTEGER NOT NULL,component_count INTEGER NOT NULL,instance_override_count INTEGER NOT NULL,reference_count INTEGER NOT NULL,data_layer_count INTEGER NOT NULL,actor_class_counts_json TEXT NOT NULL,partition_actor_class_counts_json TEXT NOT NULL,component_class_counts_json TEXT NOT NULL,relation_counts_json TEXT NOT NULL,text TEXT NOT NULL,json TEXT NOT NULL);"""
 
 _old_schema=core.create_schema; _old_derive=core.derive_output; _old_db=core.build_database; _old_query=core.query; _old_scan=core.scan
-def create_schema(c): _old_schema(c); c.executescript(_SQL)
+def create_schema(c):
+    _old_schema(c); c.executescript(_SQL); world_stitch.create_schema(c)
 def derive_output(output):
     output=Path(output).expanduser().resolve(); counts=dict(_old_derive(output)); rel,ctx,sums=_derive_world(output)
-    wc={"world_relations":_write(output/"world_relations.jsonl",rel),"world_context":_write(output/"world_context.jsonl",ctx),"world_summaries":_write(output/"world_summaries.jsonl",sums)}; counts.update(wc)
+    system_relations=world_stitch.derive(output,_rows); ctx=world_stitch.augment_context(ctx,system_relations)
+    wc={"world_relations":_write(output/"world_relations.jsonl",rel),world_stitch.SYSTEM_DERIVED_FILE.removesuffix(".jsonl"):_write(output/world_stitch.SYSTEM_DERIVED_FILE,system_relations),"world_context":_write(output/"world_context.jsonl",ctx),"world_summaries":_write(output/"world_summaries.jsonl",sums)}; counts.update(wc)
     p=output/"manifest.json"
     if p.is_file():
         m=json.loads(p.read_text(encoding="utf-8")); m["derived_schema_version"]=DERIVED_SCHEMA_VERSION; d=m.get("derived_counts",{}); d=d if isinstance(d,dict) else {}; d.update(wc); m["derived_counts"]=d
@@ -180,10 +183,10 @@ def derive_output(output):
 def build_database(output):
     output=Path(output).expanduser().resolve(); db=_old_db(output); c=sqlite3.connect(db)
     try:
-        for x in _rows(output/"world_relations.jsonl"): c.execute("INSERT OR REPLACE INTO world_relations VALUES(?,?,?,?,?,?,?,?)",(x.get("relation_id",""),x.get("world_path",""),x.get("source_kind",""),x.get("source_id",""),x.get("relation",""),x.get("target_kind",""),x.get("target",""),json.dumps(x.get("detail",{}),ensure_ascii=False,separators=(",",":"))))
-        for x in _rows(output/"world_context.jsonl"): c.execute("INSERT OR REPLACE INTO world_context VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",(x.get("world_path",""),x.get("world_name",""),int(bool(x.get("world_partitioned"))),x.get("loaded_actor_count",0),x.get("partition_actor_desc_count",0),x.get("logical_actor_count",0),x.get("component_count",0),x.get("data_layer_count",0),x.get("streaming_relationship_count",0),int(bool(x.get("truncated"))),x.get("text",""),json.dumps(x,ensure_ascii=False,separators=(",",":"))))
-        for x in _rows(output/"world_summaries.jsonl"): c.execute("INSERT OR REPLACE INTO world_summaries VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(x.get("world_path",""),x.get("world_name",""),x.get("package_name",""),x.get("persistent_level_path",""),int(bool(x.get("world_partitioned"))),x.get("level_count",0),x.get("streaming_relationship_count",0),x.get("loaded_actor_count",0),x.get("partition_actor_desc_count",0),x.get("descriptor_loaded_overlap_count",0),x.get("logical_actor_count",0),x.get("component_count",0),x.get("instance_override_count",0),x.get("reference_count",0),x.get("data_layer_count",0),json.dumps(x.get("actor_class_counts",{}),separators=(",",":")),json.dumps(x.get("partition_actor_class_counts",{}),separators=(",",":")),json.dumps(x.get("component_class_counts",{}),separators=(",",":")),json.dumps(x.get("relation_counts",{}),separators=(",",":")),x.get("text",""),json.dumps(x,ensure_ascii=False,separators=(",",":"))))
-        c.commit()
+        for x in _rows(output/"world_relations.jsonl"): c.execute("INSERT OR REPLACE INTO world_relations VALUES(?,?,?,?,?,?,?,?)",(x.get("relation_id","")+"",x.get("world_path","")+"",x.get("source_kind","")+"",x.get("source_id","")+"",x.get("relation","")+"",x.get("target_kind","")+"",x.get("target","")+"",json.dumps(x.get("detail",{}),ensure_ascii=False,separators=(",",":"))))
+        for x in _rows(output/"world_context.jsonl"): c.execute("INSERT OR REPLACE INTO world_context VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",(x.get("world_path","")+"",x.get("world_name","")+"",int(bool(x.get("world_partitioned"))),x.get("loaded_actor_count",0),x.get("partition_actor_desc_count",0),x.get("logical_actor_count",0),x.get("component_count",0),x.get("data_layer_count",0),x.get("streaming_relationship_count",0),int(bool(x.get("truncated"))),x.get("text","")+"",json.dumps(x,ensure_ascii=False,separators=(",",":"))))
+        for x in _rows(output/"world_summaries.jsonl"): c.execute("INSERT OR REPLACE INTO world_summaries VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(x.get("world_path","")+"",x.get("world_name","")+"",x.get("package_name","")+"",x.get("persistent_level_path","")+"",int(bool(x.get("world_partitioned"))),x.get("level_count",0),x.get("streaming_relationship_count",0),x.get("loaded_actor_count",0),x.get("partition_actor_desc_count",0),x.get("descriptor_loaded_overlap_count",0),x.get("logical_actor_count",0),x.get("component_count",0),x.get("instance_override_count",0),x.get("reference_count",0),x.get("data_layer_count",0),json.dumps(x.get("actor_class_counts",{}),separators=(",",":")),json.dumps(x.get("partition_actor_class_counts",{}),separators=(",",":")),json.dumps(x.get("component_class_counts",{}),separators=(",",":")),json.dumps(x.get("relation_counts",{}),separators=(",",":")),x.get("text","")+"",json.dumps(x,ensure_ascii=False,separators=(",",":"))))
+        world_stitch.load_database(c,output,_rows); c.commit()
     finally:c.close()
     return db
 def query(a):
@@ -192,6 +195,7 @@ def query(a):
         if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='world_summaries'").fetchone():
             print("[world summaries]"); core._print_rows(c.execute("SELECT world_path,logical_actor_count,data_layer_count,substr(text,1,1200) text FROM world_summaries WHERE world_path LIKE ? OR text LIKE ? LIMIT ?",(q,q,a.limit)),("world_path","logical_actor_count","data_layer_count","text"))
             print("\n[world relations]"); core._print_rows(c.execute("SELECT world_path,source_kind,source_id,relation,target_kind,target FROM world_relations WHERE world_path LIKE ? OR source_id LIKE ? OR relation LIKE ? OR target LIKE ? OR detail_json LIKE ? LIMIT ?",(q,q,q,q,q,a.limit)),("world_path","source_kind","source_id","relation","target_kind","target"))
+            world_stitch.query(c,core._print_rows,q,a.limit)
             print("\n[world context]"); core._print_rows(c.execute("SELECT world_path,world_name,substr(text,1,1600) text FROM world_context WHERE world_path LIKE ? OR world_name LIKE ? OR text LIKE ? LIMIT ?",(q,q,q,a.limit)),("world_path","world_name","text"))
     finally:c.close()
     return int(_old_query(a))
@@ -204,7 +208,7 @@ def _summary(a):
     print(); print("=== UATOOL FINAL SUMMARY ===")
     print("structural scan complete: "+line(sc,("files","assets","blueprints","blueprint_graphs","blueprint_nodes","blueprint_pins","blueprint_edges")))
     print("world scan complete: "+line(wc,("worlds","levels","streaming_relationships","actors","components","instance_overrides","references","data_layers","world_partition_worlds","world_partition_initialized_for_scan","world_partition_actor_descs")))
-    print("derived complete: "+line(d,("world_relations","world_context","world_summaries","blueprint_call_bindings","blueprint_data_dependencies","blueprint_relations","ai_relations","visual_relations")))
+    print("derived complete: "+line(d,("world_relations","world_system_relations","world_context","world_summaries","blueprint_call_bindings","blueprint_data_dependencies","blueprint_relations","ai_relations","visual_relations")))
     print(f"schemas: structural={m.get('schema_version',0)} world={w.get('schema_version',0)} derived={m.get('derived_schema_version',0)}")
     print(f"database: {o/core.DB_NAME}")
     if not a.no_bundle:
