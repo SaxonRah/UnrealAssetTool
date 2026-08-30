@@ -15,16 +15,6 @@ PACKAGE_PLUMBING_RELATIONS = {
     "depends_on_package",
 }
 
-COMPACT_HOP_FIELDS = (
-    "depth",
-    "direction",
-    "edge_id",
-    "edge_quality",
-    "source_coverage",
-    "target_coverage",
-    "evidence_count",
-)
-
 
 def rebuild(
     nodes,
@@ -98,25 +88,32 @@ def rebuild(
                     continue
                 seen_edges.add(edge_id)
 
-                expanded_hop = {
-                    "depth": depth + 1,
-                    "direction": direction,
-                    "edge_id": edge_id,
-                    "source_kind": edge["source_kind"],
-                    "source": edge["source"],
-                    "relation": edge["relation"],
-                    "target_kind": edge["target_kind"],
-                    "target": edge["target"],
-                    "source_coverage": edge["source_coverage"],
-                    "target_coverage": edge["target_coverage"],
-                    "edge_quality": edge["edge_quality"],
-                    "evidence_count": edge["evidence_count"],
-                    "evidence": edge["evidence"],
-                }
                 if compact:
-                    hops.append({key: expanded_hop[key] for key in COMPACT_HOP_FIELDS})
+                    hops.append({
+                        "depth": depth + 1,
+                        "direction": direction,
+                        "edge_id": edge_id,
+                        "edge_quality": edge["edge_quality"],
+                        "source_coverage": edge["source_coverage"],
+                        "target_coverage": edge["target_coverage"],
+                        "evidence_count": edge["evidence_count"],
+                    })
                 else:
-                    hops.append(expanded_hop)
+                    hops.append({
+                        "depth": depth + 1,
+                        "direction": direction,
+                        "edge_id": edge_id,
+                        "source_kind": edge["source_kind"],
+                        "source": edge["source"],
+                        "relation": edge["relation"],
+                        "target_kind": edge["target_kind"],
+                        "target": edge["target"],
+                        "source_coverage": edge["source_coverage"],
+                        "target_coverage": edge["target_coverage"],
+                        "edge_quality": edge["edge_quality"],
+                        "evidence_count": edge["evidence_count"],
+                        "evidence": edge["evidence"],
+                    })
 
                 arrow = "->" if direction == "out" else "<-"
                 hop_text_chars += len(
