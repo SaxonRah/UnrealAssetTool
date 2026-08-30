@@ -3,6 +3,7 @@
 #include "Animation/AnimationAsset.h"
 #include "Animation/AnimCompositeBase.h"
 #include "Animation/AnimMontage.h"
+#include "Animation/AnimNotifies/AnimNotifyState.h"
 #include "Animation/AnimSequence.h"
 #include "Animation/AnimSequenceBase.h"
 #include "Animation/AnimTypes.h"
@@ -307,7 +308,7 @@ static bool WriteProperties(UObject* Object, const FString& AssetPath, const FSt
             Row->SetStringField(TEXT("owner_class"), Object->GetClass()->GetPathName());
             Row->SetStringField(TEXT("declaring_type"), Class->GetPathName());
             Row->SetStringField(TEXT("property_name"), Property->GetName());
-            Row->SetStringField(TEXT("property_type"), Property->GetClass()->GetPathName());
+            Row->SetStringField(TEXT("property_type"), Property->GetClass()->GetName());
             Row->SetStringField(TEXT("cpp_type"), Property->GetCPPType());
             Row->SetStringField(TEXT("value"), Value);
             Row->SetBoolField(TEXT("truncated"), bTruncated);
@@ -508,6 +509,7 @@ static bool WriteNotifyRows(UAnimSequenceBase* Sequence, const FString& AssetPat
     for (int32 Index = 0; Index < Sequence->Notifies.Num(); ++Index)
     {
         const FAnimNotifyEvent& Event = Sequence->Notifies[Index];
+        UAnimNotifyState* NotifyState = Event.NotifyStateClass.Get();
         TSharedRef<FJsonObject> Row = MakeShared<FJsonObject>();
         Row->SetStringField(TEXT("asset_path"), AssetPath);
         Row->SetNumberField(TEXT("notify_index"), Index);
@@ -524,8 +526,8 @@ static bool WriteNotifyRows(UAnimSequenceBase* Sequence, const FString& AssetPat
         Row->SetBoolField(TEXT("trigger_on_follower"), Event.bTriggerOnFollower);
         Row->SetStringField(TEXT("notify_object"), Event.Notify ? Event.Notify->GetPathName() : FString());
         Row->SetStringField(TEXT("notify_class"), Event.Notify ? Event.Notify->GetClass()->GetPathName() : FString());
-        Row->SetStringField(TEXT("notify_state_object"), Event.NotifyStateClass ? Event.NotifyStateClass->GetPathName() : FString());
-        Row->SetStringField(TEXT("notify_state_class"), Event.NotifyStateClass ? Event.NotifyStateClass->GetClass()->GetPathName() : FString());
+        Row->SetStringField(TEXT("notify_state_object"), NotifyState ? NotifyState->GetPathName() : FString());
+        Row->SetStringField(TEXT("notify_state_class"), NotifyState ? NotifyState->GetClass()->GetPathName() : FString());
         if (!Writers.Notifies.Write(Row))
         {
             return false;
@@ -1101,7 +1103,7 @@ struct FAnimationScannerBootstrap
 {
     FAnimationScannerBootstrap()
     {
-        FCoreDelegates::OnPostEngineInit.AddStatic(&OnPostEngineInit);
+        FCoreDelegates::GetOnPostEngineInit().AddStatic(&OnPostEngineInit);
     }
 };
 
