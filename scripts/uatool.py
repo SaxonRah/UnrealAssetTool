@@ -10,11 +10,12 @@ from pathlib import Path
 import uatool_core as core
 import uatool_runtime as runtime
 import uatool_vfx as vfx
+import uatool_vfx_stitch as vfx_stitch
 
 # uatool_runtime installs the structural/world/animation/derived-schema-11
 # pipeline into uatool_core. Keep this file as the single public launcher and
-# compose independently-versioned scanners here rather than growing another
-# monolithic implementation.
+# compose independently-versioned VFX scan/derived layers here rather than
+# growing another monolithic implementation.
 _base_create_schema = core.create_schema
 _base_derive_output = core.derive_output
 _base_build_database = core.build_database
@@ -25,6 +26,7 @@ _base_scan = core.scan
 def create_schema(conn) -> None:
     _base_create_schema(conn)
     vfx.create_schema(conn)
+    vfx_stitch.create_schema(conn)
 
 
 def _require_vfx(output: Path) -> None:
@@ -33,12 +35,53 @@ def _require_vfx(output: Path) -> None:
         raise RuntimeError(f"VFX scan incomplete: {error}")
 
 
+def _require_vfx_derived(output: Path) -> None:
+    error = vfx_stitch.validation_error(output, runtime._rows)
+    if error:
+        raise RuntimeError(f"VFX derived incomplete: {error}")
+    manifest_path = output / "manifest.json"
+    if not manifest_path.is_file():
+        raise RuntimeError("VFX derived incomplete: manifest.json missing")
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"VFX derived incomplete: invalid manifest.json: {exc}") from exc
+    if int(manifest.get("derived_schema_version", 0) or 0) != vfx_stitch.DERIVED_SCHEMA_VERSION:
+        raise RuntimeError(
+            f"VFX derived incomplete: expected derived schema {vfx_stitch.DERIVED_SCHEMA_VERSION}, "
+            f"got {manifest.get('derived_schema_version', 0)}"
+        )
+    declared = manifest.get("derived_counts", {})
+    if not isinstance(declared, dict):
+        raise RuntimeError("VFX derived incomplete: derived_counts missing or invalid")
+    for filename in vfx_stitch.DERIVED_FILES:
+        key = filename.removesuffix(".jsonl")
+        actual = sum(1 for _ in runtime._rows(output / filename))
+        if int(declared.get(key, -1)) != actual:
+            raise RuntimeError(
+                f"VFX derived incomplete: count mismatch for {key}: "
+                f"manifest={declared.get(key)} actual={actual}"
+            )
+
+
 def derive_output(output):
     output = Path(output).expanduser().resolve()
     # Gate before any derived files/manifest are rewritten. This prevents a
-    # missing VFX pass from leaving a fresh-looking schema-11-only bundle.
+    # missing VFX pass from leaving a fresh-looking derived bundle.
     _require_vfx(output)
     counts = dict(_base_derive_output(output))
+
+    relations, context, summaries = vfx_stitch.derive(output, runtime._rows)
+    derived_counts = {
+        "vfx_relations": runtime._write(output / "vfx_relations.jsonl", relations),
+        "vfx_context": runtime._write(output / "vfx_context.jsonl", context),
+        "vfx_summaries": runtime._write(output / "vfx_summaries.jsonl", summaries),
+    }
+    error = vfx_stitch.validation_error(output, runtime._rows)
+    if error:
+        raise RuntimeError(f"VFX derived incomplete: {error}")
+    counts.update(derived_counts)
+
     manifest_path = output / "manifest.json"
     if manifest_path.is_file():
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -48,6 +91,11 @@ def derive_output(output):
             manifest["vfx_counts"] = vfx_manifest.get("counts", {})
             manifest["vfx_files"] = vfx_manifest.get("files", [])
             manifest["vfx_pass"] = vfx_manifest.get("pass", "UnrealAssetToolVFX")
+        manifest["derived_schema_version"] = vfx_stitch.DERIVED_SCHEMA_VERSION
+        declared = manifest.get("derived_counts", {})
+        declared = declared if isinstance(declared, dict) else {}
+        declared.update(derived_counts)
+        manifest["derived_counts"] = declared
         manifest_path.write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
@@ -58,12 +106,14 @@ def derive_output(output):
 
 def build_database(output):
     output = Path(output).expanduser().resolve()
-    # Direct `pack` is subject to the same completeness gate as `scan`.
+    # Direct `pack` is subject to the same completeness gates as `scan`.
     _require_vfx(output)
+    _require_vfx_derived(output)
     db = _base_build_database(output)
     conn = sqlite3.connect(db)
     try:
         vfx.load_database(conn, output, runtime._rows)
+        vfx_stitch.load_database(conn, output, runtime._rows)
         conn.commit()
     finally:
         conn.close()
@@ -78,7 +128,9 @@ def query(args):
         conn = sqlite3.connect(db)
         conn.row_factory = sqlite3.Row
         try:
-            vfx.query(conn, core._print_rows, f"%{args.term}%", args.limit)
+            pattern = f"%{args.term}%"
+            vfx_stitch.query(conn, core._print_rows, pattern, args.limit)
+            vfx.query(conn, core._print_rows, pattern, args.limit)
         finally:
             conn.close()
     return result
@@ -108,16 +160,39 @@ def _vfx_summary(args) -> None:
         "cascade_modules",
     )
     print("vfx scan complete: " + " ".join(f"{name}={counts.get(name, 0)}" for name in names))
-    print(f"vfx schema: {manifest.get('schema_version', 0)}")
+
+    top_manifest = {}
+    manifest_path = output / "manifest.json"
+    if manifest_path.is_file():
+        try:
+            top_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            top_manifest = {}
+    derived = top_manifest.get("derived_counts", {}) if isinstance(top_manifest.get("derived_counts", {}), dict) else {}
+    print(
+        "vfx derived complete: "
+        + " ".join(
+            f"{name}={derived.get(name, 0)}"
+            for name in ("vfx_relations", "vfx_context", "vfx_summaries")
+        )
+    )
+    print(
+        f"vfx schema: {manifest.get('schema_version', 0)} "
+        f"derived schema: {top_manifest.get('derived_schema_version', 0)}"
+    )
 
 
 def scan(args):
     try:
         result = int(_base_scan(args))
     except RuntimeError as exc:
-        if "VFX scan incomplete:" in str(exc):
+        message = str(exc)
+        if "VFX scan incomplete:" in message:
             print(f"ERROR: {exc}", file=sys.stderr)
             return 25
+        if "VFX derived incomplete:" in message:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 26
         raise
     if result != 0:
         return result
@@ -125,6 +200,11 @@ def scan(args):
     if error:
         print(f"ERROR: VFX scan incomplete: {error}", file=sys.stderr)
         return 25
+    try:
+        _require_vfx_derived(runtime._output(args))
+    except RuntimeError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 26
     _vfx_summary(args)
     return 0
 
@@ -134,7 +214,11 @@ core.derive_output = derive_output
 core.build_database = build_database
 core.query = query
 core.scan = scan
-core.DEFAULT_BUNDLE_FILES = tuple(dict.fromkeys((*core.DEFAULT_BUNDLE_FILES, *vfx.RAW_FILES)))
+core.DEFAULT_BUNDLE_FILES = tuple(dict.fromkeys((
+    *core.DEFAULT_BUNDLE_FILES,
+    *vfx.RAW_FILES,
+    *vfx_stitch.DERIVED_FILES,
+)))
 
 
 def main():
