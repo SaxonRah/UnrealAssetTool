@@ -205,11 +205,14 @@ static bool ScanGameplayDataAsset(
         {
             TArray<FName> Names;
             Table->GetRowMap().GenerateKeyArray(Names);
-            Names.Sort(FNameLexicalLess());
+            Names.Sort([](const FName& A, const FName& B)
+            {
+                return A.LexicalLess(B);
+            });
             int32 TagIndex = 0;
             for (const FName RowName : Names)
             {
-                const uint8* const* Found = Table->GetRowMap().Find(RowName);
+                uint8* const* Found = Table->GetRowMap().Find(RowName);
                 const uint8* RowData = Found ? *Found : nullptr;
                 if (!RowData)
                 {
