@@ -72,7 +72,7 @@ class CleanupCompactionTest(unittest.TestCase):
             self.assertEqual(result["material_expression_guids"], 0)
             self.assertEqual(target.read_bytes(), before)
 
-    def test_compact_neighborhood_references_authoritative_edge_and_rebuilds_text(self) -> None:
+    def test_compact_neighborhood_references_authoritative_edge_and_renders_on_query(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             output = Path(temp_dir)
             edge = {
@@ -114,32 +114,57 @@ class CleanupCompactionTest(unittest.TestCase):
             self.assertIsNone(compact.validation_error(output, rows))
 
             conn = sqlite3.connect(":memory:")
+            conn.row_factory = sqlite3.Row
             try:
                 conn.execute(
-                    "CREATE TABLE project_edges(edge_id TEXT,source_kind TEXT,source TEXT,relation TEXT,target_kind TEXT,target TEXT,"
-                    "source_coverage TEXT,target_coverage TEXT,edge_quality TEXT,evidence_count INTEGER)"
+                    "CREATE TABLE project_nodes(node_kind TEXT,path TEXT,coverage TEXT,family TEXT,class_path TEXT)"
                 )
                 conn.execute(
-                    "CREATE TABLE project_neighborhoods(root_path TEXT PRIMARY KEY,text TEXT,json TEXT)"
+                    "CREATE TABLE project_edges(edge_id TEXT PRIMARY KEY,source_kind TEXT,source TEXT,relation TEXT,target_kind TEXT,target TEXT,"
+                    "source_coverage TEXT,target_coverage TEXT,edge_quality TEXT,evidence_count INTEGER,evidence_json TEXT)"
                 )
                 conn.execute(
-                    "INSERT INTO project_edges VALUES(?,?,?,?,?,?,?,?,?,?)",
+                    "CREATE TABLE project_neighborhoods(root_path TEXT PRIMARY KEY,root_kind TEXT,root_coverage TEXT,"
+                    "edge_count INTEGER,node_count INTEGER,truncated INTEGER,json TEXT,text TEXT)"
+                )
+                conn.execute(
+                    "INSERT INTO project_nodes VALUES(?,?,?,?,?)",
+                    ("blueprint", "/Game/BP.BP", "first_class", "blueprint", "/Script/Engine.Blueprint"),
+                )
+                conn.execute(
+                    "INSERT INTO project_edges VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                     tuple(edge[key] for key in (
                         "edge_id", "source_kind", "source", "relation", "target_kind", "target",
                         "source_coverage", "target_coverage", "edge_quality", "evidence_count",
-                    )),
+                    )) + (json.dumps(edge["evidence"]),),
                 )
                 conn.execute(
-                    "INSERT INTO project_neighborhoods VALUES(?,?,?)",
-                    ("/Game/BP.BP", "", json.dumps(compact_rows[0])),
+                    "INSERT INTO project_neighborhoods VALUES(?,?,?,?,?,?,?,?)",
+                    (
+                        "/Game/BP.BP", "blueprint", "first_class", 1, 2, 0,
+                        json.dumps(compact_rows[0]), "",
+                    ),
                 )
-                compact.enrich_database(conn, output, rows, max_chars=131072)
-                text = conn.execute(
-                    "SELECT text FROM project_neighborhoods WHERE root_path='/Game/BP.BP'"
-                ).fetchone()[0]
-                self.assertIn("references_vfx_asset", text)
-                self.assertIn("/Game/VFX.NS", text)
-                self.assertIn("quality=exact_reference", text)
+
+                captured = []
+
+                def capture(result_rows, fields):
+                    for row in result_rows:
+                        captured.append({field: row[field] for field in fields})
+
+                compact.query(conn, capture, "%VFX%", 20, max_chars=131072)
+                neighborhood_texts = [
+                    row["text"] for row in captured
+                    if "text" in row and "root_path" in row
+                ]
+                self.assertTrue(neighborhood_texts)
+                self.assertTrue(any("references_vfx_asset" in text for text in neighborhood_texts))
+                self.assertTrue(any("/Game/VFX.NS" in text for text in neighborhood_texts))
+                self.assertTrue(any("quality=exact_reference" in text for text in neighborhood_texts))
+                self.assertEqual(
+                    conn.execute("SELECT text FROM project_neighborhoods WHERE root_path='/Game/BP.BP'").fetchone()[0],
+                    "",
+                )
             finally:
                 conn.close()
 
