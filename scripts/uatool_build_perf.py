@@ -24,6 +24,7 @@ import time
 from pathlib import Path
 
 import uatool_bundle_perf as bundle_perf
+import uatool_sqlite_perf as sqlite_perf
 import uatool_validation_perf as validation_perf
 
 CACHE_DIR_NAME = "UnrealAssetToolBuildCache"
@@ -273,4 +274,5 @@ def install(core) -> None:
     # These are orthogonal performance policies but are installed here before
     # the composition root captures core globals, keeping one canonical CLI.
     bundle_perf.install(core)
+    sqlite_perf.install(core)
     validation_perf.install()
