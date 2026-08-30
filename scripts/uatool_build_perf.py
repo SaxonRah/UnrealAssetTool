@@ -9,8 +9,9 @@ restores them for the next invocation.
 
 When the target already has a valid, up-to-date Editor runtime manifest, building
 the whole Editor target again is unnecessary for a scanner-only source change.
-We first build only UnrealAssetTool with UBT's ForceUnity option, then fall back
-to the old full-target build if the module-only path fails.
+We first build only UnrealAssetTool with forced unity and adaptive-unity exclusion
+disabled for that isolated module build, then fall back to the old full-target
+build if the module-only path fails.
 """
 from __future__ import annotations
 
@@ -151,6 +152,12 @@ def _optimized_build_project(
     target = f"{project.stem}Editor"
     configuration = core.editor_configuration(editor)
 
+    # The staged scanner appears as a changed/untracked working set in many
+    # target projects, which causes adaptive unity to exclude every handwritten
+    # UnrealAssetTool .cpp even when -ForceUnity is present. This invocation is
+    # already restricted to -Module=UnrealAssetTool, so disable adaptive unity
+    # only for this scanner build and keep the target project's normal policy
+    # untouched for ordinary builds.
     module_command = [
         str(build_script),
         f"-Target={target} Win64 {configuration}",
@@ -159,6 +166,7 @@ def _optimized_build_project(
         "-WaitMutex",
         "-NoHotReloadFromIDE",
         "-ForceUnity",
+        "-DisableAdaptiveUnity",
     ]
 
     if _module_only_is_safe(core, project, editor, active_plugin_root):
