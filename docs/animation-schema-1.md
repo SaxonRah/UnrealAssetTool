@@ -194,7 +194,7 @@ Animation schema 1 still intentionally does **not** claim exhaustive coverage. I
 
 ## Validation order
 
-1. **Passed:** UE 5.8.2 compile and first full GASP animation scan.
+1. **Passed:** UE 5.8.2 compile and first full GASP animation scan at commit `6276ce8`.
 2. **Current:** compile and rerun GASP with curves, interactions, normalization sets, Mirror Data Table, and post-pass normalization enabled.
 3. Verify Motion Matching traversal: database -> schema -> channel -> animation / interaction -> curve / mirror facts.
 4. Run Content Examples for broad Sequence/Montage/BlendSpace/Skeleton/Chooser/IK coverage.
