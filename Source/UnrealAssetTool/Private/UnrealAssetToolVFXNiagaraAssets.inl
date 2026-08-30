@@ -1,0 +1,260 @@
+static void GetNiagaraVariableTypeFacts(
+    UStruct* VariableStruct,
+    const void* Variable,
+    UObject* Owner,
+    FString& OutType,
+    FString& OutTypeHandle,
+    FString& OutLegacyTypeDefinition)
+{
+    OutTypeHandle = ExportField(
+        VariableStruct,
+        Variable,
+        TEXT("TypeDefHandle"),
+        Owner);
+
+    // FNiagaraVariableBase::TypeDef_DEPRECATED is not the live type in UE 5.8.
+    // Preserve it only as an explicitly-labelled legacy fact. The live type is
+    // represented by TypeDefHandle and resolved by Niagara's non-reflected
+    // GetType() API, which we deliberately do not hard-link against.
+    OutLegacyTypeDefinition = ExportField(
+        VariableStruct,
+        Variable,
+        TEXT("TypeDef_DEPRECATED"),
+        Owner);
+    if (OutLegacyTypeDefinition.IsEmpty())
+    {
+        // Older/custom Niagara implementations may expose the old field under
+        // its historical name. Keep that as legacy evidence only.
+        OutLegacyTypeDefinition = ExportField(
+            VariableStruct,
+            Variable,
+            TEXT("TypeDef"),
+            Owner);
+    }
+
+    OutType = !OutTypeHandle.IsEmpty()
+        ? OutTypeHandle
+        : OutLegacyTypeDefinition;
+}
+
+static bool ScanNiagaraScript(
+    UObject* Object,
+    const FAssetData& Asset,
+    FWriters& Writers,
+    FCounts& Counts)
+{
+    TSharedRef<FJsonObject> Row = MakeShared<FJsonObject>();
+    Row->SetStringField(TEXT("script_path"), Asset.GetSoftObjectPath().ToString());
+    Row->SetStringField(TEXT("package_name"), Asset.PackageName.ToString());
+    Row->SetStringField(TEXT("usage"), ExportField(Object, TEXT("Usage")));
+    Row->SetStringField(TEXT("usage_id"), ExportField(Object, TEXT("UsageId")));
+    Row->SetStringField(TEXT("exposed_version"), ExportField(Object, TEXT("ExposedVersion")));
+    Row->SetNumberField(TEXT("version_count"), CountArray(Object->GetClass(), Object, TEXT("VersionData")));
+    if (!Writers.NiagaraScripts.Write(Row))
+    {
+        return false;
+    }
+    ++Counts.NiagaraScripts;
+    return true;
+}
+
+static bool ScanNiagaraDataChannel(
+    UObject* Object,
+    const FAssetData& Asset,
+    FWriters& Writers,
+    FCounts& Counts,
+    TSet<FString>& SeenStateOwners)
+{
+    const FString AssetPath = Asset.GetSoftObjectPath().ToString();
+    UObject* DataChannel = GetObjectField(Object, TEXT("DataChannel"));
+    int32 VariableCount = 0;
+
+    if (DataChannel)
+    {
+        // UE 5.8 uses ChannelVariables. Keep Variables as a reflection fallback
+        // for older/custom Niagara implementations without hard-linking Niagara.
+        FArrayProperty* Variables = FindArrayField(
+            DataChannel->GetClass(),
+            TEXT("ChannelVariables"),
+            TEXT("Variables"));
+        const FStructProperty* VariableStruct = Variables
+            ? CastField<FStructProperty>(Variables->Inner)
+            : nullptr;
+        const void* ValuePtr = Variables
+            ? Variables->ContainerPtrToValuePtr<void>(DataChannel)
+            : nullptr;
+
+        if (Variables && VariableStruct && ValuePtr)
+        {
+            FScriptArrayHelper Helper(Variables, ValuePtr);
+            VariableCount = Helper.Num();
+
+            for (int32 Index = 0; Index < Helper.Num(); ++Index)
+            {
+                const void* Variable = Helper.GetRawPtr(Index);
+                FString Type;
+                FString TypeHandle;
+                FString LegacyTypeDefinition;
+                GetNiagaraVariableTypeFacts(
+                    VariableStruct->Struct,
+                    Variable,
+                    DataChannel,
+                    Type,
+                    TypeHandle,
+                    LegacyTypeDefinition);
+
+                const FString Name = GetNameField(
+                    VariableStruct->Struct,
+                    Variable,
+                    TEXT("Name"),
+                    DataChannel);
+
+                // FNiagaraDataChannelVariable::Version is regenerated while
+                // loading the same unchanged asset in UE 5.8. It is therefore
+                // not an authored identifier. Preserve the stable reflected
+                // fields in a canonical summary instead of exporting that GUID.
+                const FString StableRawValue = FString::Printf(
+                    TEXT("Name=%s;TypeDefHandle=%s;LegacyTypeDefinition=%s"),
+                    *Name,
+                    *TypeHandle,
+                    *LegacyTypeDefinition);
+
+                TSharedRef<FJsonObject> Row = MakeShared<FJsonObject>();
+                Row->SetStringField(TEXT("data_channel_path"), AssetPath);
+                Row->SetNumberField(TEXT("variable_index"), Index);
+                Row->SetStringField(TEXT("version"), FString());
+                Row->SetStringField(TEXT("name"), Name);
+                Row->SetStringField(TEXT("type"), Type);
+                Row->SetStringField(TEXT("type_handle"), TypeHandle);
+                Row->SetStringField(TEXT("legacy_type_definition"), LegacyTypeDefinition);
+                Row->SetStringField(TEXT("raw_value"), StableRawValue);
+                Row->SetBoolField(TEXT("truncated"), false);
+                if (!Writers.NiagaraDataChannelVariables.Write(Row))
+                {
+                    return false;
+                }
+                ++Counts.NiagaraDataChannelVariables;
+            }
+        }
+
+        if (!WriteObjectState(
+            DataChannel,
+            AssetPath,
+            TEXT("niagara_data_channel_definition"),
+            Writers,
+            Counts,
+            SeenStateOwners))
+        {
+            return false;
+        }
+    }
+
+    TSharedRef<FJsonObject> Summary = MakeShared<FJsonObject>();
+    Summary->SetStringField(TEXT("data_channel_path"), AssetPath);
+    Summary->SetStringField(TEXT("package_name"), Asset.PackageName.ToString());
+    Summary->SetStringField(TEXT("definition_path"), DataChannel ? DataChannel->GetPathName() : FString());
+    Summary->SetStringField(TEXT("definition_class"), DataChannel ? DataChannel->GetClass()->GetPathName() : FString());
+    Summary->SetNumberField(TEXT("variable_count"), VariableCount);
+    if (!Writers.NiagaraDataChannels.Write(Summary))
+    {
+        return false;
+    }
+    ++Counts.NiagaraDataChannels;
+    return true;
+}
+
+static bool ScanNiagaraParameterCollection(
+    UObject* Object,
+    const FAssetData& Asset,
+    FWriters& Writers,
+    FCounts& Counts,
+    TSet<FString>& SeenStateOwners)
+{
+    const FString AssetPath = Asset.GetSoftObjectPath().ToString();
+    FArrayProperty* Parameters = FindArrayField(Object->GetClass(), TEXT("Parameters"));
+    const FStructProperty* ParameterStruct = Parameters
+        ? CastField<FStructProperty>(Parameters->Inner)
+        : nullptr;
+    const void* ValuePtr = Parameters
+        ? Parameters->ContainerPtrToValuePtr<void>(Object)
+        : nullptr;
+
+    int32 ParameterCount = 0;
+    if (Parameters && ParameterStruct && ValuePtr)
+    {
+        FScriptArrayHelper Helper(Parameters, ValuePtr);
+        ParameterCount = Helper.Num();
+
+        for (int32 Index = 0; Index < Helper.Num(); ++Index)
+        {
+            const void* Parameter = Helper.GetRawPtr(Index);
+            FString Type;
+            FString TypeHandle;
+            FString LegacyTypeDefinition;
+            GetNiagaraVariableTypeFacts(
+                ParameterStruct->Struct,
+                Parameter,
+                Object,
+                Type,
+                TypeHandle,
+                LegacyTypeDefinition);
+
+            bool bTruncated = false;
+            TSharedRef<FJsonObject> Row = MakeShared<FJsonObject>();
+            Row->SetStringField(TEXT("collection_path"), AssetPath);
+            Row->SetNumberField(TEXT("parameter_index"), Index);
+            Row->SetStringField(TEXT("name"), GetNameField(
+                ParameterStruct->Struct,
+                Parameter,
+                TEXT("Name"),
+                Object));
+            Row->SetStringField(TEXT("type"), Type);
+            Row->SetStringField(TEXT("type_handle"), TypeHandle);
+            Row->SetStringField(TEXT("legacy_type_definition"), LegacyTypeDefinition);
+            Row->SetStringField(
+                TEXT("raw_value"),
+                ExportProperty(Parameters->Inner, Parameter, Object, bTruncated));
+            Row->SetBoolField(TEXT("truncated"), bTruncated);
+            if (!Writers.NiagaraParameterCollectionParameters.Write(Row))
+            {
+                return false;
+            }
+            ++Counts.NiagaraParameterCollectionParameters;
+        }
+    }
+
+    UObject* SourceCollection = GetObjectField(Object, TEXT("SourceMaterialCollection"));
+    if (!SourceCollection)
+    {
+        SourceCollection = GetObjectField(Object, TEXT("SourceCollection"));
+    }
+    UObject* DefaultInstance = GetObjectField(Object, TEXT("DefaultInstance"));
+
+    TSharedRef<FJsonObject> Summary = MakeShared<FJsonObject>();
+    Summary->SetStringField(TEXT("collection_path"), AssetPath);
+    Summary->SetStringField(TEXT("package_name"), Asset.PackageName.ToString());
+    Summary->SetStringField(TEXT("namespace"), ExportField(Object, TEXT("Namespace")));
+    Summary->SetNumberField(TEXT("parameter_count"), ParameterCount);
+    Summary->SetStringField(TEXT("source_collection_path"), SourceCollection ? SourceCollection->GetPathName() : FString());
+    Summary->SetStringField(TEXT("source_collection_class"), SourceCollection ? SourceCollection->GetClass()->GetPathName() : FString());
+    Summary->SetStringField(TEXT("default_instance_path"), DefaultInstance ? DefaultInstance->GetPathName() : FString());
+    Summary->SetStringField(TEXT("default_instance_class"), DefaultInstance ? DefaultInstance->GetClass()->GetPathName() : FString());
+    if (!Writers.NiagaraParameterCollections.Write(Summary))
+    {
+        return false;
+    }
+    ++Counts.NiagaraParameterCollections;
+
+    if (DefaultInstance && !WriteObjectState(
+        DefaultInstance,
+        AssetPath,
+        TEXT("niagara_parameter_collection_default_instance"),
+        Writers,
+        Counts,
+        SeenStateOwners))
+    {
+        return false;
+    }
+
+    return true;
+}
