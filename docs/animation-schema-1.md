@@ -140,7 +140,7 @@ Deep family-specific Chooser/IK normalization remains evidence-driven follow-up 
 
 ## GASP validation — UE 5.8.2
 
-The Game Animation Sample regression corpus has now completed the base and deep animation passes successfully.
+The Game Animation Sample regression corpus has completed the base and deep animation passes successfully.
 
 Validated counts:
 
