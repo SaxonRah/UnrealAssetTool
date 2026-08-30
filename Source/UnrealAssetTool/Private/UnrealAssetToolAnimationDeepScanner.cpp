@@ -6,8 +6,10 @@
 #include "Animation/MirrorDataTable.h"
 #include "Curves/RichCurve.h"
 #include "Dom/JsonObject.h"
+#include "Dom/JsonValue.h"
 #include "HAL/FileManager.h"
 #include "Interfaces/IPluginManager.h"
+#include "Math/UnrealMathUtility.h"
 #include "Misc/CommandLine.h"
 #include "Misc/CoreDelegates.h"
 #include "Misc/EngineVersion.h"
@@ -62,6 +64,7 @@ struct FCounts
 {
     int64 Curves = 0;
     int64 CurveKeys = 0;
+    int64 NonFiniteCurveValues = 0;
     int64 InteractionAssets = 0;
     int64 InteractionItems = 0;
     int64 NormalizationSets = 0;
@@ -177,6 +180,26 @@ static FString ExportStructField(UStruct* Struct, const void* StructValue, const
     return ExportProperty(Property, ValuePtr, Owner, bTruncated);
 }
 
+static void SetFiniteCurveNumberField(
+    const TSharedRef<FJsonObject>& Row,
+    const TCHAR* FieldName,
+    const double Value,
+    FCounts& Counts)
+{
+    if (FMath::IsFinite(Value))
+    {
+        Row->SetNumberField(FieldName, Value);
+        return;
+    }
+
+    Row->SetField(FieldName, MakeShared<FJsonValueNull>());
+    const FString Marker = FMath::IsNaN(Value)
+        ? TEXT("nan")
+        : (Value < 0.0 ? TEXT("-inf") : TEXT("+inf"));
+    Row->SetStringField(FString(FieldName) + TEXT("_non_finite"), Marker);
+    ++Counts.NonFiniteCurveValues;
+}
+
 static bool WriteRichCurveKeys(
     const FString& AssetPath,
     const FString& CurveName,
@@ -196,15 +219,15 @@ static bool WriteRichCurveKeys(
         Row->SetStringField(TEXT("curve_type"), CurveType);
         Row->SetStringField(TEXT("component"), Component);
         Row->SetNumberField(TEXT("key_index"), KeyIndex);
-        Row->SetNumberField(TEXT("time"), Key.Time);
-        Row->SetNumberField(TEXT("value"), Key.Value);
+        SetFiniteCurveNumberField(Row, TEXT("time"), Key.Time, Counts);
+        SetFiniteCurveNumberField(Row, TEXT("value"), Key.Value, Counts);
         Row->SetNumberField(TEXT("interp_mode"), static_cast<int32>(Key.InterpMode.GetValue()));
         Row->SetNumberField(TEXT("tangent_mode"), static_cast<int32>(Key.TangentMode.GetValue()));
         Row->SetNumberField(TEXT("tangent_weight_mode"), static_cast<int32>(Key.TangentWeightMode.GetValue()));
-        Row->SetNumberField(TEXT("arrive_tangent"), Key.ArriveTangent);
-        Row->SetNumberField(TEXT("leave_tangent"), Key.LeaveTangent);
-        Row->SetNumberField(TEXT("arrive_tangent_weight"), Key.ArriveTangentWeight);
-        Row->SetNumberField(TEXT("leave_tangent_weight"), Key.LeaveTangentWeight);
+        SetFiniteCurveNumberField(Row, TEXT("arrive_tangent"), Key.ArriveTangent, Counts);
+        SetFiniteCurveNumberField(Row, TEXT("leave_tangent"), Key.LeaveTangent, Counts);
+        SetFiniteCurveNumberField(Row, TEXT("arrive_tangent_weight"), Key.ArriveTangentWeight, Counts);
+        SetFiniteCurveNumberField(Row, TEXT("leave_tangent_weight"), Key.LeaveTangentWeight, Counts);
         if (!Writers.CurveKeys.Write(Row))
         {
             return false;
@@ -462,6 +485,7 @@ static bool SaveManifest(const FString& OutputDir, const FCounts& Counts, bool b
     TSharedRef<FJsonObject> C = MakeShared<FJsonObject>();
     C->SetNumberField(TEXT("animation_curves"), Counts.Curves);
     C->SetNumberField(TEXT("animation_curve_keys"), Counts.CurveKeys);
+    C->SetNumberField(TEXT("animation_curve_non_finite_values"), Counts.NonFiniteCurveValues);
     C->SetNumberField(TEXT("pose_search_interaction_assets"), Counts.InteractionAssets);
     C->SetNumberField(TEXT("pose_search_interaction_items"), Counts.InteractionItems);
     C->SetNumberField(TEXT("pose_search_normalization_sets"), Counts.NormalizationSets);
@@ -617,9 +641,10 @@ static bool RunDeepScan(FString& OutError)
         return false;
     }
     UE_LOG(LogTemp, Display,
-        TEXT("UnrealAssetToolAnimationDeep: curves=%lld curve_keys=%lld interactions=%lld normalization_sets=%lld mirror_tables=%lld"),
+        TEXT("UnrealAssetToolAnimationDeep: curves=%lld curve_keys=%lld non_finite_curve_values=%lld interactions=%lld normalization_sets=%lld mirror_tables=%lld"),
         Counts.Curves,
         Counts.CurveKeys,
+        Counts.NonFiniteCurveValues,
         Counts.InteractionAssets,
         Counts.NormalizationSets,
         Counts.MirrorDataTables);
