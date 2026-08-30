@@ -3,7 +3,7 @@
 
 This module never invents a target from names. It joins already-extracted facts:
 placed actors/components, Blueprint relations, Asset Registry dependencies, and
-specialist AI/PCG/material/Blueprint streams.
+specialist AI/PCG/material/Blueprint/animation streams.
 """
 
 from __future__ import annotations
@@ -63,18 +63,48 @@ def _material_kind(row: dict) -> tuple[str, str]:
     return target_kind, "references_material"
 
 
+def _animation_relation(kind: str) -> str:
+    kind = str(kind or "")
+    if kind == "skeleton":
+        return "references_skeleton"
+    if kind in {"anim_sequence", "anim_montage", "blend_space", "pose_asset"}:
+        return "references_animation_asset"
+    if kind == "pose_search_database":
+        return "references_pose_search_database"
+    if kind == "pose_search_schema":
+        return "references_pose_search_schema"
+    if kind == "pose_search_interaction_asset":
+        return "references_pose_search_interaction_asset"
+    if kind == "pose_search_normalization_set":
+        return "references_pose_search_normalization_set"
+    if kind == "mirror_data_table":
+        return "references_mirror_data_table"
+    if kind == "chooser_table":
+        return "references_chooser_table"
+    if kind == "proxy_table":
+        return "references_proxy_table"
+    if kind == "proxy_asset":
+        return "references_proxy_asset"
+    if kind == "ik_rig":
+        return "references_ik_rig"
+    if kind == "ik_retargeter":
+        return "references_ik_retargeter"
+    return "references_animation_asset"
+
+
 def derive(output, rows) -> list[dict]:
     """Return deterministic world-to-system bridge relations."""
 
     targets: dict[str, tuple[str, str, str]] = {}
     package_targets: dict[str, set[tuple[str, str, str]]] = collections.defaultdict(set)
 
-    def register(path: str, target_kind: str, relation: str) -> None:
+    def register(path: str, target_kind: str, relation: str, *, package_join: bool = True) -> None:
         path = str(path or "")
         if not path:
             return
         targets[path] = (path, target_kind, relation)
-        package_targets[_package_from_object_path(path)].add((path, target_kind, relation))
+        if package_join:
+            package_targets[_package_from_object_path(path)].add((path, target_kind, relation))
 
     blueprints = list(rows(output / "blueprints.jsonl"))
     for blueprint in blueprints:
@@ -101,6 +131,24 @@ def derive(output, rows) -> list[dict]:
     for material in rows(output / "materials.jsonl"):
         target_kind, relation = _material_kind(material)
         register(str(material.get("material_path", "")), target_kind, relation)
+
+    # Animation schema targets participate in exact world/property and Blueprint
+    # relation joins, but deliberately do NOT participate in package dependency
+    # resolution. Animation packages are numerous and package-level fan-out would
+    # obscure stronger authored object references.
+    for row in rows(output / "animation_assets.jsonl"):
+        path = str(row.get("animation_path", ""))
+        kind = str(row.get("animation_kind", "animation_asset"))
+        register(path, kind, _animation_relation(kind), package_join=False)
+
+    deep_animation_streams = (
+        ("pose_search_interaction_assets.jsonl", "interaction_path", "pose_search_interaction_asset"),
+        ("pose_search_normalization_sets.jsonl", "normalization_set_path", "pose_search_normalization_set"),
+        ("mirror_data_tables.jsonl", "mirror_table_path", "mirror_data_table"),
+    )
+    for filename, path_key, kind in deep_animation_streams:
+        for row in rows(output / filename):
+            register(str(row.get(path_key, "")), kind, _animation_relation(kind), package_join=False)
 
     # A package dependency resolves to an exact specialist asset only when that
     # package maps to one authored specialist entity. Ambiguous packages remain
@@ -247,9 +295,9 @@ def derive(output, rows) -> list[dict]:
 
     # World-package dependencies provide a factual map-level bridge for authored
     # programs (especially standalone PCG volumes) when no actor-specific raw
-    # property exposes the graph asset. Materials are deliberately excluded here
-    # because map-package material dependency fan-out is too broad for a useful
-    # semantic bridge; actor/component material references remain precise above.
+    # property exposes the graph asset. Materials and animation assets are
+    # deliberately excluded here because package-level fan-out is too broad for
+    # a useful semantic bridge; actor/component/property references remain exact.
     program_target_kinds = {
         "blueprint",
         "animation_blueprint",
