@@ -163,7 +163,7 @@ static FString ExportProperty(
     return Value;
 }
 
-static FString ExportField(UStruct* Struct, const void* StructValue, const FName FieldName, UObject* Owner)
+static FString ExportField(const UStruct* Struct, const void* StructValue, const FName FieldName, UObject* Owner)
 {
     if (!Struct || !StructValue)
     {
@@ -200,7 +200,7 @@ static FString ExportFirstField(UObject* Object, std::initializer_list<const TCH
     return FString();
 }
 
-static FString ExportFirstField(UStruct* Struct, const void* Value, UObject* Owner, std::initializer_list<const TCHAR*> Names)
+static FString ExportFirstField(const UStruct* Struct, const void* Value, UObject* Owner, std::initializer_list<const TCHAR*> Names)
 {
     if (!Struct || !Value)
     {
@@ -217,7 +217,7 @@ static FString ExportFirstField(UStruct* Struct, const void* Value, UObject* Own
     return FString();
 }
 
-static UObject* GetObjectField(UStruct* Struct, const void* StructValue, const FName FieldName)
+static UObject* GetObjectField(const UStruct* Struct, const void* StructValue, const FName FieldName)
 {
     if (!Struct || !StructValue)
     {
@@ -253,7 +253,7 @@ static UObject* GetFirstObjectField(UObject* Object, std::initializer_list<const
     return nullptr;
 }
 
-static UObject* GetFirstObjectField(UStruct* Struct, const void* Value, std::initializer_list<const TCHAR*> Names)
+static UObject* GetFirstObjectField(const UStruct* Struct, const void* Value, std::initializer_list<const TCHAR*> Names)
 {
     if (!Struct || !Value)
     {
@@ -269,7 +269,7 @@ static UObject* GetFirstObjectField(UStruct* Struct, const void* Value, std::ini
     return nullptr;
 }
 
-static FString GetNameField(UStruct* Struct, const void* StructValue, const FName FieldName, UObject* Owner)
+static FString GetNameField(const UStruct* Struct, const void* StructValue, const FName FieldName, UObject* Owner)
 {
     if (!Struct || !StructValue)
     {
@@ -289,7 +289,7 @@ static FString GetNameField(UStruct* Struct, const void* StructValue, const FNam
     return Value;
 }
 
-static int32 GetArrayCount(UStruct* Struct, const void* StructValue, const FName FieldName)
+static int32 GetArrayCount(const UStruct* Struct, const void* StructValue, const FName FieldName)
 {
     if (!Struct || !StructValue)
     {
@@ -383,7 +383,7 @@ static FString KindForLoadedObject(UObject* Object, const FString& ClassPath)
 
     if (UDataTable* Table = Cast<UDataTable>(Object))
     {
-        if (UScriptStruct* RowStruct = Table->GetRowStruct())
+        if (const UScriptStruct* RowStruct = Table->GetRowStruct())
         {
             const FString RowStructPath = RowStruct->GetPathName();
             if (RowStructPath.Contains(TEXT("GameplayTagTableRow")))
