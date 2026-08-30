@@ -302,6 +302,20 @@ def _read_json(path: Path) -> dict | None:
     return value if isinstance(value, dict) else None
 
 
+def _iter_jsonl(path: Path):
+    if not path.is_file():
+        return
+    with path.open("r", encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, 1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                yield json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(f"Invalid JSON in {path}:{line_number}: {exc}") from exc
+
+
 def _write_jsonl(path: Path, values: list[dict]) -> None:
     with path.open("w", encoding="utf-8", newline="\n") as handle:
         for value in values:
@@ -536,7 +550,9 @@ def query(conn, print_rows, pattern: str, limit: int) -> None:
 
 
 def read_manifest(output: Path) -> dict | None:
-    return _read_json(Path(output) / "animation_manifest.json")
+    output = Path(output)
+    prepare_output(output, _iter_jsonl)
+    return _read_json(output / "animation_manifest.json")
 
 
 def validation_error(output: Path) -> str | None:
