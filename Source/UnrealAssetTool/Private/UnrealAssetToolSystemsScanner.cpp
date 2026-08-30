@@ -16,6 +16,7 @@
 #include "Modules/ModuleManager.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
+#include "UObject/FindObjectFlags.h"
 #include "UObject/SoftObjectPtr.h"
 #include "UObject/UObjectHash.h"
 #include "UObject/UnrealType.h"
