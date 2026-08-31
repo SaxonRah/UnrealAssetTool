@@ -13,6 +13,14 @@ import json
 import os
 from pathlib import Path
 
+import uatool_animation as animation
+import uatool_animation_curve_storage as animation_curve_storage
+
+# The canonical launcher imports uatool_runtime (and therefore uatool_animation)
+# before this cleanup module. Install schema-2 curve storage behind that existing
+# animation API so callers keep one canonical launcher and one logical key model.
+animation_curve_storage.install(animation)
+
 MATERIAL_PROPERTIES_FILE = "material_properties.jsonl"
 BLUEPRINT_NODES_FILE = "blueprint_nodes.jsonl"
 BLUEPRINT_PINS_FILE = "blueprint_pins.jsonl"
@@ -165,6 +173,13 @@ def apply(output) -> dict[str, int]:
     """Apply all canonical cleanups and return removal/rewrite counts."""
     output = Path(output).expanduser().resolve()
 
+    curve_stats = animation_curve_storage.normalize_output(output)
+    if curve_stats.get("rewritten", False):
+        print(
+            "canonical cleanup: compacted animation curve keys="
+            f"{curve_stats.get('logical_keys', 0)} into blocks={curve_stats.get('blocks', 0)}"
+        )
+
     material_path = output / MATERIAL_PROPERTIES_FILE
     kept, removed_guids = _filter_jsonl_bytes(
         material_path, _is_generated_material_expression_guid
@@ -177,11 +192,18 @@ def apply(output) -> dict[str, int]:
         "material_expression_guids": removed_guids,
         "blueprint_nodes_rewritten": rewritten_nodes,
         "inline_blueprint_pins": removed_inline_pins,
+        "animation_curve_keys": int(curve_stats.get("logical_keys", 0)),
+        "animation_curve_key_blocks": int(curve_stats.get("blocks", 0)),
+        "animation_curve_keys_compacted": int(bool(curve_stats.get("rewritten", False))),
     }
 
 
 def validation_error(output) -> str | None:
     output = Path(output).expanduser().resolve()
+
+    curve_error = animation_curve_storage.manifest_validation_error(output)
+    if curve_error:
+        return curve_error
 
     material_path = output / MATERIAL_PROPERTIES_FILE
     if material_path.is_file():
