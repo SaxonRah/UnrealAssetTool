@@ -16,7 +16,7 @@ import hashlib
 import json
 from pathlib import Path
 
-SEMANTIC_SCHEMA_VERSION = 1
+SEMANTIC_SCHEMA_VERSION = 2
 DERIVED_FILES = (
     "blueprint_semantic_nodes.jsonl",
     "blueprint_semantic_edges.jsonl",
@@ -73,6 +73,11 @@ def _sid(prefix: str, *parts: str) -> str:
 
 
 # operation -> semantic_kind, primary_effect, access_kind, symbol_kind
+#
+# These are broad program semantics, not gameplay-domain interpretations. The
+# scanner already assigned every operation below from exact reflected node
+# classes/state. This table only says what role that operation plays in a
+# generic program/data-flow model.
 _OPERATION_MODEL = {
     "function_entry": ("boundary", "control", "", "function"),
     "function_result": ("boundary", "control", "", "function"),
@@ -81,14 +86,29 @@ _OPERATION_MODEL = {
     "event": ("event", "event", "", "event"),
     "variable_get": ("symbol_access", "read", "read", "variable"),
     "variable_set": ("symbol_access", "write", "write", "variable"),
+    "variable_set_ref": ("symbol_access", "write", "write", "variable"),
     "variable_reference": ("symbol_access", "reference", "reference", "variable"),
+    "property_access": ("symbol_access", "read", "read", "property_path"),
     "dynamic_cast": ("type_operation", "cast", "", "class"),
+    "cast_byte_to_enum": ("conversion", "cast", "", "enum"),
     "spawn_actor": ("construction", "spawn", "", "class"),
+    "add_component_by_class": ("construction", "construct", "", "class"),
+    "create_object": ("construction", "construct", "", "class"),
+    "create_widget": ("construction", "construct", "", "class"),
     "macro_instance": ("call", "call", "", "macro"),
+    "async_action": ("async_call", "call", "", "function"),
+    "gameplay_task_call": ("async_call", "call", "", "function"),
+    "ai_move_to": ("async_call", "call", "", "function"),
+    "mover_play_montage": ("call", "call", "", "function"),
+    "in_app_purchase_query": ("async_call", "call", "", "function"),
+    "in_app_purchase_checkout": ("async_call", "call", "", "function"),
+    "in_app_purchase_finalize": ("async_call", "call", "", "function"),
     "switch": ("control", "branch", "", ""),
     "select": ("value_operation", "select", "", ""),
     "execution_sequence": ("control", "sequence", "", ""),
     "branch": ("control", "branch", "", ""),
+    "map_for_each": ("control", "loop", "", "map"),
+    "timeline": ("control", "sequence", "", "timeline"),
     "reroute": ("flow", "passthrough", "", ""),
     "tunnel": ("boundary", "control", "", ""),
     "self": ("value_source", "value", "", "object"),
@@ -97,6 +117,37 @@ _OPERATION_MODEL = {
     "break_struct": ("structure", "decompose", "", "struct"),
     "set_fields_in_struct": ("structure", "write", "write", "struct"),
     "struct_operation": ("structure", "transform", "", "struct"),
+    "make_array": ("collection", "construct", "", "array"),
+    "array_get": ("collection", "read", "read", "array"),
+    "make_map": ("collection", "construct", "", "map"),
+    "enum_equal": ("comparison", "compare", "", "enum"),
+    "enum_not_equal": ("comparison", "compare", "", "enum"),
+    "enum_to_string": ("conversion", "convert", "", "enum"),
+    "format_text": ("value_operation", "format", "", "text"),
+    "convert_asset": ("conversion", "convert", "", "object"),
+    "load_asset": ("asset_access", "load", "read", "object"),
+    "load_asset_class": ("asset_access", "load", "read", "class"),
+    "get_class_defaults": ("type_operation", "read", "read", "class"),
+    "delegate_bind": ("delegate", "bind", "write", "delegate"),
+    "delegate_assign": ("delegate", "bind", "write", "delegate"),
+    "delegate_create": ("delegate", "construct", "", "delegate"),
+    "delegate_call": ("delegate", "call", "", "delegate"),
+    "delegate_clear": ("delegate", "clear", "write", "delegate"),
+    "input_key": ("event", "event", "", "input"),
+    "input_debug_key": ("event", "event", "", "input"),
+    "legacy_input_action": ("event", "event", "", "input_action"),
+    "enhanced_input_event": ("event", "event", "", "input_action"),
+    "enhanced_input_value": ("value_source", "read", "read", "input_action"),
+    "get_subsystem": ("value_source", "read", "read", "subsystem"),
+    "get_engine_subsystem": ("value_source", "read", "read", "subsystem"),
+    "get_editor_subsystem": ("value_source", "read", "read", "subsystem"),
+    "get_subsystem_from_player_controller": ("value_source", "read", "read", "subsystem"),
+    "data_table_row": ("data_access", "read", "read", "data_table"),
+    "evaluate_chooser": ("selection", "select", "", "chooser"),
+    "chooser_context_parameters": ("value_source", "read", "read", "chooser_context"),
+    "evaluate_proxy": ("selection", "select", "", "proxy"),
+    "evaluate_live_link_frame": ("data_access", "read", "read", "live_link"),
+    "control_rig_node": ("rig_operation", "transform", "", "rig"),
     "anim_state_machine": ("animation", "control", "", "animation_state_machine"),
     "anim_state_entry": ("animation", "control", "", "animation_state"),
     "anim_transition": ("animation", "branch", "", "animation_transition"),
@@ -128,8 +179,10 @@ def _node_model(operation: str) -> tuple[str, str, str, str, bool]:
         return kind, effect, access, symbol_kind, False
     if operation == "node":
         return "opaque", "opaque", "", "", True
-    # Scanner-recognized future operations remain classified rather than being
-    # silently demoted just because this vocabulary has not named them yet.
+    # Scanner-recognized future operations remain visible as fallback rather
+    # than being silently assigned a guessed role. Animation operation names are
+    # deliberately generic enough to retain an animation role until individually
+    # promoted above.
     if operation.startswith("anim_"):
         return "animation", "animation", "", "", False
     return "classified", "operation", "", "", False
@@ -147,10 +200,20 @@ def _target_for(node: dict, symbol_kind: str) -> tuple[str, str]:
         if not target and symbol:
             target = f"{owner}::{symbol}" if owner else symbol
         return "function", target
-    if operation in ("variable_get", "variable_set", "variable_reference"):
+    if operation in ("variable_get", "variable_set", "variable_set_ref", "variable_reference"):
         return "variable", f"{owner}::{symbol}" if owner and symbol else symbol or owner
+    if operation == "property_access":
+        return "property_path", str(sem.get("access_path", "") or symbol)
     if operation in ("event", "custom_event"):
         return "event", f"{owner}::{symbol}" if owner and symbol else symbol or owner
+    if operation in ("input_key", "input_debug_key"):
+        return "input", symbol
+    if operation in ("legacy_input_action", "enhanced_input_event", "enhanced_input_value"):
+        return "input_action", str(sem.get("input_action", "") or sem.get("input_action_name", "") or owner or symbol)
+    if operation in ("delegate_bind", "delegate_assign", "delegate_create", "delegate_call", "delegate_clear"):
+        delegate = str(sem.get("delegate_name", "") or symbol)
+        delegate_owner = str(sem.get("delegate_owner", "") or owner)
+        return "delegate", f"{delegate_owner}::{delegate}" if delegate_owner and delegate else delegate or delegate_owner
     if operation == "dynamic_cast":
         return "class", str(sem.get("target_class", "") or owner)
     if operation == "spawn_actor":
@@ -193,10 +256,22 @@ def _endpoint_relation(operation: str, access_kind: str, target_kind: str) -> st
         "event": "receives_event",
         "variable_get": "reads",
         "variable_set": "writes",
+        "variable_set_ref": "writes",
         "variable_reference": "references",
+        "property_access": "reads",
         "dynamic_cast": "casts_to",
         "spawn_actor": "spawns",
         "macro_instance": "invokes_macro",
+        "delegate_bind": "binds_delegate",
+        "delegate_assign": "binds_delegate",
+        "delegate_create": "creates_delegate",
+        "delegate_call": "calls_delegate",
+        "delegate_clear": "clears_delegate",
+        "input_key": "receives_input",
+        "input_debug_key": "receives_input",
+        "legacy_input_action": "receives_input",
+        "enhanced_input_event": "receives_input",
+        "enhanced_input_value": "reads_input",
         "make_struct": "constructs",
         "break_struct": "decomposes",
         "set_fields_in_struct": "writes",
