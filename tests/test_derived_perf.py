@@ -66,7 +66,7 @@ class DerivedPerfTest(unittest.TestCase):
         direct_compact = neighborhoods.rebuild(nodes, edges, compact=True, **kwargs)
         self.assertEqual(direct_compact, old_compact)
 
-    def test_freshness_stamp_invalidates_on_raw_or_python_change(self) -> None:
+    def test_freshness_stamp_invalidates_on_raw_or_derived_python_change_only(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             output = root / "out"
@@ -89,8 +89,14 @@ class DerivedPerfTest(unittest.TestCase):
             )
             source = scripts / "uatool_example.py"
             source.write_text("VALUE = 1\n", encoding="utf-8")
+            report_source = scripts / "uatool_blueprint_program_report.py"
+            report_source.write_text("VALUE = 1\n", encoding="utf-8")
 
             freshness.mark_fresh(output, schema_version=14, script_dir=scripts)
+            self.assertTrue(freshness.is_fresh(output, schema_version=14, script_dir=scripts))
+
+            report_source.write_text("VALUE = 2\n", encoding="utf-8")
+            os.utime(report_source, None)
             self.assertTrue(freshness.is_fresh(output, schema_version=14, script_dir=scripts))
 
             with raw.open("a", encoding="utf-8") as handle:
