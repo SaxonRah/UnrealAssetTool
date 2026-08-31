@@ -42,14 +42,25 @@ class BlueprintProgramReportTest(unittest.TestCase):
                 {"blueprint_path": bp, "graph_id": graph, "graph_name": "EventGraph", "node_id": "call"},
                 {"blueprint_path": "/Game/Other.Other", "graph_id": "x", "graph_name": "Other", "node_id": "other"},
             ])
+            write_jsonl(out / "blueprints.jsonl", [
+                {
+                    "object_path": bp,
+                    "components": [
+                        {
+                            "variable_name": "Mover",
+                            "component_class": "/Script/Mover.MoverComponent",
+                            "parent_component_or_variable": "",
+                            "attach_to": "",
+                            "is_root": False,
+                        }
+                    ],
+                }
+            ])
             write_jsonl(out / "blueprint_functions.jsonl", [
                 {"blueprint_path": bp, "graph_id": graph, "graph_name": "DoThing", "name": "DoThing", "inputs": [{"name": "Value"}], "outputs": [], "blueprint_pure": False},
             ])
             write_jsonl(out / "blueprint_events.jsonl", [
                 {"blueprint_path": bp, "graph_id": graph, "graph_name": "EventGraph", "name": "BeginPlay", "event_kind": "event", "parameters": []},
-            ])
-            write_jsonl(out / "blueprint_components.jsonl", [
-                {"blueprint_path": bp, "variable_name": "Mover", "component_class": "/Script/Mover.MoverComponent", "parent_component_or_variable": "", "attach_to": "", "is_root": False},
             ])
             write_jsonl(out / "blueprint_component_properties.jsonl", [
                 {"blueprint_path": bp, "component_name": "Mover", "property_name": "StartingMovementMode", "array_index": 0, "value": "Walking", "referenced_object_path": ""},
@@ -66,22 +77,37 @@ class BlueprintProgramReportTest(unittest.TestCase):
                 {"blueprint_path": bp, "graph_id": graph, "graph_name": "EventGraph", "block_id": "block-a", "block_index": 0},
             ])
             write_jsonl(out / "blueprint_execution_block_edges.jsonl", [])
-            write_jsonl(out / "blueprint_execution_roots.jsonl", [])
+            write_jsonl(out / "blueprint_execution_roots.jsonl", [
+                {
+                    "root_id": "root-a",
+                    "blueprint_path": bp,
+                    "graph_id": graph,
+                    "graph_name": "EventGraph",
+                    "root_node_id": "event",
+                    "root_kind": "event",
+                    "root_name": "BeginPlay",
+                    "block_id": "block-a",
+                }
+            ])
 
             built = report.build_report(out, rows, bp, statement_limit=10, property_limit=10)
             self.assertEqual(built["semantic_node_count"], 2)
             self.assertEqual(built["component_count"], 1)
             self.assertEqual(built["component_property_count"], 1)
+            self.assertEqual(built["root_count"], 1)
             self.assertEqual(built["endpoint_groups"]["calls"], ["/Script/Test.Lib:Run"])
             self.assertEqual(built["block_label"]["block-a"], "B0")
+            self.assertEqual(built["roots_by_graph"][graph][0]["root_name"], "BeginPlay")
 
             stream = io.StringIO()
             with redirect_stdout(stream):
                 report.print_report(built)
             text = stream.getvalue()
+            self.assertIn("Mover | /Script/Mover.MoverComponent", text)
             self.assertIn("Mover.StartingMovementMode = Walking", text)
             self.assertIn("DoThing(Value)", text)
             self.assertIn("calls (1)", text)
+            self.assertIn("roots: event:BeginPlay->B0", text)
             self.assertIn("B0", text)
             self.assertIn("Run(Value=1)", text)
 
