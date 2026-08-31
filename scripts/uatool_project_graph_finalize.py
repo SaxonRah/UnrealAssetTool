@@ -224,6 +224,7 @@ def _schema2_gameplay_extension(output, rows, nodes: list[dict], edges: list[dic
             "first_class",
             class_path=str(row.get("row_struct", "")),
             package_name=_package(table),
+            replace=True,
         )
         add_edge(
             str(next((n.get("node_kind") for n in extended_nodes if n.get("path") == table and n.get("root")), "data_table")),
@@ -247,6 +248,7 @@ def _schema2_gameplay_extension(output, rows, nodes: list[dict], edges: list[dic
             "curve_table_row",
             "first_class",
             package_name=_package(table),
+            replace=True,
         )
         add_edge(
             str(next((n.get("node_kind") for n in extended_nodes if n.get("path") == table and n.get("root")), "curve_table")),
