@@ -76,11 +76,22 @@ class BlueprintControlFlowTest(unittest.TestCase):
             (sequence, "B6", "B7", "then_0", "then_0"),
             (call, "B8", "B9", "then", "then"),
         ]
+        block_ids = sorted({item for edge in edges for item in (edge[1], edge[2])})
+        write_jsonl(self.output / "blueprint_execution_blocks.jsonl", [
+            {
+                "block_id": block_id,
+                "blueprint_path": self.bp,
+                "graph_id": self.graph,
+                "graph_name": "Test",
+            }
+            for block_id in block_ids
+        ])
+        # Deliberately omit graph_name here. Real GASP block-edge rows expose
+        # this shape; control-flow derivation must recover the name from blocks.
         write_jsonl(self.output / "blueprint_execution_block_edges.jsonl", [
             {
                 "blueprint_path": self.bp,
                 "graph_id": self.graph,
-                "graph_name": "Test",
                 "source_block_id": source_block,
                 "target_block_id": target_block,
                 "source_node_id": node,
@@ -94,6 +105,7 @@ class BlueprintControlFlowTest(unittest.TestCase):
         self._write_fixture()
         values = control_flow.derive(self.output, rows)
         self.assertEqual(len(values), 6)
+        self.assertEqual({value["graph_name"] for value in values}, {"Test"})
 
         by_kind: dict[str, list[dict]] = {}
         for value in values:
@@ -130,9 +142,9 @@ class BlueprintControlFlowTest(unittest.TestCase):
             control_flow.load_database(conn, self.output, rows)
             self.assertEqual(conn.execute("SELECT count(*) FROM blueprint_control_edges").fetchone()[0], 6)
             row = conn.execute(
-                "SELECT case_raw_name,case_name,selector_text FROM blueprint_control_edges WHERE control_kind='switch_case'"
+                "SELECT graph_name,case_raw_name,case_name,selector_text FROM blueprint_control_edges WHERE control_kind='switch_case'"
             ).fetchone()
-            self.assertEqual(row, ("NewEnumerator2", "Aim", "RotationMode"))
+            self.assertEqual(row, ("Test", "NewEnumerator2", "Aim", "RotationMode"))
         finally:
             conn.close()
 
