@@ -1,257 +1,132 @@
 # UnrealAssetTool
 
-**UnrealAssetTool** builds an AI-friendly structural index of an Unreal Engine project from Unreal's own serialized/editor data instead of relying on screenshots or hand-written project documentation.
+**UnrealAssetTool** builds an AI-friendly structural index of an Unreal Engine project from Unreal's own serialized/editor data. It is intended to answer gameplay and content questions from authored facts rather than screenshots, guessed relationships, or hand-maintained project documentation.
 
-> Unreal Engine already uses **UAT** for **Unreal AutomationTool**. The project is `UnrealAssetTool`; the command-line launcher is `uatool`.
+> Unreal Engine already uses **UAT** for **Unreal AutomationTool**. This project is `UnrealAssetTool`; the command-line launcher is `uatool`.
 
 ## Current baseline
 
-**UnrealAssetTool 0.7.0 development line**
-
+- release line: **0.7.0**
 - Unreal target: **UE 5.8+**
 - validated engine: **UE 5.8.2**
 - structural scanner schema: **12**
 - world scanner schema: **12**
-- animation scanner schema: **1** — currently under PR #5 validation
-- derived schema: **10**
-- canonical storage: sharded JSONL emitted from Unreal-authored data
-- derived storage/retrieval: regenerable JSONL views plus SQLite
+- animation scanner schema: **1**
+- VFX scanner schema: **1**
+- systems scanner schema: **1**
+- derived schema: **14**
 
-The schema numbers intentionally describe independent layers:
-
-- **structural schema 12** — project/assets/Blueprint/AI/PCG/material facts;
-- **world schema 12** — maps, actors, components, authored instance state, references, Data Layers and World Partition descriptors;
-- **animation schema 1** — animation assets, Skeletons, Motion Matching/Pose Search, curves and animation-adjacent assets;
-- **derived schema 10** — deterministic Python reconstruction and cross-system joins.
-
-Primary regression corpora are Game Animation Sample, Cropout Sample Project and Content Examples, with StackOBot used as a targeted World Partition/LevelInstance/PCG probe.
-
-## Goal
-
-Given a `.uproject`, UnrealAssetTool should let an AI move from a gameplay question to authoritative authored facts without loading the entire project into context.
-
-Examples:
-
-- Which maps, actors, components, Blueprints, materials, AI graphs and PCG graphs exist?
-- Where is a Blueprint instantiated in the playable world?
-- What function/event/graph implements an actor's behavior?
-- What feeds a Branch, setter, function argument or return value?
-- Which internal function does a call target, and how do caller pins map to callee parameters?
-- How do Animation Blueprint state machines and transitions connect?
-- Which Motion Matching database/schema/channels and source animations drive a character?
-- Which animation curves, notifies, sync markers, Montage sections or BlendSpace samples are authored?
-- Which StateTree, EQS query, PCG graph, material, AnimBP or referenced Blueprint is associated with a placed actor/component?
-- Which LevelInstance/PackedLevelActor instantiates which child world?
-- What is known exactly, and what is only known through a generic package dependency?
-
-The output is deliberately **facts-first, loss-minimizing, sharded, deterministic and regenerable**.
+The schemas are independently versioned because they represent different extraction lifecycles. A change to a Python-only derived view does not require renumbering canonical Unreal scanner output.
 
 ## Architecture in one sentence
 
-**Unreal extracts authoritative facts; Python derives deterministic program/world/system relationships; SQLite makes them easy to retrieve.**
+**Unreal extracts exact authored facts; Python derives deterministic cross-system relationships; SQLite and bounded project neighborhoods make the result retrievable.**
 
-See:
+Three rules drive the design:
 
-- [Architecture](docs/architecture.md)
-- [Schema reference](docs/schema.md)
-- [Subsystem coverage matrix](docs/coverage.md)
-- [Animation schema 1](docs/animation-schema-1.md)
-- [Cross-project workflow](docs/cross-project-workflow.md)
+1. If Unreal can state a fact exactly, store it canonically first.
+2. Derived relationships must be regenerable from compatible canonical facts.
+3. Generic Asset Registry package dependencies must never be presented as equivalent to first-class semantic references.
 
-## Current first-class coverage
+## First-class coverage
 
-### Project / Asset Registry
+UnrealAssetTool currently has dedicated extraction for:
 
-- physical project/source/config/document files with bounded text chunks;
-- Asset Registry asset identity, class, tags, package paths and direct package dependencies.
+- project/source/config files and Asset Registry identity/dependencies;
+- Blueprint/K2, Animation Blueprint graphs, UMG, Control Rig/RigVM;
+- Behavior Trees, Blackboards, EQS and StateTree;
+- PCG graphs;
+- Materials, Material Instances and Material Functions;
+- worlds, actors, components, Data Layers and World Partition descriptors;
+- animation assets, Skeletons, curves, Montages, BlendSpaces, Pose Search, Pose Assets, Chooser/Proxy data, IK Rig and IK Retargeter;
+- Niagara, Niagara Stateless and legacy Cascade VFX;
+- LevelSequence/Sequencer structure;
+- MetaSound, SoundCue and core audio assets;
+- Enhanced Input and selected Common Input/gameplay-data assets;
+- typed project-level graph edges and bounded neighborhoods with per-hop provenance/coverage quality.
 
-Asset Registry data is the universal fallback: unsupported asset families still exist in the index, but that does not mean their internal authored structure is understood.
+Unsupported asset families still appear through Asset Registry identity/tags/package dependencies. Their presence in `assets.jsonl` does **not** imply that UnrealAssetTool understands their internal authored structure.
 
-### Blueprint / K2 / UMG / Animation Blueprint
+See [docs/coverage.md](docs/coverage.md) for the maintained coverage matrix and remaining gaps.
 
-Canonical extraction includes:
+## Output model
 
-- Blueprint identity, inheritance, interfaces, variables, SCS components and defaults;
-- every graph, node, pin and exact execution/data edge;
-- reflected node properties and normalized UObject references;
-- common K2 and AnimGraph semantic operations;
-- Timelines/tracks/keys;
-- UMG widget trees, bindings and animations;
-- AnimGraph property bindings and state-machine topology;
-- Control Rig editor graphs.
-
-Derived reconstruction includes normalized functions/events, call edges, internal parameter bindings, bounded upstream data provenance, execution blocks, Blueprint relations/context/summaries and Control Rig editor-node -> RigVM joins.
-
-Unknown/plugin-specific graph nodes remain preserved generically rather than guessed from display text.
-
-### Control Rig / RigVM
-
-Normal scans preserve a compact RigVM model:
-
-- graph/node objects;
-- pins;
-- links;
-- UObject relationships/references;
-- editor Control Rig node -> model-node joins.
-
-The extremely large raw RigVM reflection stream remains opt-in with `--include-raw-rigvm-properties`.
-
-### AI gameplay systems
-
-Dedicated canonical extraction exists for Behavior Trees, Blackboards, EQS and StateTree, including their hierarchy, settings, transitions/bindings and linked assets.
-
-### PCG
-
-Dedicated extraction includes PCG graphs, nodes, pins, exact graph edges, settings/properties, graph parameters, real subgraph relationships and derived relations/context/summaries.
-
-### Materials
-
-Materials are already **first-class**, not a coverage gap.
-
-Dedicated extraction includes Materials, Material Instances and Material Functions; expression objects; exact expression/input wiring and root outputs; reflected settings; parameters; texture/function references; and derived visual relations/context.
-
-### Worlds, actors and placement
-
-World schema 12 includes:
-
-- world/map identity;
-- persistent and classic streaming levels;
-- loaded actors, GUIDs, labels, classes, folders, tags, transforms, ownership and attachments;
-- components and component attachments/transforms;
-- authored instance property overrides;
-- hard/soft object references;
-- Data Layers;
-- World Partition metadata and actor descriptors;
-- descriptor parent/reference GUID relationships.
-
-Derived world relations/context/summaries add world -> actor/component relationships, actor -> Blueprint placement, attachments/ownership, Data Layer membership and LevelInstance/PackedLevelActor -> source-world relationships.
-
-### World-to-system stitching
-
-Derived schema 10 adds `world_system_relations.jsonl`, bridging authored placement to specialist models such as Blueprint, AnimBP, Control Rig, UMG, Behavior Tree, Blackboard, EQS, StateTree, PCG and materials.
-
-Every bridge keeps explicit evidence; multiple proofs are aggregated rather than duplicated.
-
-### Animation schema 1
-
-Animation schema 1 is currently under validation on Game Animation Sample and adds dedicated canonical streams for:
-
-- AnimSequence and sequence-base assets;
-- notifies / notify states and timing;
-- authored sync markers;
-- Montage sections, slots and animation segments;
-- BlendSpace/BlendSpace1D/AimOffset authored axes and samples;
-- Skeleton bone hierarchy/reference transforms and sockets;
-- float/transform animation curves and individual `FRichCurveKey` data;
-- Pose Search databases, schemas, feature channels and role/Skeleton mappings;
-- Pose Search Interaction Assets and multi-role items;
-- Pose Search Normalization Sets and database membership;
-- Mirror Data Tables and row mappings;
-- reflection-backed Chooser, ProxyAsset/ProxyTable, IK Rig and IK Retargeter facts.
-
-Pose Search/Chooser/IK support deliberately avoids hard optional-plugin dependencies where possible.
-
-The first UE 5.8.2 GASP schema-1 run passed and established 155 Pose Search databases, 33 schemas, 74 channels and 2,138 database source rows with exact count/link invariants. The current branch is validating the deeper curve/interaction/normalization/mirror pass before the schema is called stable.
-
-See [docs/animation-schema-1.md](docs/animation-schema-1.md).
-
-## Important remaining coverage gaps
-
-The largest current gaps after animation schema 1 are:
-
-1. **Niagara and legacy Cascade VFX** — systems, emitters, stacks/modules, renderers, parameters, events and data interfaces;
-2. **Sequencer** — bindings, tracks, sections, channels/keyframes, subsequences and event/camera/animation/VFX/audio references;
-3. **MetaSounds and audio graphs** — MetaSound graph topology plus SoundCue/routing assets;
-4. **Enhanced Input/common gameplay data** — InputAction, InputMappingContext, DataTables and project-wide Gameplay Tag semantics;
-5. selected mesh/physics/rendering/plugin assets where their internals materially affect gameplay understanding.
-
-Animation also still has depth work such as richer PoseAsset, Chooser/Proxy and IK Rig/Retarget semantics. See [docs/coverage.md](docs/coverage.md) for the maintained matrix.
-
-## Repository layout
+A normal scan writes target-project-local output:
 
 ```text
-UnrealAssetTool/
-  UnrealAssetTool.uplugin
-  Source/
-    UnrealAssetTool/
-      UnrealAssetTool.Build.cs
-      Public/
-        UnrealAssetToolCommandlet.h
-        UnrealAssetToolWorldCommandlet.h
-      Private/
-        UnrealAssetToolModule.cpp
-        UnrealAssetToolCommandlet.cpp
-        UnrealAssetToolWorldCommandlet.cpp
-        UnrealAssetToolAnimationScanner.cpp
-        UnrealAssetToolAnimationDeepScanner.cpp
-  scripts/
-    uatool.py
-    uatool_core.py
-    uatool_world_stitch.py
-    uatool_animation.py
-  docs/
-    architecture.md
-    schema.md
-    coverage.md
-    animation-schema-1.md
-    cross-project-workflow.md
+<Project>/.uatool/
+<Project>/<ProjectName>.uatool.zip
 ```
 
-## Recommended workflow: one canonical checkout
+The `.uatool` directory contains canonical JSONL, deterministic derived JSONL, manifests and a regenerable `uat.db` SQLite database. The upload ZIP contains the portable JSON/manifests but omits the SQLite cache.
 
-Keep one canonical UnrealAssetTool checkout and use its launcher against any target `.uproject`.
-
-Example checkout:
+Important schema layers:
 
 ```text
-E:\TheDigitalGame\ue\GameAnimationSample\Plugins\UnrealAssetTool
+manifest.json             structural schema 12 + derived schema 14
+world_manifest.json       world schema 12
+animation_manifest.json   animation schema 1
+vfx_manifest.json         VFX schema 1
+systems_manifest.json     systems schema 1
 ```
 
-Run a scan:
+Derived schema 14 includes:
+
+```text
+project_nodes.jsonl
+project_edges.jsonl
+project_neighborhoods.jsonl
+```
+
+`project_edges.jsonl` is authoritative for typed project-graph relationships and provenance. Neighborhoods store compact references to those edges instead of duplicating full evidence payloads.
+
+## Quick start
+
+Keep one canonical checkout and run its launcher against any target `.uproject`.
 
 ```powershell
+cd "E:\TheDigitalGame\ue\GameAnimationSample\Plugins\UnrealAssetTool"
+
 python scripts\uatool.py scan `
     "E:\TheDigitalGame\ue\GameAnimationSample\GameAnimationSample.uproject" `
     --editor "E:\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Win64-DebugGame-Cmd.exe"
 ```
 
-The same checkout can scan Cropout, Content Examples or another target project. For external targets the launcher temporarily stages only the plugin descriptor and `Source/` under the target project's `Plugins/UnrealAssetTool`, builds/scans through Unreal's normal project-plugin path, then restores/removes the temporary stage.
+For an external target, the launcher temporarily stages the canonical descriptor and `Source/` below that project's `Plugins/UnrealAssetTool`, builds/runs it as a normal project plugin, then removes the temporary stage. Generated staged `Binaries/` and `Intermediate/` are preserved under the target's `Saved/UnrealAssetToolBuildCache` so repeated builds remain incremental.
 
 See [docs/cross-project-workflow.md](docs/cross-project-workflow.md).
 
-## Build behavior
+## Commands
 
-Engine selection is explicit. Pass the exact editor executable:
+### Build only
 
 ```powershell
 python scripts\uatool.py build `
-    "E:\Path\MyProject.uproject" `
+    "E:\Path\Project.uproject" `
     --editor "E:\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Win64-DebugGame-Cmd.exe"
 ```
 
-For standard engine layouts, `uatool` derives `Engine\Build\BatchFiles\Build.bat` from that editor path.
+When the target Editor runtime manifest is current, the launcher builds only the `UnrealAssetTool` module with unity enabled. If target-owned native/build inputs changed, it falls back to the full Editor target.
 
-For UE 5.8 DebugGame, the launcher resolves the actual plugin DLL through generated `.modules` metadata and repairs the plugin runtime manifest with the target project's BuildId rather than assuming one hard-coded filename.
-
-## Scan
+### Scan
 
 ```powershell
 python scripts\uatool.py scan `
-    "E:\Path\MyProject.uproject" `
+    "E:\Path\Project.uproject" `
     --editor "E:\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Win64-DebugGame-Cmd.exe"
 ```
 
 A normal scan:
 
-1. validates/builds the target Editor and UnrealAssetTool module;
-2. runs the structural commandlet;
-3. runs the world commandlet and the animation schema passes;
-4. writes canonical JSONL to `<Project>\.uatool`;
-5. runs deterministic derived reconstruction;
-6. builds `<Project>\.uatool\uat.db`;
-7. creates `<ProjectName>.uatool.zip` beside the `.uproject`.
+1. validates/builds the target and plugin module;
+2. runs structural extraction;
+3. runs the world process, which also executes animation, VFX and systems passes;
+4. validates raw manifests;
+5. performs deterministic derivation and canonical cleanup;
+6. builds `uat.db`;
+7. creates the upload ZIP.
 
-Useful options:
+Useful scan options include:
 
 ```text
 --no-build
@@ -265,33 +140,30 @@ Useful options:
 --build-script <path>
 ```
 
-Do not use `--no-build` after C++ scanner changes unless the correct module has already been rebuilt.
+Do not use `--no-build` after C++ scanner changes unless the correct module is already built for that target.
 
-## Derived-only regeneration
+### Derived-only regeneration
 
-When canonical scanner schemas are compatible and only Python-derived logic changed:
+If canonical scanner schemas are still compatible and only Python-derived behavior changed:
 
 ```powershell
 python scripts\uatool.py derive "E:\Path\Project\.uatool"
-```
-
-Rebuild SQLite:
-
-```powershell
-python scripts\uatool.py pack "E:\Path\Project\.uatool"
-```
-
-Regenerate the compact bundle:
-
-```powershell
-python scripts\uatool.py bundle `
-    "E:\Path\Project\.uatool" `
+python scripts\uatool.py pack   "E:\Path\Project\.uatool"
+python scripts\uatool.py bundle "E:\Path\Project\.uatool" `
     --destination "E:\Path\Project\Project.uatool.zip"
 ```
 
-`pack` and `bundle` rerun deterministic derivation first. A canonical animation-schema change still requires Unreal to be run again.
+A validated freshness stamp lets `pack` and `bundle` reuse current derived output instead of rebuilding it unnecessarily.
 
-## Query
+Upload ZIPs default to **Deflate level 3**, chosen from measured UE corpus results as the best speed/size tradeoff. Override it when needed:
+
+```powershell
+$env:UATOOL_BUNDLE_LEVEL = "6"
+```
+
+Set `UATOOL_BUILD_CACHE=0` to disable the cross-project build cache for a run.
+
+### Query
 
 ```powershell
 python scripts\uatool.py query `
@@ -299,42 +171,77 @@ python scripts\uatool.py query `
     "PoseSearch"
 ```
 
-Query output includes specialist Blueprint/AI/PCG/material views, world summaries/relations/context, schema-10 world-system links, and animation/Pose Search/curve/mirroring views when animation schema 1 data is present.
+The query surface searches canonical/derived specialist tables plus typed project nodes/edges. Human-readable project-neighborhood text is reconstructed on demand from compact edge references.
 
-## Canonical vs derived rule
-
-If Unreal can state a fact exactly, store that fact canonically first.
-
-Examples:
+## Repository layout
 
 ```text
-node class
-pin type/default/link
-UFunction flags
-state transition endpoint
-asset/object reference
-actor/component transform
-World Partition descriptor GUID/reference
-material expression input
-PCG edge
-Pose Search schema/channel
-animation curve key
-Montage section
+UnrealAssetTool/
+  UnrealAssetTool.uplugin
+  Source/UnrealAssetTool/
+    UnrealAssetTool.Build.cs
+    Private/
+      UnrealAssetToolCommandlet.cpp
+      UnrealAssetToolWorldCommandlet.cpp
+      UnrealAssetToolAnimation*.cpp
+      UnrealAssetToolVFX*.cpp/.inl
+      UnrealAssetToolSystems*.cpp/.inl
+  scripts/
+    uatool.py                  # only public launcher
+    uatool_core.py
+    uatool_animation*.py
+    uatool_vfx*.py
+    uatool_systems.py
+    uatool_project_*.py
+  docs/
+  tests/
 ```
 
-Derived interpretation can then build execution blocks, call graphs, parameter bindings, data provenance, world relationships, world-to-system joins, animation relationships/context and future bounded project neighborhoods.
+Supporting modules isolate real concerns, but there is intentionally one canonical `scripts/uatool.py` entry point.
 
-Derived data must remain disposable and reproducible from compatible canonical facts whenever possible.
+## Regression corpora
 
-## Next development priorities
+The main UE 5.8.2 validation corpora are:
 
-The current coverage gate is:
+- **Game Animation Sample (GASP)** — large Blueprint/animation/Pose Search/Enhanced Input graph;
+- **Content Examples** — broad Sequencer, audio, MetaSound, VFX, materials and gameplay-data coverage;
+- **StackOBot + Niagara Examples** — World Partition/LevelInstance/PCG/VFX and cross-project build regression;
+- **Cropout Sample Project** — compact Blueprint/gameplay regression.
 
-1. finish **animation schema 1** GASP + Content Examples validation and then add derived animation relations/context;
-2. **Niagara + legacy Cascade**;
-3. **Sequencer**;
-4. **MetaSounds/audio**;
-5. **Enhanced Input/common gameplay data** where useful;
-6. **typed bounded project-level graph traversal/neighborhoods** with provenance and coverage quality on every hop.
+A scanner family is not considered stable merely because it compiles. Corpus validation checks count invariants, endpoint resolution, deterministic identities, provenance quality, unchanged prior output where applicable and representative authored examples.
 
-Traversal can evolve in parallel, but it must distinguish a first-class semantic edge from a generic Asset Registry dependency.
+## Documentation
+
+- [Architecture](docs/architecture.md)
+- [Schema reference](docs/schema.md)
+- [Coverage matrix](docs/coverage.md)
+- [Cross-project workflow](docs/cross-project-workflow.md)
+- [Build performance and bundle size](docs/build-performance-and-size.md)
+- [Animation schema 1](docs/animation-schema-1.md)
+- [VFX schema 1](docs/vfx-schema-1.md)
+- [Systems schema 1](docs/systems-schema-1.md)
+
+## Coverage policy
+
+The project-level graph deliberately carries both **edge quality** and **target coverage**.
+
+Current edge-quality classes are:
+
+```text
+exact_semantic
+exact_reference
+unique_dependency_resolution
+generic_package_dependency
+```
+
+Current coverage classes are:
+
+```text
+first_class
+first_class_depth_pending
+partial
+generic_only
+external_or_excluded
+```
+
+That distinction is essential: an exact authored Blueprint-to-Niagara reference and a generic package dependency are both useful, but they are not the same fact.
