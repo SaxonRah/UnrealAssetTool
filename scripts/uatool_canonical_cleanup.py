@@ -19,6 +19,7 @@ import uatool_animation as animation
 import uatool_animation_breadth as animation_breadth
 import uatool_animation_curve_storage as animation_curve_storage
 import uatool_animation_property_storage as animation_property_storage
+import uatool_blueprint_pin_storage as blueprint_pin_storage
 import uatool_blueprint_property_storage as blueprint_property_storage
 import uatool_pose_transform_storage as pose_transform_storage
 
@@ -26,6 +27,7 @@ import uatool_pose_transform_storage as pose_transform_storage
 # and animation modules) before this cleanup module. Install compact storage
 # behind the existing APIs so callers keep one canonical launcher and one
 # logical row model.
+blueprint_pin_storage.install(core, runtime)
 blueprint_property_storage.install(core, runtime)
 animation_curve_storage.install(animation)
 animation_property_storage.install(animation)
@@ -86,17 +88,13 @@ def _normalized_blueprint_pin_ids(path: Path) -> set[str] | None:
     if not path.is_file():
         return None
     result: set[str] = set()
-    with path.open("rb") as src:
-        for line_number, raw in enumerate(src, 1):
-            if not raw.strip():
-                continue
-            row = _decode_json_row(path, line_number, raw)
-            pin_id = str(row.get("pin_id", ""))
-            if not pin_id:
-                raise RuntimeError(f"blueprint pin missing pin_id in {path}:{line_number}")
-            if pin_id in result:
-                raise RuntimeError(f"duplicate blueprint pin_id in {path}:{line_number}: {pin_id}")
-            result.add(pin_id)
+    for row in blueprint_pin_storage.iter_logical_pins(path.parent):
+        pin_id = str(row.get("pin_id", ""))
+        if not pin_id:
+            raise RuntimeError(f"blueprint pin missing pin_id in {path}")
+        if pin_id in result:
+            raise RuntimeError(f"duplicate blueprint pin_id in {path}: {pin_id}")
+        result.add(pin_id)
     return result
 
 
@@ -217,6 +215,14 @@ def apply(output) -> dict[str, int]:
     """Apply all canonical cleanups and return removal/rewrite counts."""
     output = Path(output).expanduser().resolve()
 
+    blueprint_pin_stats = blueprint_pin_storage.normalize_output(output)
+    if blueprint_pin_stats.get("rewritten", False):
+        print(
+            "canonical cleanup: compacted Blueprint pins="
+            f"{blueprint_pin_stats.get('logical_pins', 0)} "
+            f"into blocks={blueprint_pin_stats.get('blocks', 0)}"
+        )
+
     blueprint_property_stats = blueprint_property_storage.normalize_output(output)
     if blueprint_property_stats.get("rewritten", False):
         print(
@@ -259,6 +265,9 @@ def apply(output) -> dict[str, int]:
         "material_expression_guids": removed_guids,
         "blueprint_nodes_rewritten": rewritten_nodes,
         "inline_blueprint_pins": removed_inline_pins,
+        "blueprint_pins": int(blueprint_pin_stats.get("logical_pins", 0)),
+        "blueprint_pin_blocks": int(blueprint_pin_stats.get("blocks", 0)),
+        "blueprint_pins_compacted": int(bool(blueprint_pin_stats.get("rewritten", False))),
         "blueprint_node_properties": int(blueprint_property_stats.get("logical_properties", 0)),
         "blueprint_node_property_blocks": int(blueprint_property_stats.get("blocks", 0)),
         "blueprint_node_properties_compacted": int(bool(blueprint_property_stats.get("rewritten", False))),
@@ -276,6 +285,10 @@ def apply(output) -> dict[str, int]:
 
 def validation_error(output) -> str | None:
     output = Path(output).expanduser().resolve()
+
+    blueprint_pin_error = blueprint_pin_storage.manifest_validation_error(output)
+    if blueprint_pin_error:
+        return blueprint_pin_error
 
     blueprint_property_error = blueprint_property_storage.manifest_validation_error(output)
     if blueprint_property_error:
