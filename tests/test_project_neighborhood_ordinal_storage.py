@@ -60,7 +60,7 @@ class ProjectNeighborhoodOrdinalStorageTest(unittest.TestCase):
     def test_round_trip_exact_logical_neighborhood(self) -> None:
         edges = sample_edges()
         logical = sample_neighborhood()
-        compacted = storage.compact([logical], edges)
+        compacted = storage.compact_ordinals([logical], edges)
         self.assertEqual(len(compacted), 1)
         row = compacted[0]
         self.assertEqual(row["encoding"], storage.ENCODING)
@@ -68,11 +68,28 @@ class ProjectNeighborhoodOrdinalStorageTest(unittest.TestCase):
         self.assertEqual(row["hop_edges"], [2, -1, 3])
         self.assertEqual(storage.expand(row, [edge["edge_id"] for edge in edges]), logical)
 
+    def test_public_compact_helper_remains_schema15_compatible(self) -> None:
+        logical = sample_neighborhood()
+        expanded = dict(logical)
+        expanded["text"] = "redundant"
+        expanded["hops"] = [
+            {
+                **hop,
+                "source": "ignored",
+                "relation": "ignored",
+                "evidence": [{"kind": "ignored"}],
+            }
+            for hop in logical["hops"]
+        ]
+        compacted = storage.compact([expanded])[0]
+        self.assertNotIn("text", compacted)
+        self.assertEqual(compacted, logical)
+
     def test_validation_records_independent_storage_schema(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             output = Path(temp_dir)
             edges = sample_edges()
-            compacted = storage.compact([sample_neighborhood()], edges)
+            compacted = storage.compact_ordinals([sample_neighborhood()], edges)
             write_jsonl(output / "project_edges.jsonl", edges)
             write_jsonl(output / "project_neighborhoods.jsonl", compacted)
             (output / "manifest.json").write_text(
@@ -100,7 +117,7 @@ class ProjectNeighborhoodOrdinalStorageTest(unittest.TestCase):
             "edge_id": "pedge:dddddddddddddddddddddddd",
         }
         with self.assertRaises(RuntimeError):
-            storage.compact([unknown], edges)
+            storage.compact_ordinals([unknown], edges)
 
         duplicate = sample_neighborhood()
         duplicate["hops"] = [
@@ -109,7 +126,7 @@ class ProjectNeighborhoodOrdinalStorageTest(unittest.TestCase):
         ]
         duplicate["edge_count"] = 2
         with self.assertRaises(RuntimeError):
-            storage.compact([duplicate], edges)
+            storage.compact_ordinals([duplicate], edges)
 
         nonmonotonic = sample_neighborhood()
         nonmonotonic["hops"] = [
@@ -118,7 +135,7 @@ class ProjectNeighborhoodOrdinalStorageTest(unittest.TestCase):
         ]
         nonmonotonic["edge_count"] = 2
         with self.assertRaises(RuntimeError):
-            storage.compact([nonmonotonic], edges)
+            storage.compact_ordinals([nonmonotonic], edges)
 
     def test_sqlite_rowid_is_the_storage_ordinal(self) -> None:
         conn = sqlite3.connect(":memory:")
