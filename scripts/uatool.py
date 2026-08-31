@@ -14,6 +14,7 @@ import uatool_vfx as vfx
 import uatool_vfx_stitch as vfx_stitch
 import uatool_systems as systems
 import uatool_blueprint_semantics as blueprint_semantics
+import uatool_blueprint_statements as blueprint_statements
 import uatool_project_graph as project_graph
 import uatool_project_graph_finalize as project_graph_finalize
 import uatool_project_neighborhoods as neighborhood_policy
@@ -23,11 +24,11 @@ import uatool_derived_freshness as derived_freshness
 import uatool_build_perf as build_perf
 import uatool_verify_bundle as bundle_verify
 
-# Schema 16 adds a generic semantic graph over every canonical Blueprint node
-# and exact execution/data flow. Domain systems can consume this layer without
-# turning the derived architecture into a collection of subsystem-specific K2
-# parsers. Project-neighborhood physical storage remains independently versioned.
-FINAL_DERIVED_SCHEMA_VERSION = 16
+# Schema 17 adds generic Blueprint semantic statements/basic-block summaries on
+# top of schema-16 semantic nodes/flow.  Statements join the existing recursive
+# data-dependency expressions and execution blocks rather than duplicating K2
+# traversal or adding gameplay-domain parsers.
+FINAL_DERIVED_SCHEMA_VERSION = 17
 project_graph.DERIVED_SCHEMA_VERSION = FINAL_DERIVED_SCHEMA_VERSION
 SCRIPT_DIR = Path(__file__).resolve().parent
 
@@ -36,7 +37,7 @@ build_perf.install(core)
 
 # uatool_runtime installs the structural/world/animation/derived-schema-11
 # pipeline into uatool_core. This composition root adds independently versioned
-# VFX, remaining systems, generic Blueprint semantics, and the final typed
+# VFX, systems, generic Blueprint semantics/statements, and the final typed
 # project graph without creating alternate public launchers.
 _base_create_schema = core.create_schema
 _base_derive_output = core.derive_output
@@ -61,6 +62,7 @@ def create_schema(conn) -> None:
     vfx_stitch.create_schema(conn)
     systems.create_schema(conn)
     blueprint_semantics.create_schema(conn)
+    blueprint_statements.create_schema(conn)
     project_graph.create_schema(conn)
 
 
@@ -123,6 +125,12 @@ def _require_blueprint_semantics(output: Path) -> None:
         raise RuntimeError(f"Blueprint semantic derived incomplete: {error}")
 
 
+def _require_blueprint_statements(output: Path) -> None:
+    error = blueprint_statements.validation_error(output, runtime._rows)
+    if error:
+        raise RuntimeError(f"Blueprint statement derived incomplete: {error}")
+
+
 def _require_project_graph(output: Path) -> None:
     error = project_graph.validation_error(output, runtime._rows)
     if error:
@@ -161,6 +169,16 @@ def _declared_derived_counts(output: Path) -> dict[str, int]:
         except (TypeError, ValueError):
             continue
     return result
+
+
+def _semantic_coverage_counts(semantic_nodes: list[dict]) -> tuple[int, int, int]:
+    opaque = sum(int(bool(row.get("opaque", False))) for row in semantic_nodes)
+    fallback = sum(
+        int(not bool(row.get("opaque", False)) and str(row.get("semantic_kind", "") or "") == "classified")
+        for row in semantic_nodes
+    )
+    modeled = len(semantic_nodes) - opaque - fallback
+    return modeled, fallback, opaque
 
 
 def derive_output(output):
@@ -215,6 +233,13 @@ def derive_output(output):
     }
     counts.update(semantic_counts)
 
+    statement_rows, semantic_blocks = blueprint_statements.derive(output, runtime._rows)
+    statement_counts = {
+        "blueprint_semantic_statements": runtime._write(output / "blueprint_semantic_statements.jsonl", statement_rows),
+        "blueprint_semantic_blocks": runtime._write(output / "blueprint_semantic_blocks.jsonl", semantic_blocks),
+    }
+    counts.update(statement_counts)
+
     project_nodes, project_edges, _ = project_graph.derive(output, runtime._rows)
     project_nodes, project_edges, _ = project_graph_finalize.finalize(
         output, runtime._rows, project_nodes, project_edges
@@ -263,22 +288,33 @@ def derive_output(output):
             manifest["systems_files"] = systems_manifest.get("files", [])
             manifest["systems_pass"] = systems_manifest.get("pass", "UnrealAssetToolSystems")
 
-        classified_nodes = sum(int(not row.get("opaque", False)) for row in semantic_nodes)
-        opaque_nodes = len(semantic_nodes) - classified_nodes
+        modeled_nodes, fallback_nodes, opaque_nodes = _semantic_coverage_counts(semantic_nodes)
+        classified_nodes = modeled_nodes + fallback_nodes
         manifest["blueprint_semantic_schema_version"] = blueprint_semantics.SEMANTIC_SCHEMA_VERSION
         manifest["blueprint_semantic_summary"] = {
             "node_count": len(semantic_nodes),
             "classified_node_count": classified_nodes,
+            "modeled_node_count": modeled_nodes,
+            "fallback_node_count": fallback_nodes,
             "opaque_node_count": opaque_nodes,
             "graph_count": len(semantic_graphs),
             "edge_count": len(semantic_edges),
             "coverage": (classified_nodes / len(semantic_nodes)) if semantic_nodes else 1.0,
+            "modeled_coverage": (modeled_nodes / len(semantic_nodes)) if semantic_nodes else 1.0,
+        }
+        manifest["blueprint_statement_schema_version"] = blueprint_statements.STATEMENT_SCHEMA_VERSION
+        manifest["blueprint_statement_summary"] = {
+            "statement_count": len(statement_rows),
+            "block_count": len(semantic_blocks),
+            "dependency_statement_count": sum(int(bool(row.get("dependency_count", 0))) for row in statement_rows),
+            "literal_statement_count": sum(int(bool(row.get("literal_count", 0))) for row in statement_rows),
         }
         manifest["derived_schema_version"] = FINAL_DERIVED_SCHEMA_VERSION
         declared = manifest.get("derived_counts", {})
         declared = declared if isinstance(declared, dict) else {}
         declared.update(vfx_counts)
         declared.update(semantic_counts)
+        declared.update(statement_counts)
         declared.update(project_counts)
         manifest["derived_counts"] = declared
         manifest_path.write_text(
@@ -289,17 +325,24 @@ def derive_output(output):
 
     _require_vfx_derived(output)
     _require_blueprint_semantics(output)
+    _require_blueprint_statements(output)
     _require_project_graph(output)
     derived_freshness.mark_fresh(
         output,
         schema_version=FINAL_DERIVED_SCHEMA_VERSION,
         script_dir=SCRIPT_DIR,
     )
+    modeled_nodes, fallback_nodes, opaque_nodes = _semantic_coverage_counts(semantic_nodes)
     print(
         "blueprint semantics: "
-        f"nodes={len(semantic_nodes)} classified={sum(int(not row.get('opaque', False)) for row in semantic_nodes)} "
-        f"opaque={sum(int(bool(row.get('opaque', False))) for row in semantic_nodes)} "
+        f"nodes={len(semantic_nodes)} modeled={modeled_nodes} fallback={fallback_nodes} opaque={opaque_nodes} "
         f"graphs={len(semantic_graphs)} edges={len(semantic_edges)}"
+    )
+    print(
+        "blueprint statements: "
+        f"statements={len(statement_rows)} blocks={len(semantic_blocks)} "
+        f"with_dependencies={sum(int(bool(row.get('dependency_count', 0))) for row in statement_rows)} "
+        f"with_literals={sum(int(bool(row.get('literal_count', 0))) for row in statement_rows)}"
     )
     return counts
 
@@ -317,6 +360,7 @@ def build_database(output):
         _require_systems(output)
         _require_vfx_derived(output)
         _require_blueprint_semantics(output)
+        _require_blueprint_statements(output)
         _require_project_graph(output)
 
     db = _base_build_database(output)
@@ -326,6 +370,7 @@ def build_database(output):
         vfx_stitch.load_database(conn, output, runtime._rows)
         systems.load_database(conn, output, runtime._rows)
         blueprint_semantics.load_database(conn, output, runtime._rows)
+        blueprint_statements.load_database(conn, output, runtime._rows)
         # project_neighborhoods loads compact JSON and an empty text field.
         # Readable text is reconstructed only when queried, avoiding another
         # hundreds-of-megabytes copy of neighborhood paths in uat.db.
@@ -355,6 +400,7 @@ def query(args):
                 args.limit,
                 max_chars=project_graph.MAX_NEIGHBOR_CHARS,
             )
+            blueprint_statements.query(conn, core._print_rows, pattern, args.limit)
             blueprint_semantics.query(conn, core._print_rows, pattern, args.limit)
             systems.query(conn, core._print_rows, pattern, args.limit)
             vfx_stitch.query(conn, core._print_rows, pattern, args.limit)
@@ -381,6 +427,8 @@ def _combined_summary(args) -> None:
     dc = top_manifest.get("derived_counts", {}) if isinstance(top_manifest.get("derived_counts", {}), dict) else {}
     semantic_summary = top_manifest.get("blueprint_semantic_summary", {})
     semantic_summary = semantic_summary if isinstance(semantic_summary, dict) else {}
+    statement_summary = top_manifest.get("blueprint_statement_summary", {})
+    statement_summary = statement_summary if isinstance(statement_summary, dict) else {}
 
     print(
         "vfx scan complete: "
@@ -405,14 +453,23 @@ def _combined_summary(args) -> None:
         )
     )
     if semantic_summary:
-        coverage = float(semantic_summary.get("coverage", 0.0) or 0.0) * 100.0
+        modeled_coverage = float(semantic_summary.get("modeled_coverage", 0.0) or 0.0) * 100.0
         print(
             "blueprint semantic complete: "
             f"nodes={semantic_summary.get('node_count', 0)} "
-            f"classified={semantic_summary.get('classified_node_count', 0)} "
+            f"modeled={semantic_summary.get('modeled_node_count', 0)} "
+            f"fallback={semantic_summary.get('fallback_node_count', 0)} "
             f"opaque={semantic_summary.get('opaque_node_count', 0)} "
             f"graphs={semantic_summary.get('graph_count', 0)} "
-            f"edges={semantic_summary.get('edge_count', 0)} coverage={coverage:.2f}%"
+            f"edges={semantic_summary.get('edge_count', 0)} modeled_coverage={modeled_coverage:.2f}%"
+        )
+    if statement_summary:
+        print(
+            "blueprint statement complete: "
+            f"statements={statement_summary.get('statement_count', 0)} "
+            f"blocks={statement_summary.get('block_count', 0)} "
+            f"with_dependencies={statement_summary.get('dependency_statement_count', 0)} "
+            f"with_literals={statement_summary.get('literal_statement_count', 0)}"
         )
     print(
         "final derived complete: "
@@ -420,6 +477,7 @@ def _combined_summary(args) -> None:
             f"{name}={dc.get(name, 0)}"
             for name in (
                 "blueprint_semantic_nodes", "blueprint_semantic_edges", "blueprint_semantic_graphs",
+                "blueprint_semantic_statements", "blueprint_semantic_blocks",
                 "vfx_relations", "vfx_context", "vfx_summaries",
                 "project_nodes", "project_edges", "project_neighborhoods",
             )
@@ -429,6 +487,7 @@ def _combined_summary(args) -> None:
         f"schemas: vfx={vfx_manifest.get('schema_version', 0)} "
         f"systems={systems_manifest.get('schema_version', 0)} "
         f"bp_semantic={top_manifest.get('blueprint_semantic_schema_version', 0)} "
+        f"bp_statement={top_manifest.get('blueprint_statement_schema_version', 0)} "
         f"derived={top_manifest.get('derived_schema_version', 0)}"
     )
 
@@ -456,6 +515,9 @@ def scan(args):
         if "Blueprint semantic derived incomplete:" in message:
             print(f"ERROR: {exc}", file=sys.stderr)
             return 31
+        if "Blueprint statement derived incomplete:" in message:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 32
         raise
     if result != 0:
         return result
@@ -481,12 +543,15 @@ def scan(args):
         try:
             _require_vfx_derived(output)
             _require_blueprint_semantics(output)
+            _require_blueprint_statements(output)
             _require_project_graph(output)
         except RuntimeError as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
             message = str(exc)
             if "Blueprint semantic derived incomplete:" in message:
                 return 31
+            if "Blueprint statement derived incomplete:" in message:
+                return 32
             return 28 if "project graph incomplete:" in message else 26
         derived_freshness.mark_fresh(
             output,
@@ -510,6 +575,7 @@ core.DEFAULT_BUNDLE_FILES = tuple(dict.fromkeys((
     *vfx_stitch.DERIVED_FILES,
     *systems.RAW_FILES,
     *blueprint_semantics.DERIVED_FILES,
+    *blueprint_statements.DERIVED_FILES,
     *project_graph.DERIVED_FILES,
 )))
 
