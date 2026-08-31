@@ -84,6 +84,63 @@ def _filter_jsonl_bytes(path: Path, predicate) -> tuple[int, int]:
     return kept, removed
 
 
+def _declared_blueprint_pin_count(output: Path) -> int | None:
+    manifest_path = output / "manifest.json"
+    if not manifest_path.is_file():
+        return None
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"invalid manifest.json before Blueprint pin compaction: {exc}") from exc
+    counts = manifest.get("counts", {}) if isinstance(manifest, dict) else {}
+    if not isinstance(counts, dict) or "blueprint_pins" not in counts:
+        return None
+    return int(counts.get("blueprint_pins", 0) or 0)
+
+
+def _blueprint_pin_storage_applicable(output: Path) -> bool:
+    """Use compact pin storage only for full canonical scanner rows.
+
+    Older cleanup unit fixtures and compatibility payloads may contain only a
+    minimal normalized pin identity. Those rows remain valid input to the
+    inline-pin deduplication pass but are not rich enough for canonical pin
+    compaction. A real scanner manifest that declares pins still gates a missing
+    or malformed canonical stream as an error.
+    """
+    path = output / BLUEPRINT_PINS_FILE
+    expected = _declared_blueprint_pin_count(output)
+    if not path.is_file():
+        if expected not in (None, 0):
+            raise RuntimeError(
+                "Blueprint pin stream missing before compaction: "
+                f"manifest={expected} file={path}"
+            )
+        return False
+
+    with path.open("rb") as src:
+        for line_number, raw in enumerate(src, 1):
+            if not raw.strip():
+                continue
+            row = _decode_json_row(path, line_number, raw)
+            if row.get("encoding") == blueprint_pin_storage.ENCODING:
+                return True
+            if set(row) == blueprint_pin_storage.LEGACY_FIELDS:
+                return True
+            if expected is not None:
+                raise RuntimeError(
+                    "Blueprint pin canonical fields mismatch before compaction: "
+                    f"missing={sorted(blueprint_pin_storage.LEGACY_FIELDS - set(row))} "
+                    f"extra={sorted(set(row) - blueprint_pin_storage.LEGACY_FIELDS)}"
+                )
+            return False
+
+    if expected not in (None, 0):
+        raise RuntimeError(
+            f"Blueprint pin stream empty before compaction: manifest={expected} file={path}"
+        )
+    return False
+
+
 def _normalized_blueprint_pin_ids(path: Path) -> set[str] | None:
     if not path.is_file():
         return None
@@ -215,7 +272,10 @@ def apply(output) -> dict[str, int]:
     """Apply all canonical cleanups and return removal/rewrite counts."""
     output = Path(output).expanduser().resolve()
 
-    blueprint_pin_stats = blueprint_pin_storage.normalize_output(output)
+    if _blueprint_pin_storage_applicable(output):
+        blueprint_pin_stats = blueprint_pin_storage.normalize_output(output)
+    else:
+        blueprint_pin_stats = {"logical_pins": 0, "blocks": 0, "rewritten": False}
     if blueprint_pin_stats.get("rewritten", False):
         print(
             "canonical cleanup: compacted Blueprint pins="
@@ -286,9 +346,14 @@ def apply(output) -> dict[str, int]:
 def validation_error(output) -> str | None:
     output = Path(output).expanduser().resolve()
 
-    blueprint_pin_error = blueprint_pin_storage.manifest_validation_error(output)
-    if blueprint_pin_error:
-        return blueprint_pin_error
+    try:
+        pin_storage_applicable = _blueprint_pin_storage_applicable(output)
+    except RuntimeError as exc:
+        return str(exc)
+    if pin_storage_applicable:
+        blueprint_pin_error = blueprint_pin_storage.manifest_validation_error(output)
+        if blueprint_pin_error:
+            return blueprint_pin_error
 
     blueprint_property_error = blueprint_property_storage.manifest_validation_error(output)
     if blueprint_property_error:
