@@ -1,108 +1,63 @@
-# UnrealAssetTool schema
+# UnrealAssetTool schema reference
 
 ## Current versions
 
-The 0.7.0 development line uses independently versioned layers:
+UnrealAssetTool 0.7.0 uses independently versioned canonical layers plus one final derived layer:
 
 ```text
 structural scanner schema: 12
 world scanner schema:      12
-animation scanner schema:   1   # PR #5, under validation
-derived schema:            10
+animation scanner schema:   1
+VFX scanner schema:         1
+systems scanner schema:     1
+derived schema:            14
 ```
 
-The numbers intentionally version different facts and lifecycles.
+The version numbers intentionally describe different facts and lifecycles.
 
-- `schema_version` in `manifest.json` versions structural Unreal-extracted output.
-- `schema_version` in `world_manifest.json` versions world/placement output.
-- `schema_version` in `animation_manifest.json` versions canonical animation output.
-- `derived_schema_version` in `manifest.json` versions deterministic Python-generated views.
+- `manifest.json` -> structural `schema_version` and final `derived_schema_version`
+- `world_manifest.json` -> world `schema_version`
+- `animation_manifest.json` -> animation `schema_version`
+- `vfx_manifest.json` -> VFX `schema_version`
+- `systems_manifest.json` -> systems `schema_version`
 
-A structural/world/animation scanner-schema change normally requires Unreal to run again. A derived-schema change normally requires only derive/pack/bundle.
+A canonical scanner change normally requires Unreal to run again. A compatible derived-only change normally requires only `derive`, `pack` and `bundle`.
 
-## Storage model
+## Storage rules
 
-Canonical scan data is JSON Lines: one JSON object per line. This supports streaming writes, bounded memory, partial reads, diffing, independent index rebuilding and subsystem sharding.
+Canonical and derived streams use JSON Lines: one JSON object per physical line. This keeps writes streaming, supports partial reads/diffs and lets SQLite be rebuilt without treating the database as truth.
 
-`uat.db` is a regenerable SQLite index, not canonical truth.
+When parsing JSONL, split on physical `\n` records. Do not use Unicode `str.splitlines()` because serialized Unreal text can contain control characters that Python treats as additional line separators.
 
-## Manifests
-
-### `manifest.json`
-
-Important fields include:
-
-```text
-schema_version
-counts
-derived_schema_version
-derived_counts
-world_schema_version
-world_counts
-world_files
-world_pass
-animation_schema_version
-animation_counts
-animation_files
-animation_pass
-```
-
-### `world_manifest.json`
-
-Records world-pass provenance, engine/project information, scan policy and world counts/files.
-
-### `animation_manifest.json`
-
-Records animation schema version, engine provenance, success/error state, canonical animation counts and file list.
-
-Animation schema 1 currently has an internal bounded companion pass that writes `animation_deep_manifest.json`. This is an implementation split, not a second public schema. Python validates both passes and folds the companion counts/files into animation schema 1 before SQLite packing/bundling.
+`uat.db` is a regenerable retrieval cache.
 
 ---
 
 # Structural scanner schema 12
 
+Structural extraction is emitted by the main Unreal commandlet.
+
 ## Project/files
 
-### `files.jsonl`
+```text
+files.jsonl
+source_chunks.jsonl
+```
 
-Physical indexed project files with path, kind, extension, size and modification time.
-
-### `source_chunks.jsonl`
-
-Bounded text/source/config/document chunks with source path and line range.
+`files.jsonl` records indexed physical files and metadata. `source_chunks.jsonl` stores bounded text chunks for supported source/config/document files.
 
 ## Asset Registry
 
-### `assets.jsonl`
-
-One row per indexed Unreal asset. Typical fields:
-
 ```text
-object_path
-asset_name
-package_name
-package_path
-class_path
-disk_path
-tags
-dependencies
+assets.jsonl
+asset_dependencies.jsonl
 ```
 
-Every supported or unsupported asset family appears here, making Asset Registry data the universal fallback layer.
+`assets.jsonl` is the universal fallback layer: asset identity, class, package, tags and disk/path facts. `asset_dependencies.jsonl` stores normalized package dependencies.
 
-### `asset_dependencies.jsonl`
+Asset Registry presence does not imply first-class understanding of an asset's internals.
 
-Normalized package dependencies:
-
-```text
-source_package
-target_package
-category
-```
-
-A package dependency does not imply first-class understanding of the target asset's internals.
-
-## Blueprint canonical streams
+## Blueprint / K2 / UMG canonical streams
 
 ```text
 blueprints.jsonl
@@ -127,11 +82,9 @@ blueprint_widget_animations.jsonl
 blueprint_widget_animation_bindings.jsonl
 ```
 
-Blueprint rows preserve identity/inheritance/interfaces/state, graph/node/pin identity, exact execution/data edges, reflected properties/references, authored defaults/components, Timelines and UMG state.
+These preserve Blueprint identity/inheritance/interfaces/state, every graph/node/pin, exact graph wiring, reflected node state/references, component/default state, Timelines and UMG authored structure.
 
-Common normalized node operations include function/event entry/results, calls, variables, branches/switches/selects, casts, spawn, macros/tunnels, struct operations and common AnimGraph/state-machine/cached-pose/linked-layer/Motion-Matching nodes. Unknown/plugin nodes remain factual/generic instead of being guessed.
-
-## Compact Control Rig / RigVM streams
+## Compact Control Rig / RigVM
 
 ```text
 rigvm_objects.jsonl
@@ -140,9 +93,15 @@ rigvm_links.jsonl
 rigvm_references.jsonl
 ```
 
-`rigvm_properties.jsonl` is the optional large raw reflection stream enabled by `--include-raw-rigvm-properties`.
+The much larger reflection stream:
 
-## AI canonical streams
+```text
+rigvm_properties.jsonl
+```
+
+is opt-in with `--include-raw-rigvm-properties`.
+
+## AI
 
 ```text
 behavior_trees.jsonl
@@ -162,7 +121,7 @@ statetree_bindings.jsonl
 ai_properties.jsonl
 ```
 
-## PCG canonical streams
+## PCG
 
 ```text
 pcg_graphs.jsonl
@@ -172,9 +131,7 @@ pcg_edges.jsonl
 pcg_properties.jsonl
 ```
 
-These preserve graph/node/pin identity, exact topology, settings/properties, parameters and subgraph facts.
-
-## Material canonical streams
+## Materials
 
 ```text
 materials.jsonl
@@ -183,17 +140,14 @@ material_edges.jsonl
 material_properties.jsonl
 ```
 
-These preserve Material/MaterialInstance/MaterialFunction identity, expression objects, root/output wiring, recursive expression-input topology, references and reflected settings.
-
-Materials are first-class. Niagara/particles are not part of the material model.
+Material/MaterialInstance/MaterialFunction identity, expression objects, exact root/expression input topology, properties, parameters and object references are preserved. Generated `UMaterialExpression::MaterialExpressionGuid` values are removed by canonical cleanup because they are generated node identifiers rather than stable authored state.
 
 ---
 
 # World scanner schema 12
 
-The world pass emits:
-
 ```text
+world_manifest.json
 worlds.jsonl
 world_levels.jsonl
 world_actors.jsonl
@@ -202,24 +156,23 @@ world_instance_properties.jsonl
 world_references.jsonl
 world_data_layers.jsonl
 world_partition_actor_descs.jsonl
-world_manifest.json
 ```
 
 ### `worlds.jsonl`
 
-World identity/package/persistent-level fields plus World Partition presence and initialization/descriptor-walk facts.
+World identity/package/persistent-level facts plus World Partition presence.
 
 ### `world_levels.jsonl`
 
-Persistent-level rows and classic streaming-level relationships, including target world package and streaming class/owner.
+Persistent-level rows and classic streaming relationships.
 
 ### `world_actors.jsonl`
 
-Loaded actors with path/name/label/class/GUID, folder/tags, transform, ownership/attachments, Blueprint asset/generated class and Data Layer memberships.
+Loaded actors with identity/class/GUID/label, tags/folders, transforms, ownership/attachments, Blueprint identity and Data Layer membership.
 
 ### `world_components.jsonl`
 
-Actor components with identity/class/archetype/creation method, tags, attachment/socket facts and relative/world transforms.
+Actor component identity/class/archetype, creation method, attachment/socket state and transforms.
 
 ### `world_instance_properties.jsonl`
 
@@ -227,25 +180,11 @@ Authored placed-instance differences from the exact archetype, excluding transie
 
 ### `world_references.jsonl`
 
-Bounded hard/soft UObject references discovered from actor/component properties:
-
-```text
-world_path
-actor_path
-owner_kind
-owner_path
-root_property
-property_path
-reference_kind
-target_path
-target_class
-target_kind
-authored_override
-```
+Bounded hard/soft object references discovered from actor/component properties, including the exact property path and whether the value is an authored override.
 
 ### `world_data_layers.jsonl`
 
-Data Layer identity, hierarchy, runtime/editor state and DataLayerAsset association.
+Data Layer identity/hierarchy/runtime/editor state and DataLayerAsset association.
 
 ### `world_partition_actor_descs.jsonl`
 
@@ -255,11 +194,13 @@ World Partition descriptor facts without loading every external actor: GUID/pack
 
 # Animation scanner schema 1
 
-Animation schema 1 is currently under validation on PR #5. It is canonical Unreal-authored data, not a derived view.
+Animation schema 1 is one public schema implemented by base, deep and breadth passes. Internal companion manifests are implementation provenance, not separate public schemas.
 
-## Base animation streams
+## Base/deep streams
 
 ```text
+animation_manifest.json
+animation_deep_manifest.json
 animation_assets.jsonl
 animation_notifies.jsonl
 animation_sync_markers.jsonl
@@ -278,71 +219,6 @@ pose_search_schema_skeletons.jsonl
 animation_optional_assets.jsonl
 animation_properties.jsonl
 animation_references.jsonl
-```
-
-### `animation_assets.jsonl`
-
-Animation-family identity and shared high-value facts such as kind/class/package, Skeleton, play length, additive state, notify/marker counts and type-specific summary fields.
-
-### `animation_notifies.jsonl`
-
-Authored sequence/montage notify and notify-state facts including name, GUID, trigger/end/duration, track, branching-point state, trigger settings and concrete notify classes.
-
-### `animation_sync_markers.jsonl`
-
-Authored marker name/GUID/time/track with source family (`sequence`, `montage`, `blend_space`).
-
-### `montage_sections.jsonl`
-
-Montage section index/name/next-section/start-time facts.
-
-### `animation_segments.jsonl`
-
-Montage slot/segment source animations and timing/rate/loop settings.
-
-### `blend_space_axes.jsonl`
-
-Authored BlendSpace axis metadata. Schema-1 normalization filters unused backing `BlendParameters` slots so 1D/2D assets do not falsely claim three authored axes.
-
-### `blend_space_samples.jsonl`
-
-Blend sample coordinates/source animations/rate/mirror/single-frame facts.
-
-### Skeleton streams
-
-```text
-skeletons.jsonl
-skeleton_bones.jsonl
-skeleton_sockets.jsonl
-```
-
-These preserve reference-bone hierarchy/local transforms, sockets, virtual-bone count and Skeleton curve/notify/marker metadata.
-
-## Pose Search / Motion Matching streams
-
-```text
-pose_search_databases.jsonl
-pose_search_database_assets.jsonl
-pose_search_schemas.jsonl
-pose_search_channels.jsonl
-pose_search_schema_skeletons.jsonl
-```
-
-These preserve:
-
-```text
-database -> schema
-database -> source entry
-schema -> concrete feature channel
-schema role -> Skeleton
-schema role -> MirrorDataTable
-```
-
-Optional Pose Search classes are inspected through Unreal reflection to avoid making PoseSearch a hard module dependency for projects that do not enable it.
-
-## Animation companion streams
-
-```text
 animation_curves.jsonl
 animation_curve_keys.jsonl
 pose_search_interaction_assets.jsonl
@@ -351,80 +227,126 @@ pose_search_normalization_sets.jsonl
 pose_search_normalization_databases.jsonl
 mirror_data_tables.jsonl
 mirror_data_table_rows.jsonl
-animation_deep_manifest.json
 ```
 
-### `animation_curves.jsonl`
+These cover shared animation asset identity/settings, notifies/states, sync markers, Montage sections/segments, BlendSpace axes/samples, Skeleton hierarchy/sockets, curves and keys, Pose Search databases/schemas/channels/roles/interactions/normalization and mirror mappings.
 
-Float/transform curve identity, type flags and key counts from the UE animation data model.
-
-### `animation_curve_keys.jsonl`
-
-Every canonical `FRichCurveKey` with:
+## Breadth streams
 
 ```text
-asset_path
-curve_name
-curve_type
-component
-key_index
-time
-value
-interp_mode
-tangent_mode
-tangent_weight_mode
+animation_breadth_manifest.json
+pose_assets.jsonl
+pose_asset_tracks.jsonl
+pose_asset_poses.jsonl
+pose_asset_transforms.jsonl
+pose_asset_curve_values.jsonl
+skeleton_slot_groups.jsonl
+skeleton_slots.jsonl
+chooser_tables.jsonl
+chooser_columns.jsonl
+chooser_results.jsonl
+chooser_context.jsonl
+proxy_tables.jsonl
+proxy_entries.jsonl
+proxy_table_inheritance.jsonl
+ik_rigs.jsonl
+ik_rig_bones.jsonl
+ik_rig_chains.jsonl
+ik_rig_goals.jsonl
+ik_rig_solvers.jsonl
+ik_retargeters.jsonl
+ik_retarget_ops.jsonl
+ik_retarget_poses.jsonl
+animation_struct_references.jsonl
 ```
 
-The JSON row additionally retains arrive/leave tangent values and weights. Transform curves identify translation/rotation/scale X/Y/Z components.
+These promote PoseAsset pose-level data, Skeleton slots, Chooser tables, Proxy tables, IK Rig and IK Retargeter internals beyond generic reflection.
 
-### Pose Search Interaction streams
-
-`pose_search_interaction_assets.jsonl` and `pose_search_interaction_items.jsonl` preserve multi-role interaction identity, roles, source animations/classes, preview meshes, origins and warping weights.
-
-### Pose Search Normalization streams
-
-`pose_search_normalization_sets.jsonl` and `pose_search_normalization_databases.jsonl` preserve normalization-set identity and ordered database membership.
-
-### Mirror Data Table streams
-
-`mirror_data_tables.jsonl` and `mirror_data_table_rows.jsonl` preserve table Skeleton/mirror-axis plus source/mirrored name mappings, mirror entry type and enabled state. These mappings can affect bones, curves, notifies and sync markers.
-
-## Reflected animation state
-
-`animation_properties.jsonl` and `animation_references.jsonl` are bounded loss-minimizing reflection streams for supported animation and optional adjacent assets/channels.
-
-Chooser, ProxyAsset/ProxyTable, IK Rig and IK Retargeter currently use this reflection-backed model; richer family-specific row/chain/solver semantics are future depth work.
-
-## GASP schema-1 validation baseline
-
-The first UE 5.8.2 GASP run at commit `6276ce8` produced:
-
-```text
-animation_assets                 2518
-animation_notifies              13373
-animation_sync_markers             69
-montage_sections                  137
-animation_segments                137
-blend_space_axes                   45   # raw backing slots before normalization
-blend_space_samples                157
-skeletons                           11
-skeleton_bones                    2866
-skeleton_sockets                    58
-pose_search_databases              155
-pose_search_database_assets       2138
-pose_search_schemas                 33
-pose_search_channels                74
-pose_search_schema_skeletons        37
-animation_optional_assets           31
-animation_properties            106033
-animation_references             46620
-```
-
-All database/schema/channel/role count invariants resolved exactly. The current companion pass is the next validation target.
+See [animation-schema-1.md](animation-schema-1.md) for domain-specific details.
 
 ---
 
-# Derived schema 10
+# VFX scanner schema 1
+
+```text
+vfx_manifest.json
+vfx_assets.jsonl
+vfx_properties.jsonl
+vfx_references.jsonl
+niagara_systems.jsonl
+niagara_system_emitters.jsonl
+niagara_emitters.jsonl
+niagara_emitter_versions.jsonl
+niagara_renderers.jsonl
+niagara_simulation_stages.jsonl
+niagara_stateless_emitters.jsonl
+niagara_stateless_modules.jsonl
+niagara_stateless_renderers.jsonl
+niagara_scripts.jsonl
+niagara_data_channels.jsonl
+niagara_data_channel_variables.jsonl
+niagara_parameter_collections.jsonl
+niagara_parameter_collection_parameters.jsonl
+niagara_effect_types.jsonl
+cascade_systems.jsonl
+cascade_emitters.jsonl
+cascade_lods.jsonl
+cascade_modules.jsonl
+```
+
+VFX schema 1 preserves Niagara System/emitter composition, versioned emitter state, renderer/simulation-stage objects, stateless modules/renderers, scripts, Data Channels, Parameter Collections, Effect Types and legacy Cascade topology. `vfx_properties.jsonl` / `vfx_references.jsonl` provide bounded reflection-backed authored state around those normalized rows.
+
+See [vfx-schema-1.md](vfx-schema-1.md).
+
+---
+
+# Systems scanner schema 1
+
+Systems schema 1 groups optional systems that can be covered efficiently by reflection during the world Editor process.
+
+```text
+systems_manifest.json
+systems_assets.jsonl
+systems_properties.jsonl
+systems_references.jsonl
+level_sequences.jsonl
+movie_scene_bindings.jsonl
+movie_scene_tracks.jsonl
+movie_scene_sections.jsonl
+movie_scene_channels.jsonl
+audio_assets.jsonl
+sound_cue_nodes.jsonl
+metasound_nodes.jsonl
+metasound_edges.jsonl
+input_actions.jsonl
+input_mapping_contexts.jsonl
+input_mappings.jsonl
+input_processors.jsonl
+gameplay_data_assets.jsonl
+gameplay_tags.jsonl
+```
+
+## Sequencer
+
+`level_sequences.jsonl` summarizes sequence/MovieScene state. Binding, track, section and channel streams preserve normalized containment and channel/key counts while `systems_properties`/`systems_references` preserve reflected authored state and exact references.
+
+## Audio / MetaSound
+
+`audio_assets.jsonl` normalizes core audio identities/settings. SoundCue nodes are normalized separately. MetaSound frontend document nodes and edges are captured with stable frontend IDs and exact endpoints.
+
+## Enhanced Input
+
+`input_actions.jsonl` preserves action type/settings and declared processor counts. Mapping contexts/mappings normalize key/action relationships. `input_processors.jsonl` records action- and mapping-level trigger/modifier objects.
+
+## Gameplay data
+
+Current normalized gameplay-data support includes Gameplay Tag DataTables, selected Common Input action tables/action-domain assets and PrimaryAssetLabel-style data. Generic reflected properties/references remain available for recognized systems assets.
+
+See [systems-schema-1.md](systems-schema-1.md).
+
+---
+
+# Derived schema 14
 
 Everything in this section is deterministic Python output and may be regenerated from compatible canonical data.
 
@@ -432,7 +354,7 @@ Everything in this section is deterministic Python output and may be regenerated
 python scripts\uatool.py derive <Project>\.uatool
 ```
 
-`pack` and `bundle` rerun derivation automatically.
+A validated `.derived_freshness.json` allows subsequent `derive`, `pack` and `bundle` calls to reuse current output when canonical facts and derived implementation have not changed.
 
 ## Blueprint program reconstruction
 
@@ -454,18 +376,14 @@ blueprint_summaries.jsonl
 rigvm_editor_links.jsonl
 ```
 
-Functions/events retain flags and signature facts. Call edges preserve internal/ambiguous/external/unresolved resolution. Unique internal calls receive caller/callee bindings. Data dependencies retain bounded upstream provenance with explicit cycle/truncation state. Execution-pin wiring is collapsed into deterministic basic blocks while retaining source node IDs.
-
-## AI derived views
+## AI
 
 ```text
 ai_relations.jsonl
 ai_summaries.jsonl
 ```
 
-Relationships include Blackboard use/key selection, EQS execution, StateTree transitions/links and Blueprint references.
-
-## PCG/material derived views
+## PCG/material
 
 ```text
 pcg_parameters.jsonl
@@ -476,58 +394,100 @@ material_graph_context.jsonl
 visual_summaries.jsonl
 ```
 
-## Derived world graph
+## World
 
 ```text
 world_relations.jsonl
+world_system_relations.jsonl
 world_context.jsonl
 world_summaries.jsonl
 ```
 
-Relations include world/level/actor/component containment, attachments/ownership, actor Blueprint identity, Data Layers, World Partition descriptor relationships, hard/soft references and LevelInstance/PackedLevelActor source-world joins.
+`world_system_relations.jsonl` connects placement to specialist assets only when evidence supports the relationship.
 
-## World-to-system bridge — schema 10
-
-### `world_system_relations.jsonl`
-
-Connects a world/placed actor/component to specialist assets.
-
-Current target kinds include Blueprint, Animation Blueprint, Control Rig Blueprint, Widget Blueprint, Behavior Tree, Blackboard, EQS, StateTree, PCG and Material/MaterialInstance/MaterialFunction.
-
-Each row has a stable semantic source/target and explicit aggregated evidence. Evidence kinds include:
+## Animation
 
 ```text
-placed_actor_class
-world_reference
-blueprint_relation
-blueprint_asset_dependency
-world_asset_dependency
+animation_relations.jsonl
+animation_context.jsonl
+animation_summaries.jsonl
 ```
 
-Generated Blueprint classes normalize back to authored Blueprint assets. Package dependency joins are emitted only when a package maps unambiguously to one indexed specialist target.
+Animation relations are built only from canonical references/topology and explicitly do not promote generic package dependencies into semantic animation edges.
 
-Derived animation relations/context are intentionally **not** part of derived schema 10 yet; they come after animation schema 1 is validated.
+## VFX
+
+```text
+vfx_relations.jsonl
+vfx_context.jsonl
+vfx_summaries.jsonl
+```
+
+Generic Asset Registry dependencies are not treated as semantic VFX evidence.
+
+## Typed project graph
+
+```text
+project_nodes.jsonl
+project_edges.jsonl
+project_neighborhoods.jsonl
+```
+
+### Node coverage
+
+```text
+first_class
+first_class_depth_pending
+partial
+generic_only
+external_or_excluded
+```
+
+### Edge quality
+
+```text
+exact_semantic
+exact_reference
+unique_dependency_resolution
+generic_package_dependency
+```
+
+`project_edges.jsonl` is authoritative for source/target kinds, paths, relation, coverage, quality and evidence. Asset Registry dependency evidence remains `generic_package_dependency` and is represented as package-to-package traversal.
+
+Schema 14 neighborhoods are compact references to selected authoritative edges. Each hop stores:
+
+```text
+depth
+direction
+edge_id
+edge_quality
+source_coverage
+target_coverage
+evidence_count
+```
+
+Neighborhood generation is bounded to depth 3 / 256 edges and prioritizes stronger semantic/reference evidence before package plumbing.
 
 ---
 
-# SQLite and upload bundle
+# SQLite and bundle
 
-`uat.db` mirrors canonical and derived streams into indexed tables and is fully regenerable:
+`uat.db` mirrors the canonical and derived streams into indexed tables and is fully regenerable:
 
 ```powershell
 python scripts\uatool.py pack <Project>\.uatool
 ```
 
-Ordinary bundles include compact canonical/derived streams, including animation schema 1 when present. `uat.db` and the enormous optional `rigvm_properties.jsonl` are excluded unless specifically requested where supported.
+The normal upload bundle contains JSON/manifests but excludes `uat.db` and excludes the optional raw RigVM properties unless explicitly requested.
+
+Default ZIP compression is Deflate level 3. Override with:
+
+```powershell
+$env:UATOOL_BUNDLE_LEVEL = "6"
+```
 
 ## Compatibility rule
 
-Never silently rewrite old canonical JSONL into new canonical truth.
+Never silently invent or rewrite old canonical truth. Backward-compatible canonical cleanup may remove known generated/representation-only values when the transformation is exact, deterministic and manifest-aware; semantic schema changes still require an Unreal rescan.
 
-Backward-compatible derived/post-pass normalization may clean representation defects when the underlying authored facts are unchanged, but manifests must identify which scanner schemas actually produced the raw data.
-
-## Coverage is not equal to Asset Registry presence
-
-An asset appearing in `assets.jsonl` means it exists and its generic Asset Registry facts are known. It does not mean its internal authored structure is first-class.
-
-See [coverage.md](coverage.md) for the first-class/partial/generic-only matrix and [animation-schema-1.md](animation-schema-1.md) for the animation validation record.
+See [coverage.md](coverage.md) for the maintained first-class/partial/generic-only matrix.

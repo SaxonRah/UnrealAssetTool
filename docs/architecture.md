@@ -2,28 +2,30 @@
 
 ## Purpose
 
-UnrealAssetTool is an AI-facing indexer for Unreal Engine projects. It prioritizes authoritative authored facts from Unreal objects and serialized/editor data, then builds deterministic relationships and retrieval views outside Unreal.
+UnrealAssetTool is an AI-facing indexer for Unreal Engine projects. It prioritizes authoritative authored facts from Unreal objects and serialized/editor data, then builds deterministic cross-system relationships and retrieval views outside Unreal.
 
-The design deliberately separates:
+The architecture has three layers:
 
 1. **canonical Unreal extraction** — facts Unreal can state exactly;
-2. **deterministic derivation** — joins/reconstruction that can be regenerated;
-3. **retrieval** — SQLite/text query and compact upload bundles.
+2. **deterministic derivation** — joins, normalization and bounded traversal that can be regenerated;
+3. **retrieval** — SQLite queries and compact upload bundles.
 
-The project should not hide uncertainty by converting generic package dependencies into semantic claims.
+A generic package dependency is useful fallback evidence, but it is never promoted to the same confidence as an exact authored object reference.
 
-## Current versioned layers
+## Current schemas
 
 ```text
 structural schema: 12
 world schema:      12
-animation schema:   1   # PR #5, under validation
-derived schema:    10
+animation schema:   1
+VFX schema:         1
+systems schema:     1
+derived schema:    14
 ```
 
-These versions are independent. A new animation extractor does not force the Blueprint/world schemas to change.
+Each layer is independently versioned. Canonical scanner changes normally require Unreal to run again. Compatible Python-derived changes can normally be applied with `derive`, `pack` and `bundle` only.
 
-## Canonical CLI
+## One public CLI
 
 The user-facing entry point is always:
 
@@ -31,65 +33,138 @@ The user-facing entry point is always:
 scripts/uatool.py
 ```
 
-Supporting modules may exist when they isolate a real concern (`uatool_core.py`, `uatool_world_stitch.py`, `uatool_animation.py`), but launcher proliferation is intentionally avoided.
+Supporting Python modules isolate real concerns, but are implementation details rather than alternate launchers.
 
 ## Scan lifecycle
 
-A normal `uatool scan` performs the following high-level lifecycle:
+A normal scan follows this shape:
 
 ```text
-resolve explicit Editor executable
+explicit Unreal Editor executable
         |
         v
-stage canonical plugin into target project when necessary
+stage canonical plugin when target is external
         |
         v
-build target Editor + UnrealAssetTool module
+freshness-safe build
+        |
+        +--> full Editor target if target-owned native inputs changed
+        |
+        +--> otherwise UnrealAssetTool module-only unity build
         |
         v
-run structural Unreal commandlet
+structural Unreal commandlet
         |
         v
-run world Unreal commandlet
+world Unreal commandlet process
         |
-        +--> world canonical extraction
-        |
-        +--> animation schema-1 extraction callbacks
-        |
-        v
-validate raw manifests
+        +--> world schema 12
+        +--> animation schema 1 passes
+        +--> VFX schema 1 callback
+        +--> systems schema 1 callback
         |
         v
-run deterministic Python derivation/post-pass normalization
+raw manifest validation
         |
         v
-build SQLite
+canonical cleanup + deterministic derivation
+        |
+        +--> Blueprint/AI/PCG/material/world/animation/VFX views
+        +--> typed project graph
+        +--> bounded quality-prioritized neighborhoods
         |
         v
-create compact upload bundle
+SQLite pack
+        |
+        v
+compact upload ZIP
 ```
 
-The animation implementation currently has a base extractor and a bounded companion/deep extractor. Both execute during the world-commandlet process and write separate internal manifests, but together form public **animation schema 1**. Python validates both and folds the companion file/count provenance into the animation schema manifest before packing.
+VFX and systems piggyback the world Editor process rather than launching separate Editors. This keeps a normal scan to two Unreal processes: one structural process and one world/animation/VFX/systems process.
 
-## Why separate canonical schemas?
+## Canonical extraction layers
 
-Different Unreal domains have different loading/lifecycle constraints.
+### Structural schema 12
 
-### Structural schema
+The structural commandlet owns project-wide content that does not require loading every world:
 
-The structural commandlet owns project/source files, Asset Registry facts, Blueprint/K2/UMG/AnimBP, Control Rig/RigVM, AI, PCG and material extraction.
+- physical files/source/config/document chunks;
+- Asset Registry identity, tags and package dependencies;
+- Blueprint/K2/UMG/Animation Blueprint graphs;
+- compact Control Rig/RigVM;
+- Behavior Tree, Blackboard, EQS and StateTree;
+- PCG graphs;
+- Materials, Material Instances and Material Functions.
 
-### World schema
+Unknown or plugin-specific graph nodes remain preserved by concrete class, pins, properties, references and wiring instead of guessed from display labels.
 
-World extraction loads map assets and handles actor/component instance state, references, streaming relationships, Data Layers and World Partition descriptor enumeration. World Partition is intentionally scanned without loading every external actor.
+### World schema 12
 
-### Animation schema
+The world commandlet owns placement and map state:
 
-Animation extraction loads only relevant animation/animation-adjacent assets and records assets that Blueprint graph topology alone cannot explain: Sequences, Montages, BlendSpaces, Skeletons, Pose Search data, authored curves, interactions, normalization and mirroring.
+- world/level identity;
+- classic streaming relationships;
+- loaded actors and components;
+- transforms, attachments and ownership;
+- placed-instance property overrides;
+- hard/soft UObject references;
+- Data Layers;
+- World Partition metadata and actor descriptors.
 
-Pose Search/Chooser/Proxy/IK support avoids hard optional-plugin module dependencies where possible by using Unreal reflection against loaded asset classes.
+World Partition descriptors are enumerated without deliberately loading every external actor. LevelInstance/PackedLevelActor source worlds are derived only when canonical facts identify a unique target.
 
-This separation keeps a project that does not enable an optional animation plugin buildable while still extracting the plugin's authored facts when it is present.
+### Animation schema 1
+
+Animation schema 1 records authored animation content behind Animation Blueprint graphs. It is implemented as several internal passes but exposed as one public schema.
+
+Coverage includes:
+
+- AnimSequence, AnimMontage and BlendSpace families;
+- notifies, notify states, sync markers, Montage sections/segments and BlendSpace samples;
+- Skeleton hierarchy, sockets and slot groups;
+- float/transform curves and individual rich-curve keys;
+- Pose Search databases, schemas, channels, roles and source assets;
+- Pose Search Interaction Assets and Normalization Sets;
+- Mirror Data Tables;
+- Pose Assets including tracks/poses/transforms/curve values;
+- Chooser tables, columns, results and contexts;
+- Proxy tables/entries/inheritance;
+- IK Rig bones/chains/goals/solvers;
+- IK Retargeter operations/poses;
+- bounded reflected properties/references for adjacent optional assets.
+
+Optional-plugin families are reflection-backed where practical so UnrealAssetTool does not require those modules to be enabled in every scanned project.
+
+### VFX schema 1
+
+VFX schema 1 covers Niagara, Niagara Stateless and legacy Cascade. Canonical streams preserve:
+
+- VFX asset identity/properties/references;
+- Niagara System emitter composition;
+- emitter versions;
+- renderers and simulation stages;
+- stateless emitters/modules/renderers;
+- Niagara scripts;
+- Data Channels and variables;
+- Parameter Collections and parameters;
+- Effect Types;
+- Cascade systems, emitters, LODs and modules.
+
+Derived VFX views join exact canonical VFX topology/references and world/Blueprint evidence. Generic Asset Registry dependencies are excluded from semantic VFX evidence.
+
+### Systems schema 1
+
+Systems schema 1 covers several optional gameplay/editor systems in a reflection-first pass:
+
+- LevelSequence/MovieScene bindings, tracks, sections and channels;
+- SoundCue nodes;
+- MetaSound frontend nodes and edges;
+- core audio asset summaries/references;
+- Enhanced Input actions, mapping contexts, mappings, triggers and modifiers;
+- selected Common Input assets;
+- Gameplay Tag DataTables and selected gameplay-data assets.
+
+The scanner avoids hard dependencies on optional LevelSequence, MovieScene, MetaSound, EnhancedInput, CommonInput/CommonUI and GameplayTags modules where reflection is sufficient.
 
 ## Facts-first rule
 
@@ -99,190 +174,146 @@ Examples:
 
 ```text
 Blueprint pin link
-UFunction flag
-actor transform
-component attachment
-World Partition GUID/reference
+UFunction flags
+actor/component transform
+World Partition descriptor GUID/reference
 PCG edge
 material expression input
-Pose Search schema/channel
-Montage section
 animation curve key
-Mirror Data Table row
+Pose Search schema/channel
+Niagara renderer/module relationship
+MovieScene track/section/channel containment
+MetaSound node/edge endpoint
+InputAction mapping/processor
 ```
 
 Derived logic may later join or summarize these facts, but should not replace them.
 
-## Structural extraction
-
-Structural schema 12 owns the largest project-wide pass.
-
-Major families:
-
-- physical files/source/config chunks;
-- Asset Registry identity/tags/package dependencies;
-- Blueprint graphs/nodes/pins/edges/properties/references/state;
-- UMG;
-- Animation Blueprint graph/state-machine semantics;
-- compact Control Rig/RigVM;
-- Behavior Tree / Blackboard / EQS / StateTree;
-- PCG;
-- Materials / Material Instances / Material Functions.
-
-Unknown/plugin graph nodes are preserved by concrete class, title, pins, properties and wiring instead of guessed from UI names.
-
-## World extraction
-
-World schema 12 owns:
-
-- world/level identity;
-- classic streaming relationships;
-- loaded actors and components;
-- transforms/attachments/ownership;
-- placed-instance overrides;
-- hard/soft object references;
-- Data Layers;
-- World Partition metadata/descriptors and descriptor reference GUIDs.
-
-### World Partition policy
-
-Descriptor enumeration should not load every external actor. The scanner may temporarily initialize a deserialized World Partition only when required/supported, walks descriptor instances, and restores initialization ownership afterward.
-
-LevelInstance/PackedLevelActor source worlds are reconstructed deterministically from canonical descriptor/package dependency facts only when a unique target exists.
-
-## Animation extraction
-
-Animation schema 1 adds a dedicated authored-asset layer behind Animation Blueprint graphs.
-
-### Base pass
-
-Captures:
-
-- AnimSequence/sequence-base identity and shared settings;
-- notifies / notify states;
-- sync markers;
-- Montage sections/slots/segments;
-- BlendSpace axes/samples;
-- Skeleton hierarchy/sockets/metadata;
-- Pose Search database/schema/channel/role facts;
-- reflection-backed optional adjacent asset state/references.
-
-### Companion/deep pass
-
-Captures the gaps exposed by the first real GASP corpus:
-
-- float and transform curves through `IAnimationDataModel`;
-- every `FRichCurveKey` and tangent/interpolation state;
-- PoseSearchInteractionAsset and role/items;
-- PoseSearchNormalizationSet database membership;
-- MirrorDataTable row semantics.
-
-Python performs two representation cleanups before database packing:
-
-- unused backing BlendSpace axis slots are removed from the canonical schema-1 representation;
-- ProxyAsset is distinguished from ProxyTable rather than classified from the module-name substring.
-
 ## Deterministic derivation
 
-Derived schema 10 currently reconstructs:
+Derived schema 14 is disposable and reproducible from compatible canonical input. Major views include:
 
-- Blueprint functions/events/calls;
-- unique internal call bindings;
-- bounded data provenance;
-- execution blocks/roots;
+- Blueprint functions/events/calls/bindings/data provenance/execution blocks;
 - Animation Blueprint state-machine topology;
-- Blueprint relations/context/summaries;
-- AI relations/summaries;
-- PCG/material parameters and visual relationships;
+- AI relations and summaries;
+- PCG/material parameters and visual relations;
 - world relations/context/summaries;
-- world-to-system placement links.
+- world-to-system placement links;
+- animation relations/context/summaries;
+- VFX relations/context/summaries;
+- typed project nodes/edges/neighborhoods.
 
 ### World-to-system stitching
 
-`world_system_relations.jsonl` joins placement to specialist systems with explicit evidence.
+`world_system_relations.jsonl` joins placement to first-class systems when evidence supports the relationship. Evidence can include exact world references, Blueprint relations, placed Blueprint classes and uniquely resolved package-level dependencies.
 
-Evidence may come from:
+### Typed project graph
+
+`project_nodes.jsonl` and `project_edges.jsonl` unify canonical and derived families into one traversal surface.
+
+Node coverage classes:
 
 ```text
-placed_actor_class
-world_reference
-blueprint_relation
-blueprint_asset_dependency
-world_asset_dependency
+first_class
+first_class_depth_pending
+partial
+generic_only
+external_or_excluded
 ```
 
-A semantic edge is emitted only when the underlying facts justify it. Package joins require an unambiguous specialist target.
+Edge quality classes:
 
-Derived animation relationships/context are intentionally postponed until animation schema 1 is stable; otherwise the project would bake unstable raw assumptions into a second layer.
+```text
+exact_semantic
+exact_reference
+unique_dependency_resolution
+generic_package_dependency
+```
+
+Every graph edge retains evidence/provenance. Asset Registry package dependencies remain explicit low-quality `package -> package` hops.
+
+### Bounded neighborhoods
+
+Project neighborhoods are precomputed to depth 3 with a 256-edge budget. Traversal prioritizes exact semantic/reference evidence before package plumbing.
+
+Schema 14 stores compact neighborhood hops:
+
+```text
+depth
+direction
+edge_id
+edge_quality
+source_coverage
+target_coverage
+evidence_count
+```
+
+The full source/target/relation/evidence remains authoritative in `project_edges.jsonl`. Readable neighborhood text is reconstructed on demand.
+
+## Canonical cleanup
+
+Post-scan cleanup may remove generated values that are not authored semantic state when that transformation is exact and deterministic.
+
+Current examples include:
+
+- generated `UMaterialExpression::MaterialExpressionGuid` rows;
+- generated/representation-only values previously identified in subsystem validation.
+
+Cleanup must preserve every retained row byte-for-byte where practical and update manifest counts.
 
 ## Retrieval architecture
 
 ### JSONL
 
-Canonical and derived JSONL are the portable interchange/debug format.
+Canonical and derived JSONL are the portable interchange/debug representation.
 
 ### SQLite
 
-`uat.db` is generated from the JSONL and is disposable. Specialist tables/indexes support targeted queries without placing the entire project into model context.
+`uat.db` is a disposable indexed cache. It is rebuilt from JSONL using bulk-load settings, then returned to normal SQLite durability settings. Non-unique secondary indexes are created after bulk insertion for faster packing and denser B-trees.
 
-### Compact bundle
+### Upload bundle
 
-The normal `.uatool.zip` carries compact canonical + useful derived streams. The SQLite DB is excluded; the very large optional raw RigVM property stream is excluded unless explicitly requested.
+The normal `.uatool.zip` contains portable JSON/manifests, not `uat.db`. Large optional raw RigVM properties are excluded unless explicitly requested.
 
-## Cross-project staging
+Default ZIP compression is Deflate level 3; `UATOOL_BUNDLE_LEVEL=0..9` overrides it.
 
-One canonical plugin checkout can scan other projects.
+### Derived freshness
 
-When the target is external, the launcher temporarily stages only:
+`.derived_freshness.json` is written only after raw and derived validation succeeds. It records schema/source/file metadata so `pack` and `bundle` can reuse current derived output instead of reparsing/rebuilding it unnecessarily.
 
-```text
-UnrealAssetTool.uplugin
-Source/
-```
+## Cross-project staging and build cache
 
-under the target project's normal plugin location, moving any same-name target plugin fully outside `Plugins` during the operation. UBT therefore sees a conventional project plugin. The stage is removed and any prior target plugin restored afterward.
-
-The launcher resolves the module binary from Unreal-generated `.modules` metadata and repairs the plugin runtime manifest using the target project's BuildId; it does not guess DebugGame DLL names.
-
-## Coverage quality is part of the graph
-
-Future project-level traversal must preserve two separate ideas:
-
-1. **what relation is known?**
-2. **how well is the target subsystem understood?**
-
-A traversal hop should retain provenance such as:
+One canonical checkout can scan unrelated targets. External projects temporarily receive:
 
 ```text
-canonical-structural
-canonical-reference
-derived-exact-join
-generic-package-dependency
+<Target>/Plugins/UnrealAssetTool/
+  UnrealAssetTool.uplugin
+  Source/
 ```
 
-and the entity should carry a coverage level. This prevents a generic Niagara package dependency from appearing as semantically equivalent to a material expression graph or Pose Search channel.
+Generated `Binaries/` and `Intermediate/` are moved to:
 
-## Coverage gate before universal traversal
+```text
+<Target>/Saved/UnrealAssetToolBuildCache/
+```
 
-Current priority order:
+when the temporary stage is removed, then restored for the next build. This keeps repeated external builds incremental without leaving maintained plugin source copies in each project.
 
-1. finish animation schema 1 GASP + Content Examples validation;
-2. add derived animation relations/context;
-3. Niagara + legacy Cascade;
-4. Sequencer;
-5. MetaSounds/audio;
-6. Enhanced Input/common gameplay data where useful;
-7. typed bounded project neighborhoods across the resulting graph.
-
-Traversal may be prototyped earlier, but must expose blind spots honestly.
+If the target Editor runtime manifest is current and target-owned native/build inputs have not changed, the launcher uses an isolated module-only build with unity enabled and adaptive unity disabled for the scanner module. Otherwise it falls back to the full target build.
 
 ## Regression strategy
 
-Primary corpora:
+Primary UE 5.8.2 corpora:
 
-- **Game Animation Sample** — Motion Matching/Pose Search/modern animation;
-- **Cropout** — compact Blueprint/gameplay/AI regression;
-- **Content Examples** — broad engine feature coverage, especially VFX/audio/cinematics/materials;
-- **StackOBot** — targeted World Partition/LevelInstance/PackedLevelActor/PCG probe.
+- **Game Animation Sample** — Blueprint/animation/Pose Search/Enhanced Input scale;
+- **Content Examples** — broad VFX, Sequencer, audio, MetaSound, material and gameplay-data breadth;
+- **StackOBot + Niagara Examples** — World Partition/LevelInstance/PCG/VFX and cross-project build regression;
+- **Cropout** — compact Blueprint/gameplay regression.
 
-A new extractor is not considered stable merely because it compiles. Validation checks row-count invariants, source/target resolution, duplicate identities, unchanged prior-schema outputs where applicable, and representative authored examples.
+A scanner family is considered stable only after corpus-level validation of counts, topology, endpoint resolution, provenance quality, deterministic identities and prior-output regressions.
+
+## Remaining architecture boundary
+
+Asset Registry is intentionally universal; first-class semantic extraction is intentionally selective. The project should expand first-class coverage where an asset family's authored internals materially affect gameplay understanding, while preserving unsupported assets honestly as generic entities rather than fabricating semantics.
+
+See [coverage.md](coverage.md) for the current audit.
