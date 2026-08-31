@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Compact schema-14 project neighborhoods.
+"""Compact schema-15 project neighborhoods.
 
 `project_edges.jsonl` is the authoritative typed/provenance graph. A bounded
-neighborhood therefore only needs to record which edge was selected, at what
-traversal depth/direction, plus the quality/coverage classification required on
-every hop. Duplicating complete source/target paths and evidence inside every
-root neighborhood can expand a large project by hundreds of megabytes.
+neighborhood therefore only needs to record which edge was selected and at what
+traversal depth/direction. Edge quality, source/target coverage, evidence count,
+paths, relation and provenance are all reconstructed from the authoritative edge
+row instead of being repeated in every root neighborhood.
 
 SQLite keeps the same compact representation. Human-readable neighborhood text
 is reconstructed on demand at query time by joining compact hop `edge_id`s to
@@ -20,10 +20,6 @@ HOP_FIELDS = (
     "depth",
     "direction",
     "edge_id",
-    "edge_quality",
-    "source_coverage",
-    "target_coverage",
-    "evidence_count",
 )
 ROOT_FIELDS = (
     "root_path",
@@ -136,7 +132,7 @@ def _matching_neighborhood_rows(conn, pattern: str, limit: int):
 
 
 def query(conn, print_rows, pattern: str, limit: int, *, max_chars: int) -> None:
-    """Schema-14 project query with neighborhood text rendered on demand."""
+    """Schema-15 project query with neighborhood text rendered on demand."""
     if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='project_nodes'").fetchone():
         return
 
@@ -188,19 +184,25 @@ def validation_error(output, rows) -> str | None:
     for neighborhood in rows(output / "project_neighborhoods.jsonl"):
         hops = neighborhood.get("hops", []) if isinstance(neighborhood.get("hops", []), list) else []
         if "text" in neighborhood:
-            return "schema-14 project neighborhood unexpectedly embeds duplicated text"
+            return "schema-15 project neighborhood unexpectedly embeds duplicated text"
         if int(neighborhood.get("edge_count", 0)) != len(hops):
             return f"compact neighborhood edge count mismatch: {neighborhood.get('root_path','')}"
+        max_depth = int(neighborhood.get("max_depth", 0))
         for hop in hops:
             if not isinstance(hop, dict):
                 return f"invalid compact neighborhood hop: {neighborhood.get('root_path','')}"
             extra = set(hop) - set(HOP_FIELDS)
             if extra:
                 return f"compact neighborhood duplicates edge fields {sorted(extra)}"
-            edge = edges.get(str(hop.get("edge_id", "")))
-            if edge is None:
-                return f"compact neighborhood references unknown edge: {hop.get('edge_id','')}"
-            for field in ("edge_quality", "source_coverage", "target_coverage", "evidence_count"):
-                if hop.get(field) != edge.get(field):
-                    return f"compact neighborhood {field} mismatch: {hop.get('edge_id','')}"
+            edge_id = str(hop.get("edge_id", ""))
+            if edge_id not in edges:
+                return f"compact neighborhood references unknown edge: {edge_id}"
+            try:
+                depth = int(hop.get("depth", 0))
+            except (TypeError, ValueError):
+                return f"invalid compact neighborhood depth: {edge_id}"
+            if depth < 1 or (max_depth > 0 and depth > max_depth):
+                return f"compact neighborhood depth out of range: {edge_id}"
+            if hop.get("direction") not in {"in", "out"}:
+                return f"invalid compact neighborhood direction: {edge_id}"
     return None
