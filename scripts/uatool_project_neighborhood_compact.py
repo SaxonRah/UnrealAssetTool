@@ -3,16 +3,17 @@
 
 Logical derived schema 15 keeps the same neighborhood model: each selected hop
 has `{depth,direction,edge_id}`. Physical storage version 2 removes repeated
-hashed edge IDs by referring to the zero-based order of `project_edges.jsonl`.
+hashed edge IDs by referring to the row order of `project_edges.jsonl`.
 
 Each physical hop is a signed 1-based edge ordinal:
 - positive => traversal direction `out`
 - negative => traversal direction `in`
 - absolute value minus one => row index in `project_edges.jsonl`
 
-`depth_ends` stores cumulative hop counts for depths 1..max_depth. This is
-lossless because the neighborhood builder emits hops in nondecreasing depth
-order. Query/database consumers reconstruct the logical hop model on demand.
+`depth_ends` stores cumulative hop counts for depths 1..max_depth. The public
+`compact()` helper remains schema-15 compatible; the canonical writer converts
+that logical form to ordinal storage only when `project_neighborhoods.jsonl` is
+written. Query/validation consumers reconstruct the logical hop model on demand.
 """
 from __future__ import annotations
 
@@ -20,12 +21,16 @@ import json
 from pathlib import Path
 
 import uatool_project_graph as project_graph
-import uatool_project_neighborhoods as neighborhood_policy
 import uatool_runtime as runtime
 
 STORAGE_SCHEMA_VERSION = 2
 ENCODING = "project_neighborhood_ordinals_v1"
 
+HOP_FIELDS = (
+    "depth",
+    "direction",
+    "edge_id",
+)
 ROOT_FIELDS = (
     "root_path",
     "root_kind",
@@ -42,6 +47,20 @@ PHYSICAL_FIELDS = set(ROOT_FIELDS) | {
 }
 
 
+def compact(neighborhoods: list[dict]) -> list[dict]:
+    """Legacy/public schema-15 compaction: keep only traversal hop metadata."""
+    result = []
+    for row in neighborhoods:
+        compact_row = {key: row.get(key) for key in ROOT_FIELDS}
+        compact_row["hops"] = [
+            {key: hop.get(key) for key in HOP_FIELDS}
+            for hop in row.get("hops", [])
+            if isinstance(hop, dict)
+        ]
+        result.append(compact_row)
+    return result
+
+
 def _edge_ids(project_edges: list[dict]) -> list[str]:
     ids = [str(row.get("edge_id", "")) for row in project_edges]
     if any(not edge_id for edge_id in ids):
@@ -51,18 +70,17 @@ def _edge_ids(project_edges: list[dict]) -> list[str]:
     return ids
 
 
-def compact(neighborhoods: list[dict], project_edges: list[dict]) -> list[dict]:
-    """Convert logical schema-15 hop objects to ordinal-backed physical rows."""
+def compact_ordinals(
+    neighborhoods: list[dict],
+    project_edges: list[dict],
+) -> list[dict]:
+    """Convert schema-15 logical hop rows to ordinal-backed physical rows."""
     edge_ids = _edge_ids(project_edges)
     edge_index = {edge_id: index for index, edge_id in enumerate(edge_ids)}
     result: list[dict] = []
 
-    for row in neighborhoods:
+    for row in compact(neighborhoods):
         hops = row.get("hops", [])
-        if not isinstance(hops, list):
-            raise RuntimeError(
-                f"project neighborhood hops is not a list: {row.get('root_path','')}"
-            )
         max_depth = int(row.get("max_depth", 0) or 0)
         depths: list[int] = []
         signed_edges: list[int] = []
@@ -70,15 +88,6 @@ def compact(neighborhoods: list[dict], project_edges: list[dict]) -> list[dict]:
         seen_ordinals: set[int] = set()
 
         for hop in hops:
-            if not isinstance(hop, dict):
-                raise RuntimeError(
-                    f"project neighborhood hop is not an object: {row.get('root_path','')}"
-                )
-            extra = set(hop) - {"depth", "direction", "edge_id"}
-            if extra:
-                raise RuntimeError(
-                    f"project neighborhood logical hop has unexpected fields {sorted(extra)}"
-                )
             edge_id = str(hop.get("edge_id", ""))
             if edge_id not in edge_index:
                 raise RuntimeError(f"project neighborhood references unknown edge: {edge_id}")
@@ -180,6 +189,33 @@ def _validate_physical_row(row: dict, *, edge_count: int, context: str) -> int:
     return declared_edges
 
 
+def _validate_legacy_row(row: dict, edge_by_id: dict[str, dict], context: str) -> None:
+    hops = row.get("hops", []) if isinstance(row.get("hops", []), list) else []
+    if "text" in row:
+        raise RuntimeError("schema-15 project neighborhood unexpectedly embeds duplicated text")
+    if int(row.get("edge_count", 0) or 0) != len(hops):
+        raise RuntimeError(f"compact neighborhood edge count mismatch: {row.get('root_path','')}")
+    max_depth = int(row.get("max_depth", 0) or 0)
+    seen: set[str] = set()
+    for hop in hops:
+        if not isinstance(hop, dict):
+            raise RuntimeError(f"invalid compact neighborhood hop in {context}")
+        extra = set(hop) - set(HOP_FIELDS)
+        if extra:
+            raise RuntimeError(f"compact neighborhood duplicates edge fields {sorted(extra)}")
+        edge_id = str(hop.get("edge_id", ""))
+        if edge_id not in edge_by_id:
+            raise RuntimeError(f"compact neighborhood references unknown edge: {edge_id}")
+        if edge_id in seen:
+            raise RuntimeError(f"duplicate compact neighborhood edge: {edge_id}")
+        seen.add(edge_id)
+        depth = int(hop.get("depth", 0) or 0)
+        if depth < 1 or (max_depth > 0 and depth > max_depth):
+            raise RuntimeError(f"compact neighborhood depth out of range: {edge_id}")
+        if hop.get("direction") not in {"in", "out"}:
+            raise RuntimeError(f"invalid compact neighborhood direction: {edge_id}")
+
+
 def logical_hops(row: dict, edge_ids: list[str]) -> list[dict]:
     """Expand one physical row to logical `{depth,direction,edge_id}` hops."""
     _validate_physical_row(
@@ -204,6 +240,8 @@ def logical_hops(row: dict, edge_ids: list[str]) -> list[dict]:
 
 
 def expand(row: dict, edge_ids: list[str]) -> dict:
+    if row.get("encoding") != ENCODING:
+        return compact([row])[0]
     logical = {key: row.get(key) for key in ROOT_FIELDS}
     logical["hops"] = logical_hops(row, edge_ids)
     return logical
@@ -213,10 +251,7 @@ def _logical_rows(output: Path, rows):
     edge_rows = list(rows(output / "project_edges.jsonl"))
     edge_ids = _edge_ids(edge_rows)
     for row in rows(output / "project_neighborhoods.jsonl"):
-        if row.get("encoding") == ENCODING:
-            yield expand(row, edge_ids)
-        else:
-            yield row
+        yield expand(row, edge_ids)
 
 
 def _update_storage_manifest(output: Path) -> None:
@@ -245,32 +280,66 @@ def validation_error(output, rows) -> str | None:
     try:
         edges = list(rows(output / "project_edges.jsonl"))
         edge_ids = _edge_ids(edges)
+        edge_by_id = {edge_id: row for edge_id, row in zip(edge_ids, edges)}
         neighborhoods = list(rows(output / "project_neighborhoods.jsonl"))
         seen_roots: set[str] = set()
+        physical_seen = False
         for index, neighborhood in enumerate(neighborhoods, 1):
             context = f"{output / 'project_neighborhoods.jsonl'}:{index}"
-            if "text" in neighborhood:
-                return "project neighborhood storage unexpectedly embeds duplicated text"
             root = str(neighborhood.get("root_path", ""))
             if not root:
                 return f"project neighborhood missing root_path in {context}"
             if root in seen_roots:
                 return f"duplicate project neighborhood root: {root}"
             seen_roots.add(root)
-            _validate_physical_row(
-                neighborhood,
-                edge_count=len(edge_ids),
-                context=context,
-            )
-            if len(logical_hops(neighborhood, edge_ids)) != int(
-                neighborhood.get("edge_count", 0)
-            ):
-                return f"project neighborhood expansion count mismatch: {root}"
+            if neighborhood.get("encoding") == ENCODING:
+                physical_seen = True
+                _validate_physical_row(
+                    neighborhood,
+                    edge_count=len(edge_ids),
+                    context=context,
+                )
+                if len(logical_hops(neighborhood, edge_ids)) != int(
+                    neighborhood.get("edge_count", 0)
+                ):
+                    return f"project neighborhood expansion count mismatch: {root}"
+            else:
+                _validate_legacy_row(neighborhood, edge_by_id, context)
     except RuntimeError as exc:
         return str(exc)
 
-    _update_storage_manifest(output)
+    if physical_seen:
+        _update_storage_manifest(output)
     return None
+
+
+def _edge_map_for_ids(conn, edge_ids: list[str]) -> dict[str, dict]:
+    result: dict[str, dict] = {}
+    unique = sorted({str(edge_id) for edge_id in edge_ids if edge_id})
+    for start in range(0, len(unique), 800):
+        chunk = unique[start:start + 800]
+        if not chunk:
+            continue
+        placeholders = ",".join("?" for _ in chunk)
+        for row in conn.execute(
+            "SELECT edge_id,source_kind,source,relation,target_kind,target,"
+            "source_coverage,target_coverage,edge_quality,evidence_count "
+            f"FROM project_edges WHERE edge_id IN ({placeholders})",
+            chunk,
+        ):
+            result[str(row[0])] = {
+                "edge_id": str(row[0]),
+                "source_kind": str(row[1]),
+                "source": str(row[2]),
+                "relation": str(row[3]),
+                "target_kind": str(row[4]),
+                "target": str(row[5]),
+                "source_coverage": str(row[6]),
+                "target_coverage": str(row[7]),
+                "edge_quality": str(row[8]),
+                "evidence_count": int(row[9]),
+            }
+    return result
 
 
 def _edge_map_for_ordinals(conn, ordinals: list[int]) -> dict[int, dict]:
@@ -302,7 +371,7 @@ def _edge_map_for_ordinals(conn, ordinals: list[int]) -> dict[int, dict]:
     return result
 
 
-def render_text(row: dict, edge_by_ordinal: dict[int, dict], max_chars: int) -> str:
+def render_text(row: dict, edge_map: dict, max_chars: int) -> str:
     lines = [
         f"Root: {row.get('root_path','')}",
         f"Kind: {row.get('root_kind','')} coverage={row.get('root_coverage','')}",
@@ -310,37 +379,55 @@ def render_text(row: dict, edge_by_ordinal: dict[int, dict], max_chars: int) -> 
         f"edges={int(row.get('edge_count',0))} "
         f"nodes={int(row.get('node_count',0))} truncated={bool(row.get('truncated',False))}",
     ]
-    start = 0
-    for depth, end in enumerate(row.get("depth_ends", []), 1):
-        for signed in row.get("hop_edges", [])[start:end]:
-            edge = edge_by_ordinal.get(abs(int(signed)))
-            if not edge:
+
+    def append_edge(depth: int, direction: str, edge: dict | None) -> None:
+        if not edge:
+            return
+        arrow = "->" if direction == "out" else "<-"
+        lines.append(
+            f"d{depth} {edge['source_kind']} {edge['source']} {arrow} "
+            f"{edge['relation']} {arrow} {edge['target_kind']} {edge['target']} "
+            f"quality={edge['edge_quality']} "
+            f"coverage={edge['source_coverage']}->{edge['target_coverage']} "
+            f"evidence={edge['evidence_count']}"
+        )
+
+    if row.get("encoding") == ENCODING:
+        start = 0
+        for depth, end in enumerate(row.get("depth_ends", []), 1):
+            for signed in row.get("hop_edges", [])[start:end]:
+                append_edge(
+                    depth,
+                    "out" if int(signed) > 0 else "in",
+                    edge_map.get(abs(int(signed))),
+                )
+            start = end
+    else:
+        for hop in row.get("hops", []):
+            if not isinstance(hop, dict):
                 continue
-            arrow = "->" if int(signed) > 0 else "<-"
-            lines.append(
-                f"d{depth} {edge['source_kind']} {edge['source']} {arrow} "
-                f"{edge['relation']} {arrow} {edge['target_kind']} {edge['target']} "
-                f"quality={edge['edge_quality']} "
-                f"coverage={edge['source_coverage']}->{edge['target_coverage']} "
-                f"evidence={edge['evidence_count']}"
+            append_edge(
+                int(hop.get("depth", 0) or 0),
+                str(hop.get("direction", "")),
+                edge_map.get(str(hop.get("edge_id", ""))),
             )
-        start = end
+
     text = "\n".join(lines)
     if len(text) > max_chars:
         return text[:max_chars] + "\n...[truncated]"
     return text
 
 
-def _matching_edge_ordinals(conn, pattern: str) -> set[int]:
-    return {
-        int(row[0])
-        for row in conn.execute(
-            "SELECT rowid FROM project_edges "
+def _matching_edges(conn, pattern: str) -> tuple[set[int], set[str]]:
+    rows = list(
+        conn.execute(
+            "SELECT rowid,edge_id FROM project_edges "
             "WHERE source LIKE ? OR relation LIKE ? OR target LIKE ? "
             "OR edge_quality LIKE ? OR evidence_json LIKE ?",
             (pattern, pattern, pattern, pattern, pattern),
         )
-    }
+    )
+    return ({int(row[0]) for row in rows}, {str(row[1]) for row in rows})
 
 
 def _matching_neighborhood_rows(conn, pattern: str, limit: int):
@@ -358,8 +445,8 @@ def _matching_neighborhood_rows(conn, pattern: str, limit: int):
     if len(selected) >= limit:
         return selected
 
-    matching_ordinals = _matching_edge_ordinals(conn, pattern)
-    if not matching_ordinals:
+    matching_ordinals, matching_ids = _matching_edges(conn, pattern)
+    if not matching_ordinals and not matching_ids:
         return selected
 
     for db_row in conn.execute(
@@ -373,10 +460,19 @@ def _matching_neighborhood_rows(conn, pattern: str, limit: int):
             row = json.loads(str(db_row[6]))
         except (TypeError, json.JSONDecodeError):
             continue
-        values = row.get("hop_edges", [])
-        if not isinstance(values, list):
-            continue
-        if any(abs(int(value)) in matching_ordinals for value in values):
+        matched = False
+        if row.get("encoding") == ENCODING:
+            values = row.get("hop_edges", [])
+            matched = isinstance(values, list) and any(
+                abs(int(value)) in matching_ordinals for value in values
+            )
+        else:
+            matched = any(
+                isinstance(hop, dict)
+                and str(hop.get("edge_id", "")) in matching_ids
+                for hop in row.get("hops", [])
+            )
+        if matched:
             selected.append(db_row)
             seen_roots.add(root)
             if len(selected) >= limit:
@@ -385,7 +481,7 @@ def _matching_neighborhood_rows(conn, pattern: str, limit: int):
 
 
 def query(conn, print_rows, pattern: str, limit: int, *, max_chars: int) -> None:
-    """Project query with neighborhood text reconstructed from ordinal storage."""
+    """Project query with neighborhood text reconstructed from compact storage."""
     if not conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name='project_nodes'"
     ).fetchone():
@@ -429,12 +525,20 @@ def query(conn, print_rows, pattern: str, limit: int, *, max_chars: int) -> None
             row = json.loads(str(db_row[6]))
         except (TypeError, json.JSONDecodeError):
             continue
-        ordinals = [
-            abs(int(value))
-            for value in row.get("hop_edges", [])
-            if isinstance(value, int) and not isinstance(value, bool) and value != 0
-        ]
-        edge_by_ordinal = _edge_map_for_ordinals(conn, ordinals)
+        if row.get("encoding") == ENCODING:
+            ordinals = [
+                abs(int(value))
+                for value in row.get("hop_edges", [])
+                if isinstance(value, int) and not isinstance(value, bool) and value != 0
+            ]
+            edge_map = _edge_map_for_ordinals(conn, ordinals)
+        else:
+            edge_ids = [
+                str(hop.get("edge_id", ""))
+                for hop in row.get("hops", [])
+                if isinstance(hop, dict) and hop.get("edge_id")
+            ]
+            edge_map = _edge_map_for_ids(conn, edge_ids)
         rendered.append(
             {
                 "root_path": str(db_row[0]),
@@ -443,7 +547,7 @@ def query(conn, print_rows, pattern: str, limit: int, *, max_chars: int) -> None
                 "edge_count": int(db_row[3]),
                 "node_count": int(db_row[4]),
                 "truncated": int(db_row[5]),
-                "text": render_text(row, edge_by_ordinal, max_chars),
+                "text": render_text(row, edge_map, max_chars),
             }
         )
     print_rows(
@@ -461,24 +565,11 @@ def query(conn, print_rows, pattern: str, limit: int, *, max_chars: int) -> None
 
 
 def _install() -> None:
-    if getattr(neighborhood_policy, "_ordinal_storage_installed", False):
+    if getattr(runtime, "_project_neighborhood_ordinal_storage_installed", False):
         return
 
-    original_rebuild = neighborhood_policy.rebuild
     original_project_validation = project_graph.validation_error
     original_write = runtime._write
-
-    def rebuild(*args, **kwargs):
-        logical = original_rebuild(*args, **kwargs)
-        if not bool(kwargs.get("compact", False)):
-            return logical
-        if len(args) >= 2:
-            project_edges = args[1]
-        else:
-            project_edges = kwargs.get("project_edges")
-        if not isinstance(project_edges, list):
-            project_edges = list(project_edges or [])
-        return compact(logical, project_edges)
 
     def project_validation(output, rows):
         output = Path(output)
@@ -492,16 +583,18 @@ def _install() -> None:
         return original_project_validation(output, logical_rows)
 
     def write(path, values):
-        count = original_write(path, values)
         path = Path(path)
         if path.name == "project_neighborhoods.jsonl":
+            project_edges = list(runtime._rows(path.parent / "project_edges.jsonl"))
+            values = compact_ordinals(list(values), project_edges)
+            count = original_write(path, values)
             _update_storage_manifest(path.parent)
-        return count
+            return count
+        return original_write(path, values)
 
-    neighborhood_policy.rebuild = rebuild
     project_graph.validation_error = project_validation
     runtime._write = write
-    neighborhood_policy._ordinal_storage_installed = True
+    runtime._project_neighborhood_ordinal_storage_installed = True
 
 
 _install()
