@@ -205,6 +205,39 @@ def _augment(output: Path, rows, nodes: list[dict], edges: list[dict], graph_mod
                 evidence,
             )
 
+    # Concrete transition routes are derived only when Evaluate() proved a
+    # condition/result pair and NextMode resolved uniquely inside one component.
+    # Preserve that exact provenance on both the transition->target edge and the
+    # convenient direct source->target retrieval edge.
+    for row in rows(output / "mover_transition_routes.jsonl"):
+        source = str(row.get("source_mode_path", ""))
+        transition = str(row.get("transition_path", ""))
+        target = str(row.get("target_mode_path", ""))
+        if not source or not transition or not target:
+            continue
+        register(source, "mover_mode", "first_class")
+        register(transition, "mover_transition", "first_class")
+        register(target, "mover_mode", "first_class")
+        evidence = {
+            "stream": "mover_transition_routes.jsonl",
+            "kind": "derived_mover_transition_behavior",
+            "behavior_id": row.get("behavior_id", ""),
+            "transition_blueprint_path": row.get("transition_blueprint_path", ""),
+            "source_mode_name": row.get("source_mode_name", ""),
+            "target_mode_name": row.get("target_mode_name", ""),
+            "condition_text": row.get("condition_text", ""),
+            "condition_polarity": bool(row.get("condition_polarity", False)),
+            "branch_output": row.get("branch_output", ""),
+        }
+        add(
+            transition, "transitions_to_movement_mode", target,
+            "mover_transition", "mover_mode", evidence,
+        )
+        add(
+            source, "can_transition_to_movement_mode", target,
+            "mover_mode", "mover_mode", evidence,
+        )
+
     nodes.sort(key=lambda n: (str(n.get("path", "")), str(n.get("node_kind", "")), str(n.get("node_id", ""))))
     edges.sort(key=lambda e: (str(e.get("source", "")), str(e.get("relation", "")), str(e.get("target", "")), str(e.get("edge_id", ""))))
     return nodes, edges
