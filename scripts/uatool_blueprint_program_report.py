@@ -116,6 +116,116 @@ def _reachable_blocks(
     return result
 
 
+def _target_label(edge: dict, labels: dict[str, str]) -> str:
+    return labels.get(str(edge.get("target_block_id", "") or ""), "B?")
+
+
+def _edge_sort_key(edge: dict) -> tuple:
+    kind = str(edge.get("control_kind", "") or "")
+    if kind == "branch":
+        polarity = edge.get("condition_polarity")
+        return (0, 0 if polarity is True else 1, str(edge.get("target_block_id", "") or ""))
+    if kind in {"switch_case", "switch_default"}:
+        return (
+            1,
+            1 if kind == "switch_default" else 0,
+            str(edge.get("case_name", "") or edge.get("source_pin_display_name", "") or edge.get("source_pin_name", "")),
+            str(edge.get("target_block_id", "") or ""),
+        )
+    if kind == "sequence":
+        index = edge.get("sequence_index")
+        return (2, int(index) if index is not None else 1 << 30, str(edge.get("target_block_id", "") or ""))
+    return (
+        3,
+        str(edge.get("source_pin_display_name", "") or edge.get("source_pin_name", "") or ""),
+        str(edge.get("target_block_id", "") or ""),
+    )
+
+
+def _control_summary(edges: list[dict], labels: dict[str, str]) -> str:
+    """Render one block's outgoing control topology without losing provenance.
+
+    blueprint_control_edges.jsonl is a one-to-one semantic decoration of the
+    authoritative execution-block edge set. When present, compact the repeated
+    per-edge control metadata into one readable branch/switch/sequence clause.
+    Historical outputs without control rows retain the previous pin->block view.
+    """
+    if not edges:
+        return ""
+
+    ordered = sorted(edges, key=_edge_sort_key)
+    kinds = {str(edge.get("control_kind", "") or "") for edge in ordered}
+
+    if kinds == {"branch"}:
+        conditions = {
+            str(edge.get("condition_text", "") or "")
+            for edge in ordered
+            if edge.get("condition_text")
+        }
+        condition = next(iter(conditions)) if len(conditions) == 1 else ""
+        branches = []
+        for edge in ordered:
+            polarity = edge.get("condition_polarity")
+            label = "true" if polarity is True else "false" if polarity is False else "?"
+            branches.append(f"{label}->{_target_label(edge, labels)}")
+        prefix = f"if {_short(condition, 180)}: " if condition else "branch: "
+        return prefix + ", ".join(branches)
+
+    if kinds and kinds <= {"switch_case", "switch_default"}:
+        selectors = {
+            str(edge.get("selector_text", "") or "")
+            for edge in ordered
+            if edge.get("selector_text")
+        }
+        selector = next(iter(selectors)) if len(selectors) == 1 else ""
+        cases = []
+        for edge in ordered:
+            if str(edge.get("control_kind", "") or "") == "switch_default":
+                case = "default"
+            else:
+                case = str(
+                    edge.get("case_name", "")
+                    or edge.get("source_pin_display_name", "")
+                    or edge.get("source_pin_name", "")
+                    or "case"
+                )
+            cases.append(f"{case}->{_target_label(edge, labels)}")
+        prefix = f"switch {_short(selector, 150)}: " if selector else "switch: "
+        return prefix + ", ".join(cases)
+
+    if kinds == {"sequence"}:
+        outputs = []
+        for edge in ordered:
+            index = edge.get("sequence_index")
+            token = str(index) if index is not None else "?"
+            outputs.append(f"[{token}]->{_target_label(edge, labels)}")
+        return "sequence: " + ", ".join(outputs)
+
+    bits = []
+    for edge in ordered:
+        target = _target_label(edge, labels)
+        kind = str(edge.get("control_kind", "") or "")
+        if kind == "branch":
+            polarity = edge.get("condition_polarity")
+            label = "true" if polarity is True else "false" if polarity is False else "branch"
+            bits.append(f"{label}->{target}")
+        elif kind in {"switch_case", "switch_default"}:
+            case = "default" if kind == "switch_default" else str(
+                edge.get("case_name", "")
+                or edge.get("source_pin_display_name", "")
+                or edge.get("source_pin_name", "")
+                or "case"
+            )
+            bits.append(f"{case}->{target}")
+        elif kind == "sequence":
+            index = edge.get("sequence_index")
+            bits.append(f"[{index if index is not None else '?'}]->{target}")
+        else:
+            pin = str(edge.get("source_pin_display_name", "") or edge.get("source_pin_name", "") or "")
+            bits.append(f"{pin or 'next'}->{target}")
+    return ", ".join(bits)
+
+
 def build_report(
     output: Path,
     rows,
@@ -153,10 +263,16 @@ def build_report(
     statements = _rows_for(output, rows, "blueprint_semantic_statements.jsonl", blueprint_path)
     blocks = _rows_for(output, rows, "blueprint_semantic_blocks.jsonl", blueprint_path)
     block_edges = _rows_for(output, rows, "blueprint_execution_block_edges.jsonl", blueprint_path)
+    control_edges = _rows_for(output, rows, "blueprint_control_edges.jsonl", blueprint_path)
     roots = _rows_for(output, rows, "blueprint_execution_roots.jsonl", blueprint_path)
     semantic_edges = _rows_for(output, rows, "blueprint_semantic_edges.jsonl", blueprint_path)
     components = _components_for(output, rows, blueprint_path)
     component_properties = _rows_for(output, rows, "blueprint_component_properties.jsonl", blueprint_path)
+
+    # The control stream is guaranteed one-to-one with execution block edges by
+    # its own derived validator. Prefer it only when present for this Blueprint;
+    # otherwise preserve report compatibility with historical bundles.
+    report_edges = control_edges if control_edges else block_edges
 
     graph_names = sorted({
         str(row.get("graph_name", "") or "")
@@ -203,7 +319,7 @@ def build_report(
         ))
 
     outgoing: dict[str, list[dict]] = collections.defaultdict(list)
-    for edge in block_edges:
+    for edge in report_edges:
         outgoing[str(edge.get("source_block_id", "") or "")].append(edge)
 
     reachable_by_graph = _reachable_blocks(blocks_by_graph, roots_by_graph, outgoing)
@@ -246,6 +362,8 @@ def build_report(
         "statement_count": len(statements),
         "block_count": len(blocks),
         "root_count": len(roots),
+        "control_edge_count": len(control_edges),
+        "uses_control_semantics": bool(control_edges),
         "unreachable_block_count": unreachable_block_count,
         "function_count": len(functions),
         "event_count": len(events),
@@ -278,10 +396,15 @@ def build_report(
 def print_report(report: dict) -> None:
     print("=== BLUEPRINT PROGRAM REPORT ===")
     print(report["blueprint_path"])
+    control_text = (
+        f" control_edges={report.get('control_edge_count', 0)}"
+        if report.get("uses_control_semantics")
+        else ""
+    )
     print(
         "graphs={graphs} nodes={nodes} statements={statements} blocks={blocks} roots={roots} "
         "unreachable_blocks={unreachable} functions={functions} events={events} "
-        "components={components} component_overrides={overrides}".format(
+        "components={components} component_overrides={overrides}{control}".format(
             graphs=len(report.get("graph_names", [])),
             nodes=report.get("semantic_node_count", 0),
             statements=report.get("statement_count", 0),
@@ -292,6 +415,7 @@ def print_report(report: dict) -> None:
             events=report.get("event_count", 0),
             components=report.get("component_count", 0),
             overrides=report.get("component_property_count", 0),
+            control=control_text,
         )
     )
 
@@ -383,6 +507,7 @@ def print_report(report: dict) -> None:
     outgoing = report.get("outgoing", {})
     roots_by_graph = report.get("roots_by_graph", {})
     reachable_by_graph = report.get("reachable_by_graph", {})
+    uses_control_semantics = bool(report.get("uses_control_semantics"))
     remaining = int(report.get("statement_limit", 0) or 0)
 
     all_graphs = []
@@ -412,15 +537,20 @@ def print_report(report: dict) -> None:
             block_id = str(block.get("block_id", "") or "")
             label = labels.get(block_id, "B?")
             status = " [unreachable]" if reachable is not None and block_id not in reachable else ""
-            edge_bits = []
-            for edge in sorted(outgoing.get(block_id, []), key=lambda row: (
-                str(row.get("source_pin_name", "") or ""),
-                str(row.get("target_block_id", "") or ""),
-            )):
-                target = labels.get(str(edge.get("target_block_id", "") or ""), "B?")
-                pin = str(edge.get("source_pin_name", "") or "")
-                edge_bits.append(f"{pin or 'next'}->{target}")
-            edge_text = (" | " + ", ".join(edge_bits)) if edge_bits else ""
+            block_outgoing = outgoing.get(block_id, [])
+            if uses_control_semantics:
+                summary = _control_summary(block_outgoing, labels)
+                edge_text = (" | " + summary) if summary else ""
+            else:
+                edge_bits = []
+                for edge in sorted(block_outgoing, key=lambda row: (
+                    str(row.get("source_pin_name", "") or ""),
+                    str(row.get("target_block_id", "") or ""),
+                )):
+                    target = labels.get(str(edge.get("target_block_id", "") or ""), "B?")
+                    pin = str(edge.get("source_pin_name", "") or "")
+                    edge_bits.append(f"{pin or 'next'}->{target}")
+                edge_text = (" | " + ", ".join(edge_bits)) if edge_bits else ""
             print(f"    {label}{status}{edge_text}")
             for statement in statements_by_block.get(block_id, []):
                 if remaining <= 0:
