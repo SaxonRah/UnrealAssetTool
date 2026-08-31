@@ -26,12 +26,10 @@ import uatool_derived_freshness as derived_freshness
 import uatool_build_perf as build_perf
 import uatool_verify_bundle as bundle_verify
 
-# Schema 18 promotes the scanner's broad reflected K2 operation vocabulary into
-# generic program semantics (comparison/collection/delegate/input/data access,
-# construction/conversion/async calls, etc.) without adding gameplay-domain
-# parsers. Schema-17 semantic statements remain structurally compatible and are
-# regenerated from the richer semantic-node roles.
-FINAL_DERIVED_SCHEMA_VERSION = 18
+# Schema 19 preserves readable user-defined enum branch metadata on Blueprint
+# execution block edges while retaining Unreal's raw serialized exec-pin names.
+# Schema 18's broad reflected K2 operation vocabulary remains unchanged.
+FINAL_DERIVED_SCHEMA_VERSION = 19
 project_graph.DERIVED_SCHEMA_VERSION = FINAL_DERIVED_SCHEMA_VERSION
 SCRIPT_DIR = Path(__file__).resolve().parent
 
