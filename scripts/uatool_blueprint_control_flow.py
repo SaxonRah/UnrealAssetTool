@@ -6,12 +6,18 @@ one-to-one row for every block edge and adds deterministic control meaning where
 the source node proves it: branch predicate/polarity, switch selector/case, and
 sequence output order. Unsupported shapes remain explicit generic flow rather
 than being guessed.
+
+This is an independently versioned derived layer. It is installed before the
+canonical composition root captures core globals, so it participates in derive,
+SQLite, query, bundle membership, freshness and manifest counts without adding a
+second public launcher or requiring another Unreal scan.
 """
 from __future__ import annotations
 
 import hashlib
 import json
 import re
+import sqlite3
 from pathlib import Path
 
 CONTROL_FLOW_SCHEMA_VERSION = 1
@@ -56,28 +62,11 @@ def _rows(path: Path):
             yield value
 
 
-def _input(statement: dict, *names: str) -> dict | None:
-    wanted = {name.lower() for name in names}
-    for item in statement.get("inputs", []):
-        if not isinstance(item, dict):
-            continue
-        if str(item.get("pin_name", "") or "").lower() in wanted:
-            return item
-    return None
-
-
-def _input_text(item: dict | None) -> str:
-    if not item:
-        return ""
-    if str(item.get("source_kind", "")) == "dependency":
-        return str(item.get("expression_text", "") or "")
-    return str(item.get("literal", "") or "")
-
-
-def _dependency_id(item: dict | None) -> str:
-    if not item or str(item.get("source_kind", "")) != "dependency":
-        return ""
-    return str(item.get("dependency_id", "") or "")
+def _write(path: Path, values: list[dict]) -> int:
+    with path.open("w", encoding="utf-8", newline="\n") as handle:
+        for value in values:
+            handle.write(_j(value) + "\n")
+    return len(values)
 
 
 def _sequence_index(pin: str) -> int | None:
@@ -87,31 +76,48 @@ def _sequence_index(pin: str) -> int | None:
     return int(match.group(1))
 
 
+def _dependency_maps(dependencies: list[dict]) -> tuple[dict[str, dict], dict[str, dict]]:
+    conditions: dict[str, dict] = {}
+    selectors: dict[str, dict] = {}
+    for row in dependencies:
+        node_id = str(row.get("sink_node_id", "") or "")
+        pin_name = str(row.get("sink_pin_name", "") or "")
+        operation = str(row.get("sink_operation", "") or "")
+        if not node_id:
+            continue
+        if operation == "branch" and pin_name == "Condition":
+            conditions[node_id] = row
+        elif operation == "switch" and pin_name in {"Selection", "Index"}:
+            selectors[node_id] = row
+    return conditions, selectors
+
+
+def _node_classes(output: Path, rows) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for row in rows(output / "blueprint_nodes.jsonl"):
+        node_id = str(row.get("node_id", "") or "")
+        if node_id:
+            result[node_id] = str(row.get("node_class", "") or "")
+    return result
+
+
 def derive(output: Path, rows=None) -> list[dict]:
     output = Path(output)
     rows = rows or _rows
     block_edges = list(rows(output / "blueprint_execution_block_edges.jsonl"))
-    semantic_nodes = {
-        str(row.get("node_id", "") or ""): row
-        for row in rows(output / "blueprint_semantic_nodes.jsonl")
-        if row.get("node_id")
-    }
-    statements = {
-        str(row.get("node_id", "") or ""): row
-        for row in rows(output / "blueprint_semantic_statements.jsonl")
-        if row.get("node_id")
-    }
+    dependencies = list(rows(output / "blueprint_data_dependencies.jsonl"))
+    conditions, selectors = _dependency_maps(dependencies)
+    node_classes = _node_classes(output, rows)
 
     result: list[dict] = []
     for edge in block_edges:
         source_node_id = str(edge.get("source_node_id", "") or "")
-        node = semantic_nodes.get(source_node_id, {})
-        statement = statements.get(source_node_id, {})
-        operation = str(node.get("operation", "") or statement.get("operation", "") or "")
         raw_pin = str(edge.get("source_pin_name", "") or "")
         display_pin = str(edge.get("source_pin_display_name", "") or raw_pin)
+        node_class = node_classes.get(source_node_id, "")
 
         control_kind = "flow"
+        source_operation = ""
         condition_dependency_id = ""
         condition_text = ""
         condition_polarity = None
@@ -121,22 +127,28 @@ def derive(output: Path, rows=None) -> list[dict]:
         case_raw_name = ""
         sequence_index = None
 
-        if operation == "branch" and raw_pin.lower() in {"then", "else"}:
+        condition = conditions.get(source_node_id)
+        selector = selectors.get(source_node_id)
+        if condition is not None and raw_pin.lower() in {"then", "else"}:
+            source_operation = "branch"
             control_kind = "branch"
-            condition = _input(statement, "Condition")
-            condition_dependency_id = _dependency_id(condition)
-            condition_text = _input_text(condition)
+            condition_dependency_id = str(condition.get("dependency_id", "") or "")
+            condition_text = str(condition.get("text", "") or "")
             condition_polarity = raw_pin.lower() == "then"
-        elif operation == "switch":
-            selection = _input(statement, "Selection", "Index")
-            selector_dependency_id = _dependency_id(selection)
-            selector_text = _input_text(selection)
+        elif selector is not None or "K2Node_Switch" in node_class:
+            source_operation = "switch"
+            if selector is not None:
+                selector_dependency_id = str(selector.get("dependency_id", "") or "")
+                selector_text = str(selector.get("text", "") or "")
             case_raw_name = raw_pin
             case_name = display_pin or raw_pin
             control_kind = "switch_default" if raw_pin.lower() == "default" else "switch_case"
-        elif operation == "execution_sequence":
+        else:
             sequence_index = _sequence_index(raw_pin)
-            control_kind = "sequence" if sequence_index is not None else "flow"
+            if sequence_index is not None or node_class.endswith("K2Node_ExecutionSequence"):
+                source_operation = "execution_sequence"
+                if sequence_index is not None:
+                    control_kind = "sequence"
 
         result.append({
             "control_edge_id": _id(
@@ -154,7 +166,8 @@ def derive(output: Path, rows=None) -> list[dict]:
             "source_block_id": str(edge.get("source_block_id", "") or ""),
             "target_block_id": str(edge.get("target_block_id", "") or ""),
             "source_node_id": source_node_id,
-            "source_operation": operation,
+            "source_node_class": node_class,
+            "source_operation": source_operation,
             "source_pin_name": raw_pin,
             "source_pin_display_name": display_pin,
             "control_kind": control_kind,
@@ -183,22 +196,15 @@ def validation_error(output: Path, rows=None) -> str | None:
     if len(base) != len(control):
         return f"Blueprint control-edge count mismatch: base={len(base)} control={len(control)}"
 
-    base_keys = {
-        (
+    def key(row: dict) -> tuple[str, ...]:
+        return (
             str(row.get("blueprint_path", "")), str(row.get("graph_id", "")),
             str(row.get("source_block_id", "")), str(row.get("target_block_id", "")),
             str(row.get("source_node_id", "")), str(row.get("source_pin_name", "")),
         )
-        for row in base
-    }
-    control_keys = {
-        (
-            str(row.get("blueprint_path", "")), str(row.get("graph_id", "")),
-            str(row.get("source_block_id", "")), str(row.get("target_block_id", "")),
-            str(row.get("source_node_id", "")), str(row.get("source_pin_name", "")),
-        )
-        for row in control
-    }
+
+    base_keys = {key(row) for row in base}
+    control_keys = {key(row) for row in control}
     if base_keys != control_keys:
         return "Blueprint control edges do not preserve the execution-block edge set"
     if len(control_keys) != len(control):
@@ -228,12 +234,12 @@ def load_database(conn, output: Path, rows=None) -> None:
     rows = rows or _rows
     for row in rows(Path(output) / "blueprint_control_edges.jsonl"):
         conn.execute(
-            "INSERT OR REPLACE INTO blueprint_control_edges VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT OR REPLACE INTO blueprint_control_edges VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 row.get("control_edge_id", ""), row.get("blueprint_path", ""), row.get("graph_id", ""),
                 row.get("graph_name", ""), row.get("source_block_id", ""), row.get("target_block_id", ""),
-                row.get("source_node_id", ""), row.get("source_operation", ""), row.get("source_pin_name", ""),
-                row.get("source_pin_display_name", ""), row.get("control_kind", ""),
+                row.get("source_node_id", ""), row.get("source_node_class", ""), row.get("source_operation", ""),
+                row.get("source_pin_name", ""), row.get("source_pin_display_name", ""), row.get("control_kind", ""),
                 row.get("condition_dependency_id", ""), row.get("condition_text", ""),
                 None if row.get("condition_polarity") is None else int(bool(row.get("condition_polarity"))),
                 row.get("selector_dependency_id", ""), row.get("selector_text", ""), row.get("case_name", ""),
@@ -242,7 +248,7 @@ def load_database(conn, output: Path, rows=None) -> None:
         )
 
 
-def query(conn, print_rows, pattern: str, limit: int) -> None:
+def query_table(conn, print_rows, pattern: str, limit: int) -> None:
     if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='blueprint_control_edges'").fetchone():
         return
     print("\n[Blueprint control edges]")
@@ -261,3 +267,77 @@ def query(conn, print_rows, pattern: str, limit: int) -> None:
             "source_pin_display_name", "condition_text", "selector_text", "case_name", "sequence_index",
         ),
     )
+
+
+def _update_manifest(output: Path, count: int) -> None:
+    path = output / "manifest.json"
+    if not path.is_file():
+        return
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"invalid manifest.json while recording Blueprint control flow: {exc}") from exc
+    if not isinstance(manifest, dict):
+        raise RuntimeError("invalid manifest.json root while recording Blueprint control flow")
+    manifest["blueprint_control_flow_schema_version"] = CONTROL_FLOW_SCHEMA_VERSION
+    declared = manifest.get("derived_counts", {})
+    declared = declared if isinstance(declared, dict) else {}
+    declared["blueprint_control_edges"] = int(count)
+    manifest["derived_counts"] = declared
+    path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
+
+
+def install(core_module) -> None:
+    if getattr(core_module, "_blueprint_control_flow_installed", False):
+        return
+
+    original_create_schema = core_module.create_schema
+    original_derive_output = core_module.derive_output
+    original_build_database = core_module.build_database
+    original_query = core_module.query
+
+    def create_schema_wrapper(conn):
+        original_create_schema(conn)
+        create_schema(conn)
+
+    def derive_output_wrapper(output):
+        output = Path(output).expanduser().resolve()
+        counts = dict(original_derive_output(output))
+        values = derive(output, core_module.iter_jsonl)
+        count = _write(output / DERIVED_FILES[0], values)
+        error = validation_error(output, core_module.iter_jsonl)
+        if error:
+            raise RuntimeError(f"Blueprint control flow derived incomplete: {error}")
+        _update_manifest(output, count)
+        counts["blueprint_control_edges"] = count
+        return counts
+
+    def build_database_wrapper(output):
+        db = original_build_database(output)
+        conn = sqlite3.connect(db)
+        try:
+            load_database(conn, Path(output), core_module.iter_jsonl)
+            conn.commit()
+        finally:
+            conn.close()
+        return db
+
+    def query_wrapper(args):
+        result = int(original_query(args))
+        root = Path(args.output).expanduser().resolve()
+        db = root if root.suffix.lower() == ".db" else root / core_module.DB_NAME
+        if db.is_file():
+            conn = sqlite3.connect(db)
+            conn.row_factory = sqlite3.Row
+            try:
+                query_table(conn, core_module._print_rows, f"%{args.term}%", args.limit)
+            finally:
+                conn.close()
+        return result
+
+    core_module.create_schema = create_schema_wrapper
+    core_module.derive_output = derive_output_wrapper
+    core_module.build_database = build_database_wrapper
+    core_module.query = query_wrapper
+    core_module.DEFAULT_BUNDLE_FILES = tuple(dict.fromkeys((*core_module.DEFAULT_BUNDLE_FILES, *DERIVED_FILES)))
+    core_module._blueprint_control_flow_installed = True
