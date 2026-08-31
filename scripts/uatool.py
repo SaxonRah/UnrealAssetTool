@@ -15,6 +15,7 @@ import uatool_vfx_stitch as vfx_stitch
 import uatool_systems as systems
 import uatool_blueprint_semantics as blueprint_semantics
 import uatool_blueprint_statements as blueprint_statements
+import uatool_semantic_report as semantic_report
 import uatool_project_graph as project_graph
 import uatool_project_graph_finalize as project_graph_finalize
 import uatool_project_neighborhoods as neighborhood_policy
@@ -24,11 +25,12 @@ import uatool_derived_freshness as derived_freshness
 import uatool_build_perf as build_perf
 import uatool_verify_bundle as bundle_verify
 
-# Schema 17 adds generic Blueprint semantic statements/basic-block summaries on
-# top of schema-16 semantic nodes/flow.  Statements join the existing recursive
-# data-dependency expressions and execution blocks rather than duplicating K2
-# traversal or adding gameplay-domain parsers.
-FINAL_DERIVED_SCHEMA_VERSION = 17
+# Schema 18 promotes the scanner's broad reflected K2 operation vocabulary into
+# generic program semantics (comparison/collection/delegate/input/data access,
+# construction/conversion/async calls, etc.) without adding gameplay-domain
+# parsers. Schema-17 semantic statements remain structurally compatible and are
+# regenerated from the richer semantic-node roles.
+FINAL_DERIVED_SCHEMA_VERSION = 18
 project_graph.DERIVED_SCHEMA_VERSION = FINAL_DERIVED_SCHEMA_VERSION
 SCRIPT_DIR = Path(__file__).resolve().parent
 
@@ -580,6 +582,21 @@ core.DEFAULT_BUNDLE_FILES = tuple(dict.fromkeys((
 )))
 
 
+def _semantic_report_cli(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="uatool semantic-report",
+        description="report modeled/fallback/opaque Blueprint semantic coverage from an existing derive",
+    )
+    parser.add_argument("output", help="source .uatool directory")
+    parser.add_argument("--limit", type=int, default=25, help="maximum rows per aggregate section")
+    args = parser.parse_args(argv)
+    if args.limit < 1:
+        parser.error("--limit must be >= 1")
+    report = semantic_report.build_report(Path(args.output), runtime._rows, limit=args.limit)
+    semantic_report.print_report(report)
+    return 0
+
+
 def _verify_bundle_cli(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="uatool verify-bundle",
@@ -612,6 +629,12 @@ def _verify_bundle_cli(argv: list[str]) -> int:
 
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "semantic-report":
+        try:
+            return _semantic_report_cli(sys.argv[2:])
+        except Exception as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 33
     if len(sys.argv) > 1 and sys.argv[1] == "verify-bundle":
         try:
             return _verify_bundle_cli(sys.argv[2:])
