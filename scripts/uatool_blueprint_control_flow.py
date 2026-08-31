@@ -26,7 +26,7 @@ DERIVED_FILES = ("blueprint_control_edges.jsonl",)
 _SQL = """
 CREATE TABLE blueprint_control_edges(
  control_edge_id TEXT PRIMARY KEY,blueprint_path TEXT NOT NULL,graph_id TEXT NOT NULL,graph_name TEXT NOT NULL,
- source_block_id TEXT NOT NULL,target_block_id TEXT NOT NULL,source_node_id TEXT NOT NULL,
+ source_block_id TEXT NOT NULL,target_block_id TEXT NOT NULL,source_node_id TEXT NOT NULL,source_node_class TEXT NOT NULL,
  source_operation TEXT NOT NULL,source_pin_name TEXT NOT NULL,source_pin_display_name TEXT NOT NULL,
  control_kind TEXT NOT NULL,condition_dependency_id TEXT NOT NULL,condition_text TEXT NOT NULL,
  condition_polarity INTEGER,selector_dependency_id TEXT NOT NULL,selector_text TEXT NOT NULL,
