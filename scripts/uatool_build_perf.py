@@ -33,8 +33,10 @@ import uatool_gameplay_camera_report as gameplay_camera_report
 import uatool_mover_behavior as mover_behavior
 import uatool_systems as systems
 import uatool_systems_mover as systems_mover
+import uatool_systems_gameplay_cameras as systems_gameplay_cameras
 import uatool_project_graph as project_graph
 import uatool_mover_graph as mover_graph
+import uatool_gameplay_camera_graph as gameplay_camera_graph
 import uatool_runtime as runtime
 
 CACHE_DIR_NAME = "UnrealAssetToolBuildCache"
@@ -288,8 +290,10 @@ def install(core) -> None:
     sqlite_perf.install(core)
     validation_perf.install()
     systems_mover.install(systems)
+    systems_gameplay_cameras.install(systems)
     mover_behavior.install(core, runtime)
     mover_graph.install(project_graph)
+    gameplay_camera_graph.install(project_graph)
     blueprint_enums.install(core, runtime)
     blueprint_enum_edges.install(core)
     mover_report.install(runtime)
