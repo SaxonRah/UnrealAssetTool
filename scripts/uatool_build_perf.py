@@ -26,6 +26,8 @@ from pathlib import Path
 import uatool_bundle_perf as bundle_perf
 import uatool_sqlite_perf as sqlite_perf
 import uatool_validation_perf as validation_perf
+import uatool_blueprint_enums as blueprint_enums
+import uatool_runtime as runtime
 
 CACHE_DIR_NAME = "UnrealAssetToolBuildCache"
 CACHE_DIRS = ("Binaries", "Intermediate")
@@ -271,8 +273,10 @@ def install(core) -> None:
         core, project, editor, build_script_arg, active_plugin_root
     )
 
-    # These are orthogonal performance policies but are installed here before
-    # the composition root captures core globals, keeping one canonical CLI.
+    # These policies/installers must run before the composition root captures
+    # core globals. Blueprint enum support is installed here after canonical
+    # cleanup has already installed logical compact-pin expansion.
     bundle_perf.install(core)
     sqlite_perf.install(core)
     validation_perf.install()
+    blueprint_enums.install(core, runtime)
