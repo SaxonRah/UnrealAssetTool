@@ -176,7 +176,6 @@ def derive(output: Path, rows) -> tuple[list[dict], list[dict]]:
         node_pins.sort(key=lambda row: int(row.get("pin_index", 0) or 0))
 
     dependency_by_pin: dict[str, dict] = {}
-    dependency_ids: set[str] = set()
     for dep in dependencies:
         dep_id = str(dep.get("dependency_id", "") or "")
         pin_id = str(dep.get("sink_pin_id", "") or "")
@@ -185,7 +184,6 @@ def derive(output: Path, rows) -> tuple[list[dict], list[dict]]:
         if pin_id in dependency_by_pin:
             raise RuntimeError(f"multiple Blueprint data dependencies for sink pin: {pin_id}")
         dependency_by_pin[pin_id] = dep
-        dependency_ids.add(dep_id)
 
     block_info_by_node: dict[str, tuple[str, int]] = {}
     block_by_id: dict[str, dict] = {}
@@ -373,7 +371,7 @@ def create_schema(conn) -> None:
 def load_database(conn, output: Path, rows) -> None:
     for row in rows(Path(output) / "blueprint_semantic_statements.jsonl"):
         conn.execute(
-            "INSERT OR REPLACE INTO blueprint_semantic_statements VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT OR REPLACE INTO blueprint_semantic_statements VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 row.get("statement_id", ""), row.get("node_id", ""), row.get("blueprint_path", ""),
                 row.get("graph_id", ""), row.get("graph_name", ""), row.get("block_id", ""),
