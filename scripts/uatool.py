@@ -16,6 +16,7 @@ import uatool_systems as systems
 import uatool_blueprint_semantics as blueprint_semantics
 import uatool_blueprint_statements as blueprint_statements
 import uatool_semantic_report as semantic_report
+import uatool_blueprint_program_report as blueprint_program_report
 import uatool_project_graph as project_graph
 import uatool_project_graph_finalize as project_graph_finalize
 import uatool_project_neighborhoods as neighborhood_policy
@@ -157,6 +158,16 @@ def _derived_is_fresh(output: Path) -> bool:
         schema_version=FINAL_DERIVED_SCHEMA_VERSION,
         script_dir=SCRIPT_DIR,
     )
+
+
+def _require_current_derive(output: Path) -> Path:
+    output = Path(output).expanduser().resolve()
+    if not _derived_is_fresh(output):
+        raise RuntimeError(
+            "derived output is stale for the current UnrealAssetTool scripts; run:\n"
+            f"  python scripts\\uatool.py derive \"{output}\""
+        )
+    return output
 
 
 def _declared_derived_counts(output: Path) -> dict[str, int]:
@@ -592,8 +603,35 @@ def _semantic_report_cli(argv: list[str]) -> int:
     args = parser.parse_args(argv)
     if args.limit < 1:
         parser.error("--limit must be >= 1")
-    report = semantic_report.build_report(Path(args.output), runtime._rows, limit=args.limit)
+    output = _require_current_derive(Path(args.output))
+    report = semantic_report.build_report(output, runtime._rows, limit=args.limit)
     semantic_report.print_report(report)
+    return 0
+
+
+def _program_report_cli(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="uatool program-report",
+        description="print a compact readable program view for one Blueprint from an existing derive",
+    )
+    parser.add_argument("output", help="source .uatool directory")
+    parser.add_argument("blueprint_path", help="exact Blueprint asset path")
+    parser.add_argument("--statement-limit", type=int, default=240, help="maximum statements to print")
+    parser.add_argument("--property-limit", type=int, default=120, help="maximum component overrides to print")
+    args = parser.parse_args(argv)
+    if args.statement_limit < 0:
+        parser.error("--statement-limit must be >= 0")
+    if args.property_limit < 0:
+        parser.error("--property-limit must be >= 0")
+    output = _require_current_derive(Path(args.output))
+    report = blueprint_program_report.build_report(
+        output,
+        runtime._rows,
+        args.blueprint_path,
+        statement_limit=args.statement_limit,
+        property_limit=args.property_limit,
+    )
+    blueprint_program_report.print_report(report)
     return 0
 
 
@@ -629,6 +667,12 @@ def _verify_bundle_cli(argv: list[str]) -> int:
 
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "program-report":
+        try:
+            return _program_report_cli(sys.argv[2:])
+        except Exception as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 34
     if len(sys.argv) > 1 and sys.argv[1] == "semantic-report":
         try:
             return _semantic_report_cli(sys.argv[2:])
