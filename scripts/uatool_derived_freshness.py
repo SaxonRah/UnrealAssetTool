@@ -27,6 +27,7 @@ STAMP_VERSION = 1
 # presentation or validation UI must not force deterministic data regeneration.
 NON_DERIVED_SCRIPTS = frozenset({
     "uatool_blueprint_program_report.py",
+    "uatool_mover_report.py",
     "uatool_semantic_report.py",
     "uatool_verify_bundle.py",
 })
