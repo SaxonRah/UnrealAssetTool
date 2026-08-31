@@ -2,6 +2,7 @@
 """Canonical UnrealAssetTool CLI composition root."""
 from __future__ import annotations
 
+import argparse
 import json
 import sqlite3
 import sys
@@ -19,6 +20,7 @@ import uatool_project_neighborhood_compact as neighborhood_compact
 import uatool_canonical_cleanup as canonical_cleanup
 import uatool_derived_freshness as derived_freshness
 import uatool_build_perf as build_perf
+import uatool_verify_bundle as bundle_verify
 
 # Schema 15 minimizes bounded project-neighborhood hops to traversal metadata
 # plus authoritative project-edge IDs. Edge semantics, quality, coverage and
@@ -451,7 +453,44 @@ core.DEFAULT_BUNDLE_FILES = tuple(dict.fromkeys((
 )))
 
 
+def _verify_bundle_cli(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="uatool verify-bundle",
+        description="validate an existing UnrealAssetTool bundle without rescanning Unreal",
+    )
+    parser.add_argument("output", help="source .uatool directory")
+    parser.add_argument("bundle", help="bundle ZIP to validate")
+    parser.add_argument("--baseline", help="optional previous bundle ZIP for exact member diff")
+    parser.add_argument(
+        "--expect-blueprint-pin-sha256",
+        help="optional expected canonical logical Blueprint-pin SHA-256",
+    )
+    parser.add_argument(
+        "--expect-changed",
+        nargs="*",
+        help="optional exact set of archive members allowed to differ from --baseline",
+    )
+    args = parser.parse_args(argv)
+    if args.expect_changed is not None and not args.baseline:
+        parser.error("--expect-changed requires --baseline")
+    result = bundle_verify.verify_bundle(
+        Path(args.output),
+        Path(args.bundle),
+        baseline=Path(args.baseline) if args.baseline else None,
+        expect_blueprint_pin_sha256=args.expect_blueprint_pin_sha256,
+        expect_changed=set(args.expect_changed) if args.expect_changed is not None else None,
+    )
+    bundle_verify.print_report(result)
+    return 0
+
+
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "verify-bundle":
+        try:
+            return _verify_bundle_cli(sys.argv[2:])
+        except Exception as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 30
     return int(runtime.main())
 
 
