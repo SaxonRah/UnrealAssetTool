@@ -11,11 +11,15 @@ On the UE 5.8.2 Game Animation Sample corpus:
 - logical curve keys: 811,357
 - curve-component groups: 7,689
 - schema-1 row-per-key stream: 330,745,180 bytes raw / 13,651,482 bytes Deflate level 3
-- schema-2 columnar blocks: 30,414,449 bytes raw / 2,822,338 bytes Deflate level 3
+- schema-2 columnar blocks: 30,414,449 bytes raw / 2,822,336 bytes Deflate level 3
 - raw reduction: 300,330,731 bytes (~90.8%)
-- compressed reduction: 10,829,144 bytes (~79.3%)
+- compressed reduction: 10,829,146 bytes (~79.3%)
 
-The logical row set round-trips exactly: canonical JSON-object SHA-256 before compaction and after expansion matched across all 811,357 GASP keys.
+The logical row set round-trips exactly. A direct comparison of the uploaded pre-upgrade and schema-2 GASP bundles expanded all 811,357 compact keys and produced the same canonical JSON-object SHA-256 on both sides:
+
+`485c12dfd9551c87b6fca6a2b76f17bdfd4a45abd5c9e1a120ffb5c79f7f6d58`
+
+All 54 explicit non-finite markers in the schema-1 corpus are preserved: 25 arrive-tangent NaNs, 25 leave-tangent NaNs, 2 arrive-tangent-weight NaNs, and 2 leave-tangent-weight NaNs.
 
 ## `animation_curve_keys.jsonl`
 
