@@ -331,8 +331,7 @@ static bool WriteGameplayTagRedirectsForList(
     }
 
     FScriptArrayHelper Helper(Redirects, ValuePtr);
-    const int32 Limit = FMath::Min(Helper.Num(), MaxStructuredRowsPerAsset);
-    for (int32 Index = 0; Index < Limit; ++Index)
+    for (int32 Index = 0; Index < Helper.Num(); ++Index)
     {
         const void* Item = Helper.GetRawPtr(Index);
         const FString OldTag = GetNameField(RedirectStruct->Struct, Item, TEXT("OldTagName"), ListObject);
@@ -455,8 +454,7 @@ static bool ScanGameplayTagProjectModel(FWriters& Writers, FCounts& Counts)
         return A.GetTagName().LexicalLess(B.GetTagName());
     });
 
-    const int32 TagLimit = FMath::Min(Tags.Num(), MaxStructuredRowsPerAsset);
-    for (int32 TagIndex = 0; TagIndex < TagLimit; ++TagIndex)
+    for (int32 TagIndex = 0; TagIndex < Tags.Num(); ++TagIndex)
     {
         const FGameplayTag& Tag = Tags[TagIndex];
         const FName TagName = Tag.GetTagName();
