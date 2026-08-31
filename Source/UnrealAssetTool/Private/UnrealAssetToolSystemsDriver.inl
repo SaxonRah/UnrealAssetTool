@@ -223,14 +223,14 @@ static bool RunSystemsScan(FString& OutError)
         {
             bOk = ScanInputMappingContext(Object, Asset, Writers, Counts, SeenStateOwners);
         }
-        else if (UDataTable* Table = Cast<UDataTable>(Object))
+        else if (UDataTable* DataTable = Cast<UDataTable>(Object))
         {
             bOk = ScanGameplayDataAsset(Object, Asset, Kind, Writers, Counts) &&
-                ScanDataTableDetails(Table, Asset, Kind, Writers, Counts);
+                ScanDataTableDetails(DataTable, Asset, Kind, Writers, Counts);
         }
-        else if (UCurveTable* Table = Cast<UCurveTable>(Object))
+        else if (UCurveTable* CurveTable = Cast<UCurveTable>(Object))
         {
-            bOk = ScanCurveTableDetails(Table, Asset, Kind, Writers, Counts);
+            bOk = ScanCurveTableDetails(CurveTable, Asset, Kind, Writers, Counts);
         }
         else if (Kind == TEXT("primary_data_asset"))
         {
