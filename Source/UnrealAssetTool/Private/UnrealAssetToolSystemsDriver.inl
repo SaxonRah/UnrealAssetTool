@@ -5,7 +5,7 @@ static bool SaveSystemsManifest(
     const FString& Error)
 {
     TSharedRef<FJsonObject> Root = MakeShared<FJsonObject>();
-    Root->SetNumberField(TEXT("schema_version"), 3);
+    Root->SetNumberField(TEXT("schema_version"), 4);
     Root->SetStringField(TEXT("pass"), TEXT("UnrealAssetToolSystems"));
     Root->SetStringField(TEXT("generated_utc"), FDateTime::UtcNow().ToIso8601());
     Root->SetStringField(TEXT("engine_version"), FEngineVersion::Current().ToString());
@@ -46,6 +46,13 @@ static bool SaveSystemsManifest(
     C->SetNumberField(TEXT("mover_modes"), GMoverCounts.Modes);
     C->SetNumberField(TEXT("mover_settings"), GMoverCounts.Settings);
     C->SetNumberField(TEXT("mover_transitions"), GMoverCounts.Transitions);
+    C->SetNumberField(TEXT("gameplay_camera_assets"), GGameplayCameraCounts.Assets);
+    C->SetNumberField(TEXT("gameplay_camera_rigs"), GGameplayCameraCounts.Rigs);
+    C->SetNumberField(TEXT("gameplay_camera_nodes"), GGameplayCameraCounts.Nodes);
+    C->SetNumberField(TEXT("gameplay_camera_node_edges"), GGameplayCameraCounts.NodeEdges);
+    C->SetNumberField(TEXT("gameplay_camera_transitions"), GGameplayCameraCounts.Transitions);
+    C->SetNumberField(TEXT("gameplay_camera_directors"), GGameplayCameraCounts.Directors);
+    C->SetNumberField(TEXT("gameplay_camera_rig_references"), GGameplayCameraCounts.RigReferences);
     Root->SetObjectField(TEXT("counts"), C);
 
     static const TCHAR* Names[] = {
@@ -81,7 +88,14 @@ static bool SaveSystemsManifest(
         TEXT("mover_components.jsonl"),
         TEXT("mover_modes.jsonl"),
         TEXT("mover_settings.jsonl"),
-        TEXT("mover_transitions.jsonl")
+        TEXT("mover_transitions.jsonl"),
+        TEXT("gameplay_camera_assets.jsonl"),
+        TEXT("gameplay_camera_rigs.jsonl"),
+        TEXT("gameplay_camera_nodes.jsonl"),
+        TEXT("gameplay_camera_node_edges.jsonl"),
+        TEXT("gameplay_camera_transitions.jsonl"),
+        TEXT("gameplay_camera_directors.jsonl"),
+        TEXT("gameplay_camera_rig_references.jsonl")
     };
     TArray<TSharedPtr<FJsonValue>> Files;
     for (const TCHAR* Name : Names)
@@ -128,9 +142,10 @@ static bool RunSystemsScan(FString& OutError)
     }
 
     GMoverCounts = FMoverCounts();
+    GGameplayCameraCounts = FGameplayCameraCounts();
     FWriters Writers;
     FCounts Counts;
-    if (!Writers.Open(OutputDir) || !GMoverWriters.Open(OutputDir))
+    if (!Writers.Open(OutputDir) || !GMoverWriters.Open(OutputDir) || !GGameplayCameraWriters.Open(OutputDir))
     {
         OutError = TEXT("could not create systems JSONL output files");
         SaveSystemsManifest(OutputDir, Counts, false, OutError);
@@ -288,6 +303,21 @@ static bool RunSystemsScan(FString& OutError)
         return false;
     }
 
+    if (!ScanGameplayCameraProjectModel(
+            Assets,
+            ProjectDir,
+            bIncludeEngine,
+            bIncludeSelf,
+            ToolPluginDir,
+            Writers,
+            Counts,
+            SeenStateOwners,
+            OutError))
+    {
+        SaveSystemsManifest(OutputDir, Counts, false, OutError);
+        return false;
+    }
+
     if (!SaveSystemsManifest(OutputDir, Counts, true, FString()))
     {
         OutError = TEXT("could not write systems_manifest.json");
@@ -297,7 +327,7 @@ static bool RunSystemsScan(FString& OutError)
     UE_LOG(
         LogTemp,
         Display,
-        TEXT("UnrealAssetToolSystems: assets=%lld sequences=%lld audio=%lld actions=%lld contexts=%lld mappings=%lld data_rows=%lld data_fields=%lld curve_tables=%lld curve_rows=%lld curve_keys=%lld primary_data=%lld tag_sources=%lld tag_dictionary=%lld mover_blueprints=%lld mover_components=%lld mover_modes=%lld mover_settings=%lld mover_transitions=%lld"),
+        TEXT("UnrealAssetToolSystems: assets=%lld sequences=%lld audio=%lld actions=%lld contexts=%lld mappings=%lld data_rows=%lld data_fields=%lld curve_tables=%lld curve_rows=%lld curve_keys=%lld primary_data=%lld tag_sources=%lld tag_dictionary=%lld mover_blueprints=%lld mover_components=%lld mover_modes=%lld mover_settings=%lld mover_transitions=%lld camera_assets=%lld camera_rigs=%lld camera_nodes=%lld camera_node_edges=%lld camera_transitions=%lld camera_directors=%lld camera_rig_refs=%lld"),
         Counts.Assets,
         Counts.LevelSequences,
         Counts.AudioAssets,
@@ -316,7 +346,14 @@ static bool RunSystemsScan(FString& OutError)
         GMoverCounts.Components,
         GMoverCounts.Modes,
         GMoverCounts.Settings,
-        GMoverCounts.Transitions);
+        GMoverCounts.Transitions,
+        GGameplayCameraCounts.Assets,
+        GGameplayCameraCounts.Rigs,
+        GGameplayCameraCounts.Nodes,
+        GGameplayCameraCounts.NodeEdges,
+        GGameplayCameraCounts.Transitions,
+        GGameplayCameraCounts.Directors,
+        GGameplayCameraCounts.RigReferences);
     return true;
 }
 
