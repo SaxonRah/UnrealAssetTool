@@ -23,13 +23,15 @@ import uatool_project_neighborhoods as neighborhood_policy
 import uatool_project_neighborhood_compact as neighborhood_compact
 import uatool_canonical_cleanup as canonical_cleanup
 import uatool_derived_freshness as derived_freshness
+import uatool_mover_behavior as mover_behavior
 import uatool_build_perf as build_perf
 import uatool_verify_bundle as bundle_verify
 
-# Schema 19 preserves readable user-defined enum branch metadata on Blueprint
-# execution block edges while retaining Unreal's raw serialized exec-pin names.
-# Schema 18's broad reflected K2 operation vocabulary remains unchanged.
-FINAL_DERIVED_SCHEMA_VERSION = 19
+# Schema 20 adds exact Mover transition behavior/routes reconstructed from
+# Evaluate() branch dependencies plus TransitionEvalResult.NextMode, and promotes
+# resolved concrete mode transitions into the typed project graph. Schema 19's
+# readable user-defined enum branch metadata remains unchanged.
+FINAL_DERIVED_SCHEMA_VERSION = 20
 project_graph.DERIVED_SCHEMA_VERSION = FINAL_DERIVED_SCHEMA_VERSION
 SCRIPT_DIR = Path(__file__).resolve().parent
 
@@ -38,8 +40,8 @@ build_perf.install(core)
 
 # uatool_runtime installs the structural/world/animation/derived-schema-11
 # pipeline into uatool_core. This composition root adds independently versioned
-# VFX, systems, generic Blueprint semantics/statements, and the final typed
-# project graph without creating alternate public launchers.
+# VFX, systems, generic Blueprint semantics/statements, Mover behavior, and the
+# final typed project graph without creating alternate public launchers.
 _base_create_schema = core.create_schema
 _base_derive_output = core.derive_output
 _base_build_database = core.build_database
@@ -130,6 +132,19 @@ def _require_blueprint_statements(output: Path) -> None:
     error = blueprint_statements.validation_error(output, runtime._rows)
     if error:
         raise RuntimeError(f"Blueprint statement derived incomplete: {error}")
+
+
+def _require_mover_behavior(output: Path) -> None:
+    error = mover_behavior.validation_error(output, runtime._rows)
+    if error:
+        raise RuntimeError(f"Mover behavior derived incomplete: {error}")
+    manifest = _require_declared_counts(output, mover_behavior.DERIVED_FILES, "Mover behavior derived")
+    version = int(manifest.get("mover_behavior_schema_version", 0) or 0)
+    if version != mover_behavior.BEHAVIOR_SCHEMA_VERSION:
+        raise RuntimeError(
+            "Mover behavior derived incomplete: "
+            f"expected behavior schema {mover_behavior.BEHAVIOR_SCHEMA_VERSION}, got {version}"
+        )
 
 
 def _require_project_graph(output: Path) -> None:
@@ -224,6 +239,7 @@ def derive_output(output):
     _require_systems(output)
 
     counts = dict(_base_derive_output(output))
+    _require_mover_behavior(output)
 
     vfx_relations, vfx_context, vfx_summaries = vfx_stitch.derive(output, runtime._rows)
     vfx_counts = {
@@ -337,6 +353,7 @@ def derive_output(output):
     _require_vfx_derived(output)
     _require_blueprint_semantics(output)
     _require_blueprint_statements(output)
+    _require_mover_behavior(output)
     _require_project_graph(output)
     derived_freshness.mark_fresh(
         output,
@@ -355,6 +372,11 @@ def derive_output(output):
         f"with_dependencies={sum(int(bool(row.get('dependency_count', 0))) for row in statement_rows)} "
         f"with_literals={sum(int(bool(row.get('literal_count', 0))) for row in statement_rows)}"
     )
+    print(
+        "mover behavior: "
+        f"behaviors={counts.get('mover_transition_behaviors', 0)} "
+        f"routes={counts.get('mover_transition_routes', 0)}"
+    )
     return counts
 
 
@@ -372,6 +394,7 @@ def build_database(output):
         _require_vfx_derived(output)
         _require_blueprint_semantics(output)
         _require_blueprint_statements(output)
+        _require_mover_behavior(output)
         _require_project_graph(output)
 
     db = _base_build_database(output)
@@ -489,6 +512,7 @@ def _combined_summary(args) -> None:
             for name in (
                 "blueprint_semantic_nodes", "blueprint_semantic_edges", "blueprint_semantic_graphs",
                 "blueprint_semantic_statements", "blueprint_semantic_blocks",
+                "mover_transition_behaviors", "mover_transition_routes",
                 "vfx_relations", "vfx_context", "vfx_summaries",
                 "project_nodes", "project_edges", "project_neighborhoods",
             )
@@ -499,6 +523,7 @@ def _combined_summary(args) -> None:
         f"systems={systems_manifest.get('schema_version', 0)} "
         f"bp_semantic={top_manifest.get('blueprint_semantic_schema_version', 0)} "
         f"bp_statement={top_manifest.get('blueprint_statement_schema_version', 0)} "
+        f"mover_behavior={top_manifest.get('mover_behavior_schema_version', 0)} "
         f"derived={top_manifest.get('derived_schema_version', 0)}"
     )
 
@@ -529,6 +554,9 @@ def scan(args):
         if "Blueprint statement derived incomplete:" in message:
             print(f"ERROR: {exc}", file=sys.stderr)
             return 32
+        if "Mover behavior derived incomplete:" in message:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 36
         raise
     if result != 0:
         return result
@@ -555,6 +583,7 @@ def scan(args):
             _require_vfx_derived(output)
             _require_blueprint_semantics(output)
             _require_blueprint_statements(output)
+            _require_mover_behavior(output)
             _require_project_graph(output)
         except RuntimeError as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
@@ -563,6 +592,8 @@ def scan(args):
                 return 31
             if "Blueprint statement derived incomplete:" in message:
                 return 32
+            if "Mover behavior derived incomplete:" in message:
+                return 36
             return 28 if "project graph incomplete:" in message else 26
         derived_freshness.mark_fresh(
             output,
@@ -587,6 +618,7 @@ core.DEFAULT_BUNDLE_FILES = tuple(dict.fromkeys((
     *systems.RAW_FILES,
     *blueprint_semantics.DERIVED_FILES,
     *blueprint_statements.DERIVED_FILES,
+    *mover_behavior.DERIVED_FILES,
     *project_graph.DERIVED_FILES,
 )))
 
