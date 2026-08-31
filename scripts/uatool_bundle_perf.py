@@ -13,7 +13,11 @@ import zipfile
 from pathlib import Path
 
 ENV_NAME = "UATOOL_BUNDLE_LEVEL"
-DEFAULT_LEVEL = 6
+# Measured on the validated StackOBot corpus: level 3 produced a 30.8 MB bundle
+# in 4.52 s versus level 6 at 24.0 MB in 6.84 s. Both are substantially smaller
+# and faster than the pre-schema-14 33.69 MB / ~46-48 s path, while level 3 is
+# the best balanced default. Users can override 0..9 through ENV_NAME.
+DEFAULT_LEVEL = 3
 
 
 def compression_level() -> int:
