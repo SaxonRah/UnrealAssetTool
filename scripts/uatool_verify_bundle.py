@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-"""Deterministic validation for UnrealAssetTool upload bundles.
-
-The verifier is intentionally read-only. It checks archive integrity, bundled
-manifest/storage invariants, lossless Blueprint-pin block expansion, optional
-logical SHA expectations, byte identity against the source .uatool directory,
-and optional archive diff scope against a prior bundle.
-"""
+"""Deterministic, read-only validation for UnrealAssetTool upload bundles."""
 from __future__ import annotations
 
 import hashlib
@@ -14,7 +8,6 @@ import zipfile
 from pathlib import Path
 
 import uatool_blueprint_pin_storage as pin_storage
-
 
 PIN_FILE = "blueprint_pins.jsonl"
 NODE_FILE = "blueprint_nodes.jsonl"
@@ -118,6 +111,7 @@ def _decode_indices(row: dict, count: int, context: str) -> list[int]:
 
 
 def _logical_pin_digest(archive: zipfile.ZipFile) -> tuple[int, int, str]:
+    """Expand compact pin blocks and hash the ordered canonical logical rows."""
     nodes = _node_map_from_zip(archive)
     logical = 0
     blocks = 0
@@ -173,14 +167,6 @@ def _logical_pin_digest(archive: zipfile.ZipFile) -> tuple[int, int, str]:
             if pin_id in seen_pins:
                 raise RuntimeError(f"duplicate reconstructed Blueprint pin_id: {pin_id}")
             seen_pins.add(pin_id)
-            pin_type = {
-                "category": expanded["type_category"][offset],
-                "subcategory": expanded["type_subcategory"][offset],
-                "container_type": expanded["type_container_type"][offset],
-                "is_reference": expanded["type_is_reference"][offset],
-                "is_const": expanded["type_is_const"][offset],
-                "subcategory_object": expanded["type_subcategory_object"][offset],
-            }
             logical_row = {
                 "pin_id": pin_id,
                 "node_id": node_id,
@@ -190,7 +176,14 @@ def _logical_pin_digest(archive: zipfile.ZipFile) -> tuple[int, int, str]:
                 "pin_index": indices[offset],
                 "name": expanded["name"][offset],
                 "direction": expanded["direction"][offset],
-                "type": pin_type,
+                "type": {
+                    "category": expanded["type_category"][offset],
+                    "subcategory": expanded["type_subcategory"][offset],
+                    "container_type": expanded["type_container_type"][offset],
+                    "is_reference": expanded["type_is_reference"][offset],
+                    "is_const": expanded["type_is_const"][offset],
+                    "subcategory_object": expanded["type_subcategory_object"][offset],
+                },
                 "default_value": expanded["default_value"][offset],
                 "default_object": expanded["default_object"][offset],
                 "default_text": expanded["default_text"][offset],
@@ -203,6 +196,33 @@ def _logical_pin_digest(archive: zipfile.ZipFile) -> tuple[int, int, str]:
         blocks += 1
 
     return logical, blocks, digest.hexdigest()
+
+
+def _legacy_pin_digest(archive: zipfile.ZipFile) -> tuple[int, str]:
+    """Hash an ordered legacy row-per-pin stream with the same canonicalization."""
+    count = 0
+    seen_pins: set[str] = set()
+    digest = hashlib.sha256()
+    for line_number, row in _jsonl_from_zip(archive, PIN_FILE):
+        context = f"baseline {PIN_FILE}:{line_number}"
+        if row.get("encoding") == pin_storage.ENCODING:
+            logical, _blocks, logical_sha = _logical_pin_digest(archive)
+            return logical, logical_sha
+        if set(row) != pin_storage.LEGACY_FIELDS:
+            raise RuntimeError(
+                f"legacy Blueprint pin fields mismatch in {context}: "
+                f"missing={sorted(pin_storage.LEGACY_FIELDS - set(row))} "
+                f"extra={sorted(set(row) - pin_storage.LEGACY_FIELDS)}"
+            )
+        pin_id = row.get("pin_id")
+        if not isinstance(pin_id, str) or not pin_id:
+            raise RuntimeError(f"invalid legacy Blueprint pin_id in {context}")
+        if pin_id in seen_pins:
+            raise RuntimeError(f"duplicate legacy Blueprint pin_id in {context}: {pin_id}")
+        seen_pins.add(pin_id)
+        digest.update(_canonical_row_bytes(row))
+        count += 1
+    return count, digest.hexdigest()
 
 
 def _sha256_bytes(data: bytes) -> str:
@@ -286,13 +306,6 @@ def verify_bundle(
             raise RuntimeError(
                 f"Blueprint pin block count mismatch: manifest={expected_blocks} actual={blocks}"
             )
-        if expect_blueprint_pin_sha256 is not None:
-            expected_sha = expect_blueprint_pin_sha256.lower().strip()
-            if logical_sha != expected_sha:
-                raise RuntimeError(
-                    "Blueprint pin logical SHA-256 mismatch: "
-                    f"expected={expected_sha} actual={logical_sha}"
-                )
 
         source_mismatches: list[str] = []
         missing_source_members: list[str] = []
@@ -315,13 +328,26 @@ def verify_bundle(
                 "bundle members differ from local .uatool source bytes: "
                 f"{source_mismatches[:10]}"
             )
-
         pin_info = archive.getinfo(PIN_FILE)
 
+    baseline_pin_count: int | None = None
+    baseline_pin_sha: str | None = None
     changed: list[str] = []
     added: list[str] = []
     removed: list[str] = []
     if baseline is not None:
+        with zipfile.ZipFile(baseline, "r") as baseline_archive:
+            bad_member = baseline_archive.testzip()
+            if bad_member is not None:
+                raise RuntimeError(f"baseline ZIP CRC failure: {bad_member}")
+            baseline_pin_count, baseline_pin_sha = _legacy_pin_digest(baseline_archive)
+        if baseline_pin_count != logical or baseline_pin_sha != logical_sha:
+            raise RuntimeError(
+                "Blueprint pin logical stream differs from baseline: "
+                f"baseline_count={baseline_pin_count} current_count={logical} "
+                f"baseline_sha256={baseline_pin_sha} current_sha256={logical_sha}"
+            )
+
         baseline_names, baseline_hashes = _archive_member_hashes(baseline)
         bundle_names, bundle_hashes = _archive_member_hashes(bundle)
         baseline_set = set(baseline_names)
@@ -340,6 +366,14 @@ def verify_bundle(
                     f"expected={sorted(expect_changed)} actual={sorted(actual)}"
                 )
 
+    if expect_blueprint_pin_sha256 is not None:
+        expected_sha = expect_blueprint_pin_sha256.lower().strip()
+        if logical_sha != expected_sha:
+            raise RuntimeError(
+                "Blueprint pin logical SHA-256 mismatch: "
+                f"expected={expected_sha} actual={logical_sha}"
+            )
+
     return {
         "bundle_bytes": bundle_size,
         "raw_bytes": raw_size,
@@ -347,6 +381,8 @@ def verify_bundle(
         "blueprint_pins": logical,
         "blueprint_pin_blocks": blocks,
         "blueprint_pin_logical_sha256": logical_sha,
+        "baseline_blueprint_pins": baseline_pin_count,
+        "baseline_blueprint_pin_logical_sha256": baseline_pin_sha,
         "blueprint_pins_raw_bytes": pin_info.file_size,
         "blueprint_pins_compressed_bytes": pin_info.compress_size,
         "changed": changed,
@@ -372,6 +408,12 @@ def print_report(result: dict) -> None:
         "blueprint pin logical sha256: "
         f"{result['blueprint_pin_logical_sha256']}"
     )
+    if result.get("baseline_blueprint_pins") is not None:
+        print(
+            "baseline blueprint pins: "
+            f"logical={result['baseline_blueprint_pins']} "
+            f"sha256={result['baseline_blueprint_pin_logical_sha256']} match=yes"
+        )
     if result["changed"] or result["added"] or result["removed"]:
         print("baseline changed: " + ", ".join(result["changed"]))
         if result["added"]:
