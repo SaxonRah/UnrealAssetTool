@@ -15,6 +15,20 @@ import uatool_systems as systems
 import uatool_project_graph as project_graph
 import uatool_project_graph_finalize as project_graph_finalize
 import uatool_project_neighborhoods as neighborhood_policy
+import uatool_project_neighborhood_compact as neighborhood_compact
+import uatool_canonical_cleanup as canonical_cleanup
+import uatool_derived_freshness as derived_freshness
+import uatool_build_perf as build_perf
+
+# Schema 14 changes only the representation of bounded project neighborhoods:
+# project_edges remains authoritative, while each neighborhood stores compact
+# edge references instead of duplicating full edge/evidence payloads and text.
+FINAL_DERIVED_SCHEMA_VERSION = 14
+project_graph.DERIVED_SCHEMA_VERSION = FINAL_DERIVED_SCHEMA_VERSION
+SCRIPT_DIR = Path(__file__).resolve().parent
+
+# Patch core build/staging globals before capturing the composed pipeline.
+build_perf.install(core)
 
 # uatool_runtime installs the structural/world/animation/derived-schema-11
 # pipeline into uatool_core. This composition root adds independently versioned
@@ -29,6 +43,16 @@ _base_scan = core.scan
 
 def create_schema(conn) -> None:
     _base_create_schema(conn)
+
+    # uat.db is a disposable cache rebuilt from authoritative JSONL. During a
+    # from-scratch pack, durable WAL journaling only duplicates write traffic.
+    # Build it in bulk with journaling/sync disabled, then restore a normal
+    # persistent mode after the database is complete.
+    conn.execute("PRAGMA journal_mode=OFF")
+    conn.execute("PRAGMA synchronous=OFF")
+    conn.execute("PRAGMA temp_store=MEMORY")
+    conn.execute("PRAGMA cache_size=-262144")
+
     vfx.create_schema(conn)
     vfx_stitch.create_schema(conn)
     systems.create_schema(conn)
@@ -82,8 +106,6 @@ def _require_vfx_derived(output: Path) -> None:
         raise RuntimeError(f"VFX derived incomplete: {error}")
     manifest = _require_declared_counts(output, vfx_stitch.DERIVED_FILES, "VFX derived")
     version = int(manifest.get("derived_schema_version", 0) or 0)
-    # VFX relations were introduced in schema 12 and remain valid members of
-    # later derived schemas. Do not make their validator reject schema 13+.
     if version < vfx_stitch.DERIVED_SCHEMA_VERSION:
         raise RuntimeError(
             f"VFX derived incomplete: expected derived schema >= {vfx_stitch.DERIVED_SCHEMA_VERSION}, got {version}"
@@ -97,20 +119,64 @@ def _require_project_graph(output: Path) -> None:
     error = project_graph_finalize.validation_error(output, runtime._rows)
     if error:
         raise RuntimeError(f"project graph incomplete: {error}")
+    error = neighborhood_compact.validation_error(output, runtime._rows)
+    if error:
+        raise RuntimeError(f"project graph incomplete: {error}")
     manifest = _require_declared_counts(output, project_graph.DERIVED_FILES, "project graph")
     version = int(manifest.get("derived_schema_version", 0) or 0)
-    if version != project_graph.DERIVED_SCHEMA_VERSION:
+    if version != FINAL_DERIVED_SCHEMA_VERSION:
         raise RuntimeError(
-            f"project graph incomplete: expected derived schema {project_graph.DERIVED_SCHEMA_VERSION}, got {version}"
+            f"project graph incomplete: expected derived schema {FINAL_DERIVED_SCHEMA_VERSION}, got {version}"
         )
+
+
+def _derived_is_fresh(output: Path) -> bool:
+    return derived_freshness.is_fresh(
+        output,
+        schema_version=FINAL_DERIVED_SCHEMA_VERSION,
+        script_dir=SCRIPT_DIR,
+    )
+
+
+def _declared_derived_counts(output: Path) -> dict[str, int]:
+    manifest = _read_top_manifest(output)
+    declared = manifest.get("derived_counts", {})
+    if not isinstance(declared, dict):
+        return {}
+    result: dict[str, int] = {}
+    for key, value in declared.items():
+        try:
+            result[str(key)] = int(value)
+        except (TypeError, ValueError):
+            continue
+    return result
 
 
 def derive_output(output):
     output = Path(output).expanduser().resolve()
+
+    cleanup = canonical_cleanup.apply(output)
+    cleanup_error = canonical_cleanup.validation_error(output)
+    if cleanup_error:
+        raise RuntimeError(f"canonical cleanup incomplete: {cleanup_error}")
+    if cleanup.get("material_expression_guids", 0):
+        print(
+            "canonical cleanup: removed generated MaterialExpressionGuid rows="
+            f"{cleanup['material_expression_guids']}"
+        )
+
+    # A freshness stamp exists only after a complete raw + derived validation.
+    # Canonical cleanup runs first: if it changed a raw file, its metadata no
+    # longer matches the stamp and this fast path automatically misses.
+    if _derived_is_fresh(output):
+        print(f"derived output current: reusing validated schema {FINAL_DERIVED_SCHEMA_VERSION}")
+        return _declared_derived_counts(output)
+
     # Raw specialist passes are prerequisites for the unified graph. Gate before
-    # rewriting any derived files so failed/old scans cannot look fresh.
+    # rewriting derived files so failed/old scans cannot look fresh.
     _require_vfx(output)
     _require_systems(output)
+
     counts = dict(_base_derive_output(output))
 
     vfx_relations, vfx_context, vfx_summaries = vfx_stitch.derive(output, runtime._rows)
@@ -136,6 +202,7 @@ def derive_output(output):
         max_depth=project_graph.MAX_NEIGHBOR_DEPTH,
         max_edges=project_graph.MAX_NEIGHBOR_EDGES,
         max_chars=project_graph.MAX_NEIGHBOR_CHARS,
+        compact=True,
     )
     project_counts = {
         "project_nodes": runtime._write(output / "project_nodes.jsonl", project_nodes),
@@ -146,6 +213,9 @@ def derive_output(output):
     if error:
         raise RuntimeError(f"project graph incomplete: {error}")
     error = project_graph_finalize.validation_error(output, runtime._rows)
+    if error:
+        raise RuntimeError(f"project graph incomplete: {error}")
+    error = neighborhood_compact.validation_error(output, runtime._rows)
     if error:
         raise RuntimeError(f"project graph incomplete: {error}")
     counts.update(project_counts)
@@ -168,7 +238,7 @@ def derive_output(output):
             manifest["systems_files"] = systems_manifest.get("files", [])
             manifest["systems_pass"] = systems_manifest.get("pass", "UnrealAssetToolSystems")
 
-        manifest["derived_schema_version"] = project_graph.DERIVED_SCHEMA_VERSION
+        manifest["derived_schema_version"] = FINAL_DERIVED_SCHEMA_VERSION
         declared = manifest.get("derived_counts", {})
         declared = declared if isinstance(declared, dict) else {}
         declared.update(vfx_counts)
@@ -182,23 +252,42 @@ def derive_output(output):
 
     _require_vfx_derived(output)
     _require_project_graph(output)
+    derived_freshness.mark_fresh(
+        output,
+        schema_version=FINAL_DERIVED_SCHEMA_VERSION,
+        script_dir=SCRIPT_DIR,
+    )
     return counts
 
 
 def build_database(output):
     output = Path(output).expanduser().resolve()
-    _require_vfx(output)
-    _require_systems(output)
-    _require_vfx_derived(output)
-    _require_project_graph(output)
+    fresh = _derived_is_fresh(output)
+
+    # A freshness stamp is written only after all raw and derived validation has
+    # succeeded. If it is current, reparsing those same streams immediately
+    # before a disposable SQLite rebuild adds no safety. The conservative path
+    # remains for direct/old/stale build_database callers.
+    if not fresh:
+        _require_vfx(output)
+        _require_systems(output)
+        _require_vfx_derived(output)
+        _require_project_graph(output)
+
     db = _base_build_database(output)
     conn = sqlite3.connect(db)
     try:
         vfx.load_database(conn, output, runtime._rows)
         vfx_stitch.load_database(conn, output, runtime._rows)
         systems.load_database(conn, output, runtime._rows)
+        # project_neighborhoods loads compact JSON and an empty text field.
+        # Readable text is reconstructed only when queried, avoiding another
+        # hundreds-of-megabytes copy of neighborhood paths in uat.db.
         project_graph.load_database(conn, output, runtime._rows)
         conn.commit()
+        conn.execute("PRAGMA optimize")
+        conn.execute("PRAGMA journal_mode=DELETE")
+        conn.execute("PRAGMA synchronous=NORMAL")
     finally:
         conn.close()
     return db
@@ -213,7 +302,13 @@ def query(args):
         conn.row_factory = sqlite3.Row
         try:
             pattern = f"%{args.term}%"
-            project_graph.query(conn, core._print_rows, pattern, args.limit)
+            neighborhood_compact.query(
+                conn,
+                core._print_rows,
+                pattern,
+                args.limit,
+                max_chars=project_graph.MAX_NEIGHBOR_CHARS,
+            )
             systems.query(conn, core._print_rows, pattern, args.limit)
             vfx_stitch.query(conn, core._print_rows, pattern, args.limit)
             vfx.query(conn, core._print_rows, pattern, args.limit)
@@ -294,24 +389,43 @@ def scan(args):
         if "project graph incomplete:" in message:
             print(f"ERROR: {exc}", file=sys.stderr)
             return 28
+        if "canonical cleanup incomplete:" in message:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 29
         raise
     if result != 0:
         return result
 
-    error = vfx.validation_error(runtime._output(args))
-    if error:
-        print(f"ERROR: VFX scan incomplete: {error}", file=sys.stderr)
-        return 25
-    error = systems.validation_error(runtime._output(args))
-    if error:
-        print(f"ERROR: systems scan incomplete: {error}", file=sys.stderr)
-        return 27
-    try:
-        _require_vfx_derived(runtime._output(args))
-        _require_project_graph(runtime._output(args))
-    except RuntimeError as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
-        return 28 if "project graph incomplete:" in str(exc) else 26
+    output = runtime._output(args)
+    if not _derived_is_fresh(output):
+        # This should be rare: the composed derive writes the stamp only after
+        # all raw/derived validators pass. Keep a conservative diagnostic path
+        # for old/unexpected outputs without imposing the full parse on every
+        # successful normal scan.
+        error = canonical_cleanup.validation_error(output)
+        if error:
+            print(f"ERROR: canonical cleanup incomplete: {error}", file=sys.stderr)
+            return 29
+        error = vfx.validation_error(output)
+        if error:
+            print(f"ERROR: VFX scan incomplete: {error}", file=sys.stderr)
+            return 25
+        error = systems.validation_error(output)
+        if error:
+            print(f"ERROR: systems scan incomplete: {error}", file=sys.stderr)
+            return 27
+        try:
+            _require_vfx_derived(output)
+            _require_project_graph(output)
+        except RuntimeError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 28 if "project graph incomplete:" in str(exc) else 26
+        derived_freshness.mark_fresh(
+            output,
+            schema_version=FINAL_DERIVED_SCHEMA_VERSION,
+            script_dir=SCRIPT_DIR,
+        )
+
     _combined_summary(args)
     return 0
 
@@ -321,7 +435,7 @@ core.derive_output = derive_output
 core.build_database = build_database
 core.query = query
 core.scan = scan
-core.DERIVED_SCHEMA_VERSION = project_graph.DERIVED_SCHEMA_VERSION
+core.DERIVED_SCHEMA_VERSION = FINAL_DERIVED_SCHEMA_VERSION
 core.DEFAULT_BUNDLE_FILES = tuple(dict.fromkeys((
     *core.DEFAULT_BUNDLE_FILES,
     *vfx.RAW_FILES,
