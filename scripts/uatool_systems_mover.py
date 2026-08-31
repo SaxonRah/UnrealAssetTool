@@ -82,6 +82,13 @@ def validation_error(output: Path, rows=None) -> str | None:
     blueprint_paths = [str(row.get("blueprint_path", "")) for row in blueprints]
     if any(not path for path in blueprint_paths) or len(blueprint_paths) != len(set(blueprint_paths)):
         return "Mover Blueprint paths are blank or duplicated"
+    blueprint_kinds = {
+        str(row.get("blueprint_path", "")): str(row.get("mover_kind", ""))
+        for row in blueprints
+    }
+    for path, kind in blueprint_kinds.items():
+        if kind not in {"movement_mode", "movement_transition", "mover_blueprint"}:
+            return f"unexpected Mover Blueprint kind: {path} -> {kind!r}"
 
     component_paths = [str(row.get("component_path", "")) for row in components]
     if any(not path for path in component_paths) or len(component_paths) != len(set(component_paths)):
@@ -99,6 +106,9 @@ def validation_error(output: Path, rows=None) -> str | None:
             return f"Mover mode references unknown component: {component_path}"
         if not str(row.get("mode_name", "")) or not str(row.get("mode_path", "")):
             return f"Mover mode has blank identity for component: {component_path}"
+        mode_asset = str(row.get("mode_asset_path", "") or "")
+        if mode_asset and blueprint_kinds.get(mode_asset) != "movement_mode":
+            return f"Mover mode asset does not resolve to movement_mode Blueprint: {row.get('mode_path')} -> {mode_asset}"
         modes_by_component[component_path].append(row)
     for component_path, values in modes_by_component.items():
         indices = sorted(int(row.get("mode_index", -1)) for row in values)
@@ -120,6 +130,12 @@ def validation_error(output: Path, rows=None) -> str | None:
     for row in transitions:
         if not str(row.get("owner_path", "")) or not str(row.get("transition_path", "")):
             return "Mover transition has blank owner/target path"
+        transition_asset = str(row.get("transition_asset_path", "") or "")
+        if transition_asset and blueprint_kinds.get(transition_asset) != "movement_transition":
+            return (
+                "Mover transition asset does not resolve to movement_transition Blueprint: "
+                f"{row.get('transition_path')} -> {transition_asset}"
+            )
 
     for row in components:
         component_path = str(row.get("component_path", ""))
