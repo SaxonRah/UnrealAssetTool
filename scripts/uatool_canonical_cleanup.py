@@ -13,15 +13,20 @@ import json
 import os
 from pathlib import Path
 
+import uatool_core as core
+import uatool_runtime as runtime
 import uatool_animation as animation
 import uatool_animation_breadth as animation_breadth
 import uatool_animation_curve_storage as animation_curve_storage
 import uatool_animation_property_storage as animation_property_storage
+import uatool_blueprint_property_storage as blueprint_property_storage
 import uatool_pose_transform_storage as pose_transform_storage
 
-# The canonical launcher imports uatool_runtime (and therefore the animation
-# modules) before this cleanup module. Install compact storage behind the
-# existing APIs so callers keep one canonical launcher and one logical row model.
+# The canonical launcher imports uatool_runtime (and therefore the structural
+# and animation modules) before this cleanup module. Install compact storage
+# behind the existing APIs so callers keep one canonical launcher and one
+# logical row model.
+blueprint_property_storage.install(core, runtime)
 animation_curve_storage.install(animation)
 animation_property_storage.install(animation)
 pose_transform_storage.install(animation_breadth)
@@ -212,6 +217,14 @@ def apply(output) -> dict[str, int]:
     """Apply all canonical cleanups and return removal/rewrite counts."""
     output = Path(output).expanduser().resolve()
 
+    blueprint_property_stats = blueprint_property_storage.normalize_output(output)
+    if blueprint_property_stats.get("rewritten", False):
+        print(
+            "canonical cleanup: compacted Blueprint node properties="
+            f"{blueprint_property_stats.get('logical_properties', 0)} "
+            f"into blocks={blueprint_property_stats.get('blocks', 0)}"
+        )
+
     curve_stats = animation_curve_storage.normalize_output(output)
     if curve_stats.get("rewritten", False):
         print(
@@ -246,6 +259,9 @@ def apply(output) -> dict[str, int]:
         "material_expression_guids": removed_guids,
         "blueprint_nodes_rewritten": rewritten_nodes,
         "inline_blueprint_pins": removed_inline_pins,
+        "blueprint_node_properties": int(blueprint_property_stats.get("logical_properties", 0)),
+        "blueprint_node_property_blocks": int(blueprint_property_stats.get("blocks", 0)),
+        "blueprint_node_properties_compacted": int(bool(blueprint_property_stats.get("rewritten", False))),
         "animation_curve_keys": int(curve_stats.get("logical_keys", 0)),
         "animation_curve_key_blocks": int(curve_stats.get("blocks", 0)),
         "animation_curve_keys_compacted": int(bool(curve_stats.get("rewritten", False))),
@@ -260,6 +276,10 @@ def apply(output) -> dict[str, int]:
 
 def validation_error(output) -> str | None:
     output = Path(output).expanduser().resolve()
+
+    blueprint_property_error = blueprint_property_storage.manifest_validation_error(output)
+    if blueprint_property_error:
+        return blueprint_property_error
 
     curve_error = animation_curve_storage.manifest_validation_error(output)
     if curve_error:
