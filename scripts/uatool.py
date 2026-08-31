@@ -13,6 +13,7 @@ import uatool_runtime as runtime
 import uatool_vfx as vfx
 import uatool_vfx_stitch as vfx_stitch
 import uatool_systems as systems
+import uatool_blueprint_semantics as blueprint_semantics
 import uatool_project_graph as project_graph
 import uatool_project_graph_finalize as project_graph_finalize
 import uatool_project_neighborhoods as neighborhood_policy
@@ -22,10 +23,11 @@ import uatool_derived_freshness as derived_freshness
 import uatool_build_perf as build_perf
 import uatool_verify_bundle as bundle_verify
 
-# Schema 15 minimizes bounded project-neighborhood hops to traversal metadata
-# plus authoritative project-edge IDs. Edge semantics, quality, coverage and
-# evidence remain canonical in project_edges and are joined on query.
-FINAL_DERIVED_SCHEMA_VERSION = 15
+# Schema 16 adds a generic semantic graph over every canonical Blueprint node
+# and exact execution/data flow. Domain systems can consume this layer without
+# turning the derived architecture into a collection of subsystem-specific K2
+# parsers. Project-neighborhood physical storage remains independently versioned.
+FINAL_DERIVED_SCHEMA_VERSION = 16
 project_graph.DERIVED_SCHEMA_VERSION = FINAL_DERIVED_SCHEMA_VERSION
 SCRIPT_DIR = Path(__file__).resolve().parent
 
@@ -34,8 +36,8 @@ build_perf.install(core)
 
 # uatool_runtime installs the structural/world/animation/derived-schema-11
 # pipeline into uatool_core. This composition root adds independently versioned
-# VFX, remaining systems, and the final typed project graph without creating
-# alternate public launchers.
+# VFX, remaining systems, generic Blueprint semantics, and the final typed
+# project graph without creating alternate public launchers.
 _base_create_schema = core.create_schema
 _base_derive_output = core.derive_output
 _base_build_database = core.build_database
@@ -58,6 +60,7 @@ def create_schema(conn) -> None:
     vfx.create_schema(conn)
     vfx_stitch.create_schema(conn)
     systems.create_schema(conn)
+    blueprint_semantics.create_schema(conn)
     project_graph.create_schema(conn)
 
 
@@ -112,6 +115,12 @@ def _require_vfx_derived(output: Path) -> None:
         raise RuntimeError(
             f"VFX derived incomplete: expected derived schema >= {vfx_stitch.DERIVED_SCHEMA_VERSION}, got {version}"
         )
+
+
+def _require_blueprint_semantics(output: Path) -> None:
+    error = blueprint_semantics.validation_error(output, runtime._rows)
+    if error:
+        raise RuntimeError(f"Blueprint semantic derived incomplete: {error}")
 
 
 def _require_project_graph(output: Path) -> None:
@@ -198,6 +207,14 @@ def derive_output(output):
         raise RuntimeError(f"VFX derived incomplete: {error}")
     counts.update(vfx_counts)
 
+    semantic_nodes, semantic_edges, semantic_graphs = blueprint_semantics.derive(output, runtime._rows)
+    semantic_counts = {
+        "blueprint_semantic_nodes": runtime._write(output / "blueprint_semantic_nodes.jsonl", semantic_nodes),
+        "blueprint_semantic_edges": runtime._write(output / "blueprint_semantic_edges.jsonl", semantic_edges),
+        "blueprint_semantic_graphs": runtime._write(output / "blueprint_semantic_graphs.jsonl", semantic_graphs),
+    }
+    counts.update(semantic_counts)
+
     project_nodes, project_edges, _ = project_graph.derive(output, runtime._rows)
     project_nodes, project_edges, _ = project_graph_finalize.finalize(
         output, runtime._rows, project_nodes, project_edges
@@ -246,10 +263,22 @@ def derive_output(output):
             manifest["systems_files"] = systems_manifest.get("files", [])
             manifest["systems_pass"] = systems_manifest.get("pass", "UnrealAssetToolSystems")
 
+        classified_nodes = sum(int(not row.get("opaque", False)) for row in semantic_nodes)
+        opaque_nodes = len(semantic_nodes) - classified_nodes
+        manifest["blueprint_semantic_schema_version"] = blueprint_semantics.SEMANTIC_SCHEMA_VERSION
+        manifest["blueprint_semantic_summary"] = {
+            "node_count": len(semantic_nodes),
+            "classified_node_count": classified_nodes,
+            "opaque_node_count": opaque_nodes,
+            "graph_count": len(semantic_graphs),
+            "edge_count": len(semantic_edges),
+            "coverage": (classified_nodes / len(semantic_nodes)) if semantic_nodes else 1.0,
+        }
         manifest["derived_schema_version"] = FINAL_DERIVED_SCHEMA_VERSION
         declared = manifest.get("derived_counts", {})
         declared = declared if isinstance(declared, dict) else {}
         declared.update(vfx_counts)
+        declared.update(semantic_counts)
         declared.update(project_counts)
         manifest["derived_counts"] = declared
         manifest_path.write_text(
@@ -259,11 +288,18 @@ def derive_output(output):
         )
 
     _require_vfx_derived(output)
+    _require_blueprint_semantics(output)
     _require_project_graph(output)
     derived_freshness.mark_fresh(
         output,
         schema_version=FINAL_DERIVED_SCHEMA_VERSION,
         script_dir=SCRIPT_DIR,
+    )
+    print(
+        "blueprint semantics: "
+        f"nodes={len(semantic_nodes)} classified={sum(int(not row.get('opaque', False)) for row in semantic_nodes)} "
+        f"opaque={sum(int(bool(row.get('opaque', False))) for row in semantic_nodes)} "
+        f"graphs={len(semantic_graphs)} edges={len(semantic_edges)}"
     )
     return counts
 
@@ -280,6 +316,7 @@ def build_database(output):
         _require_vfx(output)
         _require_systems(output)
         _require_vfx_derived(output)
+        _require_blueprint_semantics(output)
         _require_project_graph(output)
 
     db = _base_build_database(output)
@@ -288,6 +325,7 @@ def build_database(output):
         vfx.load_database(conn, output, runtime._rows)
         vfx_stitch.load_database(conn, output, runtime._rows)
         systems.load_database(conn, output, runtime._rows)
+        blueprint_semantics.load_database(conn, output, runtime._rows)
         # project_neighborhoods loads compact JSON and an empty text field.
         # Readable text is reconstructed only when queried, avoiding another
         # hundreds-of-megabytes copy of neighborhood paths in uat.db.
@@ -317,6 +355,7 @@ def query(args):
                 args.limit,
                 max_chars=project_graph.MAX_NEIGHBOR_CHARS,
             )
+            blueprint_semantics.query(conn, core._print_rows, pattern, args.limit)
             systems.query(conn, core._print_rows, pattern, args.limit)
             vfx_stitch.query(conn, core._print_rows, pattern, args.limit)
             vfx.query(conn, core._print_rows, pattern, args.limit)
@@ -340,6 +379,8 @@ def _combined_summary(args) -> None:
     vc = vfx_manifest.get("counts", {}) if isinstance(vfx_manifest.get("counts", {}), dict) else {}
     sc = systems_manifest.get("counts", {}) if isinstance(systems_manifest.get("counts", {}), dict) else {}
     dc = top_manifest.get("derived_counts", {}) if isinstance(top_manifest.get("derived_counts", {}), dict) else {}
+    semantic_summary = top_manifest.get("blueprint_semantic_summary", {})
+    semantic_summary = semantic_summary if isinstance(semantic_summary, dict) else {}
 
     print(
         "vfx scan complete: "
@@ -363,11 +404,22 @@ def _combined_summary(args) -> None:
             )
         )
     )
+    if semantic_summary:
+        coverage = float(semantic_summary.get("coverage", 0.0) or 0.0) * 100.0
+        print(
+            "blueprint semantic complete: "
+            f"nodes={semantic_summary.get('node_count', 0)} "
+            f"classified={semantic_summary.get('classified_node_count', 0)} "
+            f"opaque={semantic_summary.get('opaque_node_count', 0)} "
+            f"graphs={semantic_summary.get('graph_count', 0)} "
+            f"edges={semantic_summary.get('edge_count', 0)} coverage={coverage:.2f}%"
+        )
     print(
         "final derived complete: "
         + " ".join(
             f"{name}={dc.get(name, 0)}"
             for name in (
+                "blueprint_semantic_nodes", "blueprint_semantic_edges", "blueprint_semantic_graphs",
                 "vfx_relations", "vfx_context", "vfx_summaries",
                 "project_nodes", "project_edges", "project_neighborhoods",
             )
@@ -376,6 +428,7 @@ def _combined_summary(args) -> None:
     print(
         f"schemas: vfx={vfx_manifest.get('schema_version', 0)} "
         f"systems={systems_manifest.get('schema_version', 0)} "
+        f"bp_semantic={top_manifest.get('blueprint_semantic_schema_version', 0)} "
         f"derived={top_manifest.get('derived_schema_version', 0)}"
     )
 
@@ -400,6 +453,9 @@ def scan(args):
         if "canonical cleanup incomplete:" in message:
             print(f"ERROR: {exc}", file=sys.stderr)
             return 29
+        if "Blueprint semantic derived incomplete:" in message:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 31
         raise
     if result != 0:
         return result
@@ -424,10 +480,14 @@ def scan(args):
             return 27
         try:
             _require_vfx_derived(output)
+            _require_blueprint_semantics(output)
             _require_project_graph(output)
         except RuntimeError as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
-            return 28 if "project graph incomplete:" in str(exc) else 26
+            message = str(exc)
+            if "Blueprint semantic derived incomplete:" in message:
+                return 31
+            return 28 if "project graph incomplete:" in message else 26
         derived_freshness.mark_fresh(
             output,
             schema_version=FINAL_DERIVED_SCHEMA_VERSION,
@@ -449,6 +509,7 @@ core.DEFAULT_BUNDLE_FILES = tuple(dict.fromkeys((
     *vfx.RAW_FILES,
     *vfx_stitch.DERIVED_FILES,
     *systems.RAW_FILES,
+    *blueprint_semantics.DERIVED_FILES,
     *project_graph.DERIVED_FILES,
 )))
 
