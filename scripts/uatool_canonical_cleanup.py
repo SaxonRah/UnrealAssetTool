@@ -16,12 +16,14 @@ from pathlib import Path
 import uatool_animation as animation
 import uatool_animation_breadth as animation_breadth
 import uatool_animation_curve_storage as animation_curve_storage
+import uatool_animation_property_storage as animation_property_storage
 import uatool_pose_transform_storage as pose_transform_storage
 
 # The canonical launcher imports uatool_runtime (and therefore the animation
 # modules) before this cleanup module. Install compact storage behind the
 # existing APIs so callers keep one canonical launcher and one logical row model.
 animation_curve_storage.install(animation)
+animation_property_storage.install(animation)
 pose_transform_storage.install(animation_breadth)
 
 MATERIAL_PROPERTIES_FILE = "material_properties.jsonl"
@@ -217,6 +219,13 @@ def apply(output) -> dict[str, int]:
             f"{curve_stats.get('logical_keys', 0)} into blocks={curve_stats.get('blocks', 0)}"
         )
 
+    property_stats = animation_property_storage.normalize_output(output)
+    if property_stats.get("rewritten", False):
+        print(
+            "canonical cleanup: compacted animation properties="
+            f"{property_stats.get('logical_properties', 0)} into blocks={property_stats.get('blocks', 0)}"
+        )
+
     _validate_legacy_pose_transform_count(output)
     pose_stats = pose_transform_storage.normalize_output(output)
     if pose_stats.get("rewritten", False):
@@ -240,6 +249,9 @@ def apply(output) -> dict[str, int]:
         "animation_curve_keys": int(curve_stats.get("logical_keys", 0)),
         "animation_curve_key_blocks": int(curve_stats.get("blocks", 0)),
         "animation_curve_keys_compacted": int(bool(curve_stats.get("rewritten", False))),
+        "animation_properties": int(property_stats.get("logical_properties", 0)),
+        "animation_property_blocks": int(property_stats.get("blocks", 0)),
+        "animation_properties_compacted": int(bool(property_stats.get("rewritten", False))),
         "pose_asset_transforms": int(pose_stats.get("logical_transforms", 0)),
         "pose_asset_transform_blocks": int(pose_stats.get("blocks", 0)),
         "pose_asset_transforms_compacted": int(bool(pose_stats.get("rewritten", False))),
@@ -252,6 +264,10 @@ def validation_error(output) -> str | None:
     curve_error = animation_curve_storage.manifest_validation_error(output)
     if curve_error:
         return curve_error
+
+    property_error = animation_property_storage.manifest_validation_error(output)
+    if property_error:
+        return property_error
 
     pose_error = pose_transform_storage.manifest_validation_error(output)
     if pose_error:
