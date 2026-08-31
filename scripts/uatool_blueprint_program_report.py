@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Compact read-only Blueprint program report over existing canonical/derived facts.
 
-This is a retrieval/view layer, not a new schema.  It intentionally contains no
-Mover/GAS/SmartObject-specific logic.  The goal is to make one Blueprint's
+This is a retrieval/view layer, not a new schema. It intentionally contains no
+Mover/GAS/SmartObject-specific logic. The goal is to make one Blueprint's
 program readable enough for human/AI inspection while retaining exact source
 identities in the underlying JSONL.
 """
@@ -20,6 +20,33 @@ def _rows_for(output: Path, rows, filename: str, blueprint_path: str) -> list[di
         row for row in rows(path)
         if str(row.get("blueprint_path", "") or "") == blueprint_path
     ]
+
+
+def _components_for(output: Path, rows, blueprint_path: str) -> list[dict]:
+    """Read canonical SCS components from the owning blueprints.jsonl row.
+
+    Components are intentionally embedded in blueprints.jsonl in the canonical
+    scan. blueprint_components is a SQLite projection, not an authoritative
+    standalone JSONL stream. Keep the old standalone lookup as a compatibility
+    fallback for any historical/local outputs that happened to contain it.
+    """
+    path = output / "blueprints.jsonl"
+    if path.is_file():
+        for blueprint in rows(path):
+            if str(blueprint.get("object_path", "") or "") != blueprint_path:
+                continue
+            value = blueprint.get("components", [])
+            if isinstance(value, list):
+                result = []
+                for item in value:
+                    if not isinstance(item, dict):
+                        continue
+                    row = dict(item)
+                    row.setdefault("blueprint_path", blueprint_path)
+                    result.append(row)
+                return result
+            break
+    return _rows_for(output, rows, "blueprint_components.jsonl", blueprint_path)
 
 
 def _short(value: str, max_chars: int = 180) -> str:
@@ -42,7 +69,14 @@ def _param_names(value) -> str:
     return ", ".join(names)
 
 
-def build_report(output: Path, rows, blueprint_path: str, *, statement_limit: int = 240, property_limit: int = 120) -> dict:
+def build_report(
+    output: Path,
+    rows,
+    blueprint_path: str,
+    *,
+    statement_limit: int = 240,
+    property_limit: int = 120,
+) -> dict:
     output = Path(output).expanduser().resolve()
     blueprint_path = str(blueprint_path or "").strip()
     if not blueprint_path:
@@ -50,7 +84,6 @@ def build_report(output: Path, rows, blueprint_path: str, *, statement_limit: in
 
     semantic_nodes = _rows_for(output, rows, "blueprint_semantic_nodes.jsonl", blueprint_path)
     if not semantic_nodes:
-        # Give a useful exact-match diagnostic without loading a database.
         candidates = []
         needle = blueprint_path.lower()
         path = output / "blueprint_semantic_nodes.jsonl"
@@ -75,20 +108,38 @@ def build_report(output: Path, rows, blueprint_path: str, *, statement_limit: in
     block_edges = _rows_for(output, rows, "blueprint_execution_block_edges.jsonl", blueprint_path)
     roots = _rows_for(output, rows, "blueprint_execution_roots.jsonl", blueprint_path)
     semantic_edges = _rows_for(output, rows, "blueprint_semantic_edges.jsonl", blueprint_path)
-    components = _rows_for(output, rows, "blueprint_components.jsonl", blueprint_path)
+    components = _components_for(output, rows, blueprint_path)
     component_properties = _rows_for(output, rows, "blueprint_component_properties.jsonl", blueprint_path)
 
-    graph_names = sorted({str(row.get("graph_name", "") or "") for row in semantic_nodes if row.get("graph_name")})
+    graph_names = sorted({
+        str(row.get("graph_name", "") or "")
+        for row in semantic_nodes
+        if row.get("graph_name")
+    })
 
-    # Build stable short labels per graph so the report does not read like GUID soup.
     blocks_by_graph: dict[str, list[dict]] = collections.defaultdict(list)
     for block in blocks:
         blocks_by_graph[str(block.get("graph_id", "") or "")].append(block)
+
     block_label: dict[str, str] = {}
-    for graph_id, graph_blocks in blocks_by_graph.items():
-        graph_blocks.sort(key=lambda row: (int(row.get("block_index", 0) or 0), str(row.get("block_id", "") or "")))
+    for graph_blocks in blocks_by_graph.values():
+        graph_blocks.sort(key=lambda row: (
+            int(row.get("block_index", 0) or 0),
+            str(row.get("block_id", "") or ""),
+        ))
         for index, block in enumerate(graph_blocks):
             block_label[str(block.get("block_id", "") or "")] = f"B{index}"
+
+    roots_by_graph: dict[str, list[dict]] = collections.defaultdict(list)
+    for root in roots:
+        roots_by_graph[str(root.get("graph_id", "") or "")].append(root)
+    for values in roots_by_graph.values():
+        values.sort(key=lambda row: (
+            str(row.get("root_kind", "") or ""),
+            str(row.get("root_name", "") or ""),
+            str(row.get("block_id", "") or ""),
+            str(row.get("root_id", "") or ""),
+        ))
 
     statements_by_block: dict[str, list[dict]] = collections.defaultdict(list)
     loose_statements: list[dict] = []
@@ -99,14 +150,19 @@ def build_report(output: Path, rows, blueprint_path: str, *, statement_limit: in
         else:
             loose_statements.append(statement)
     for values in statements_by_block.values():
-        values.sort(key=lambda row: (int(row.get("block_position", -1) or -1), str(row.get("node_id", "") or "")))
+        values.sort(key=lambda row: (
+            int(row.get("block_position", -1) or -1),
+            str(row.get("node_id", "") or ""),
+        ))
 
     outgoing: dict[str, list[dict]] = collections.defaultdict(list)
     for edge in block_edges:
         outgoing[str(edge.get("source_block_id", "") or "")].append(edge)
 
-    # Unique non-node semantic endpoints are the best compact read/write/call inventory.
-    endpoint_rows = [edge for edge in semantic_edges if str(edge.get("target_kind", "") or "") != "node"]
+    endpoint_rows = [
+        edge for edge in semantic_edges
+        if str(edge.get("target_kind", "") or "") != "node"
+    ]
     endpoint_groups: dict[str, list[str]] = collections.defaultdict(list)
     endpoint_seen: dict[str, set[str]] = collections.defaultdict(set)
     for edge in endpoint_rows:
@@ -118,8 +174,6 @@ def build_report(output: Path, rows, blueprint_path: str, *, statement_limit: in
     for values in endpoint_groups.values():
         values.sort()
 
-    # Component properties are already authored-delta records, so they are useful
-    # without dumping the entire reflected component object.
     component_properties.sort(key=lambda row: (
         str(row.get("component_name", "") or ""),
         str(row.get("property_name", "") or ""),
@@ -132,12 +186,19 @@ def build_report(output: Path, rows, blueprint_path: str, *, statement_limit: in
         "semantic_node_count": len(semantic_nodes),
         "statement_count": len(statements),
         "block_count": len(blocks),
+        "root_count": len(roots),
         "function_count": len(functions),
         "event_count": len(events),
         "component_count": len(components),
         "component_property_count": len(component_properties),
-        "functions": sorted(functions, key=lambda row: (str(row.get("graph_name", "") or ""), str(row.get("name", "") or ""))),
-        "events": sorted(events, key=lambda row: (str(row.get("graph_name", "") or ""), str(row.get("name", "") or ""))),
+        "functions": sorted(functions, key=lambda row: (
+            str(row.get("graph_name", "") or ""),
+            str(row.get("name", "") or ""),
+        )),
+        "events": sorted(events, key=lambda row: (
+            str(row.get("graph_name", "") or ""),
+            str(row.get("name", "") or ""),
+        )),
         "components": sorted(components, key=lambda row: str(row.get("variable_name", "") or "")),
         "component_properties": component_properties[: max(0, property_limit)],
         "component_properties_truncated": len(component_properties) > max(0, property_limit),
@@ -148,6 +209,7 @@ def build_report(output: Path, rows, blueprint_path: str, *, statement_limit: in
         "loose_statements": loose_statements,
         "outgoing": outgoing,
         "roots": roots,
+        "roots_by_graph": roots_by_graph,
         "statement_limit": max(0, statement_limit),
     }
 
@@ -156,12 +218,13 @@ def print_report(report: dict) -> None:
     print("=== BLUEPRINT PROGRAM REPORT ===")
     print(report["blueprint_path"])
     print(
-        "graphs={graphs} nodes={nodes} statements={statements} blocks={blocks} "
+        "graphs={graphs} nodes={nodes} statements={statements} blocks={blocks} roots={roots} "
         "functions={functions} events={events} components={components} component_overrides={overrides}".format(
             graphs=len(report.get("graph_names", [])),
             nodes=report.get("semantic_node_count", 0),
             statements=report.get("statement_count", 0),
             blocks=report.get("block_count", 0),
+            roots=report.get("root_count", 0),
             functions=report.get("function_count", 0),
             events=report.get("event_count", 0),
             components=report.get("component_count", 0),
@@ -195,9 +258,7 @@ def print_report(report: dict) -> None:
     for row in properties:
         value = str(row.get("referenced_object_path", "") or row.get("value", "") or "")
         suffix = f"[{int(row.get('array_index', 0) or 0)}]" if int(row.get("array_index", 0) or 0) else ""
-        print(
-            f"  {row.get('component_name','')}.{row.get('property_name','')}{suffix} = {_short(value)}"
-        )
+        print(f"  {row.get('component_name','')}.{row.get('property_name','')}{suffix} = {_short(value)}")
     if report.get("component_properties_truncated"):
         print("  … component override output truncated by --property-limit")
 
@@ -257,6 +318,7 @@ def print_report(report: dict) -> None:
     labels = report.get("block_label", {})
     statements_by_block = report.get("statements_by_block", {})
     outgoing = report.get("outgoing", {})
+    roots_by_graph = report.get("roots_by_graph", {})
     remaining = int(report.get("statement_limit", 0) or 0)
 
     all_graphs = []
@@ -267,12 +329,28 @@ def print_report(report: dict) -> None:
 
     for graph_name, graph_id, blocks in all_graphs:
         print(f"\n  graph {graph_name or graph_id}")
-        ordered_blocks = sorted(blocks, key=lambda row: (int(row.get("block_index", 0) or 0), str(row.get("block_id", "") or "")))
+        graph_roots = roots_by_graph.get(graph_id, [])
+        if graph_roots:
+            root_bits = []
+            for root in graph_roots:
+                target = labels.get(str(root.get("block_id", "") or ""), "B?")
+                kind = str(root.get("root_kind", "") or "root")
+                name = str(root.get("root_name", "") or "")
+                root_bits.append(f"{kind}:{name}->{target}" if name else f"{kind}->{target}")
+            print("    roots: " + ", ".join(root_bits))
+
+        ordered_blocks = sorted(blocks, key=lambda row: (
+            int(row.get("block_index", 0) or 0),
+            str(row.get("block_id", "") or ""),
+        ))
         for block in ordered_blocks:
             block_id = str(block.get("block_id", "") or "")
             label = labels.get(block_id, "B?")
             edge_bits = []
-            for edge in sorted(outgoing.get(block_id, []), key=lambda row: (str(row.get("source_pin_name", "") or ""), str(row.get("target_block_id", "") or ""))):
+            for edge in sorted(outgoing.get(block_id, []), key=lambda row: (
+                str(row.get("source_pin_name", "") or ""),
+                str(row.get("target_block_id", "") or ""),
+            )):
                 target = labels.get(str(edge.get("target_block_id", "") or ""), "B?")
                 pin = str(edge.get("source_pin_name", "") or "")
                 edge_bits.append(f"{pin or 'next'}->{target}")
