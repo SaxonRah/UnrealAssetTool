@@ -69,6 +69,48 @@ def _param_names(value) -> str:
     return ", ".join(names)
 
 
+def _reachable_blocks(
+    blocks_by_graph: dict[str, list[dict]],
+    roots_by_graph: dict[str, list[dict]],
+    outgoing: dict[str, list[dict]],
+) -> dict[str, set[str]]:
+    """Return execution blocks reachable from explicit derived graph roots.
+
+    A graph with no roots is left without a reachability set rather than having
+    every block mislabeled as dead. For rooted graphs this is an exact traversal
+    of derived execution-block edges and therefore exposes disconnected/dead
+    executable islands without guessing from graph layout.
+    """
+    result: dict[str, set[str]] = {}
+    for graph_id, blocks in blocks_by_graph.items():
+        graph_roots = roots_by_graph.get(graph_id, [])
+        if not graph_roots:
+            continue
+
+        valid_blocks = {
+            str(block.get("block_id", "") or "")
+            for block in blocks
+            if block.get("block_id")
+        }
+        pending = [
+            str(root.get("block_id", "") or "")
+            for root in graph_roots
+            if str(root.get("block_id", "") or "") in valid_blocks
+        ]
+        reachable: set[str] = set()
+        while pending:
+            block_id = pending.pop()
+            if not block_id or block_id in reachable:
+                continue
+            reachable.add(block_id)
+            for edge in outgoing.get(block_id, []):
+                target = str(edge.get("target_block_id", "") or "")
+                if target in valid_blocks and target not in reachable:
+                    pending.append(target)
+        result[graph_id] = reachable
+    return result
+
+
 def build_report(
     output: Path,
     rows,
@@ -159,6 +201,18 @@ def build_report(
     for edge in block_edges:
         outgoing[str(edge.get("source_block_id", "") or "")].append(edge)
 
+    reachable_by_graph = _reachable_blocks(blocks_by_graph, roots_by_graph, outgoing)
+    unreachable_block_count = 0
+    for graph_id, graph_blocks in blocks_by_graph.items():
+        reachable = reachable_by_graph.get(graph_id)
+        if reachable is None:
+            continue
+        unreachable_block_count += sum(
+            1
+            for block in graph_blocks
+            if str(block.get("block_id", "") or "") not in reachable
+        )
+
     endpoint_rows = [
         edge for edge in semantic_edges
         if str(edge.get("target_kind", "") or "") != "node"
@@ -187,6 +241,7 @@ def build_report(
         "statement_count": len(statements),
         "block_count": len(blocks),
         "root_count": len(roots),
+        "unreachable_block_count": unreachable_block_count,
         "function_count": len(functions),
         "event_count": len(events),
         "component_count": len(components),
@@ -210,6 +265,7 @@ def build_report(
         "outgoing": outgoing,
         "roots": roots,
         "roots_by_graph": roots_by_graph,
+        "reachable_by_graph": reachable_by_graph,
         "statement_limit": max(0, statement_limit),
     }
 
@@ -219,12 +275,14 @@ def print_report(report: dict) -> None:
     print(report["blueprint_path"])
     print(
         "graphs={graphs} nodes={nodes} statements={statements} blocks={blocks} roots={roots} "
-        "functions={functions} events={events} components={components} component_overrides={overrides}".format(
+        "unreachable_blocks={unreachable} functions={functions} events={events} "
+        "components={components} component_overrides={overrides}".format(
             graphs=len(report.get("graph_names", [])),
             nodes=report.get("semantic_node_count", 0),
             statements=report.get("statement_count", 0),
             blocks=report.get("block_count", 0),
             roots=report.get("root_count", 0),
+            unreachable=report.get("unreachable_block_count", 0),
             functions=report.get("function_count", 0),
             events=report.get("event_count", 0),
             components=report.get("component_count", 0),
@@ -319,6 +377,7 @@ def print_report(report: dict) -> None:
     statements_by_block = report.get("statements_by_block", {})
     outgoing = report.get("outgoing", {})
     roots_by_graph = report.get("roots_by_graph", {})
+    reachable_by_graph = report.get("reachable_by_graph", {})
     remaining = int(report.get("statement_limit", 0) or 0)
 
     all_graphs = []
@@ -330,6 +389,7 @@ def print_report(report: dict) -> None:
     for graph_name, graph_id, blocks in all_graphs:
         print(f"\n  graph {graph_name or graph_id}")
         graph_roots = roots_by_graph.get(graph_id, [])
+        reachable = reachable_by_graph.get(graph_id)
         if graph_roots:
             root_bits = []
             for root in graph_roots:
@@ -346,6 +406,7 @@ def print_report(report: dict) -> None:
         for block in ordered_blocks:
             block_id = str(block.get("block_id", "") or "")
             label = labels.get(block_id, "B?")
+            status = " [unreachable]" if reachable is not None and block_id not in reachable else ""
             edge_bits = []
             for edge in sorted(outgoing.get(block_id, []), key=lambda row: (
                 str(row.get("source_pin_name", "") or ""),
@@ -355,7 +416,7 @@ def print_report(report: dict) -> None:
                 pin = str(edge.get("source_pin_name", "") or "")
                 edge_bits.append(f"{pin or 'next'}->{target}")
             edge_text = (" | " + ", ".join(edge_bits)) if edge_bits else ""
-            print(f"    {label}{edge_text}")
+            print(f"    {label}{status}{edge_text}")
             for statement in statements_by_block.get(block_id, []):
                 if remaining <= 0:
                     print("      … statement output truncated by --statement-limit")
