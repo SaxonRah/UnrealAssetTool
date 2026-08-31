@@ -151,6 +151,40 @@ def _strip_redundant_inline_blueprint_pins(output: Path) -> tuple[int, int]:
     return rewritten_nodes, removed_pins
 
 
+def _validate_legacy_pose_transform_count(output: Path) -> None:
+    """Gate pose compaction against the untouched breadth-pass row count."""
+    path = output / "pose_asset_transforms.jsonl"
+    if not path.is_file():
+        return
+    first_row = None
+    actual = 0
+    with path.open("rb") as src:
+        for line_number, raw in enumerate(src, 1):
+            if not raw.strip():
+                continue
+            row = _decode_json_row(path, line_number, raw)
+            if first_row is None:
+                first_row = row
+                if row.get("encoding") == pose_transform_storage.ENCODING:
+                    return
+            actual += 1
+    breadth_path = output / "animation_breadth_manifest.json"
+    if not breadth_path.is_file():
+        return
+    try:
+        breadth = json.loads(breadth_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"invalid animation_breadth_manifest.json before pose compaction: {exc}") from exc
+    counts = breadth.get("counts", {}) if isinstance(breadth, dict) else {}
+    if isinstance(counts, dict) and "pose_asset_transforms" in counts:
+        expected = int(counts.get("pose_asset_transforms", 0) or 0)
+        if expected != actual:
+            raise RuntimeError(
+                "pose transform count differs from breadth scanner manifest before compaction: "
+                f"manifest={expected} actual={actual}"
+            )
+
+
 def _update_manifest_material_count(output: Path, count: int) -> None:
     manifest_path = output / "manifest.json"
     if not manifest_path.is_file():
@@ -183,6 +217,7 @@ def apply(output) -> dict[str, int]:
             f"{curve_stats.get('logical_keys', 0)} into blocks={curve_stats.get('blocks', 0)}"
         )
 
+    _validate_legacy_pose_transform_count(output)
     pose_stats = pose_transform_storage.normalize_output(output)
     if pose_stats.get("rewritten", False):
         print(
