@@ -5,6 +5,7 @@ from __future__ import annotations
 import collections
 from pathlib import Path
 
+import uatool_blueprint_control_flow as blueprint_control_flow
 import uatool_blueprint_enums as blueprint_enums
 import uatool_blueprint_enum_inference as blueprint_enum_inference
 
@@ -109,4 +110,10 @@ def install(core_module) -> None:
 
     core_module.derive_blueprint_execution_program = derive_execution
     program_report.build_report = build_report
+
+    # Generic control-flow semantics consume the now enum-decorated execution
+    # block edges. Install after this wrapper so switch case rows inherit the
+    # authored/display case labels while retaining raw Unreal pin provenance.
+    blueprint_control_flow.install(core_module)
+
     core_module._blueprint_enum_edge_support_installed = True
