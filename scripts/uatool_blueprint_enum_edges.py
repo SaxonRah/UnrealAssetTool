@@ -6,6 +6,7 @@ import collections
 from pathlib import Path
 
 import uatool_blueprint_enums as blueprint_enums
+import uatool_blueprint_enum_inference as blueprint_enum_inference
 
 
 def _decorate_execution_edges(output: Path, rows: list[dict], core_module) -> list[dict]:
@@ -87,6 +88,10 @@ def install(core_module) -> None:
         return
 
     import uatool_blueprint_program_report as program_report
+
+    # Dependency-expression rendering is part of the same readable enum layer.
+    # Install conservative literal inference before any derive/report work runs.
+    blueprint_enum_inference.install()
 
     original_execution = core_module.derive_blueprint_execution_program
     original_build_report = program_report.build_report
