@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - finish-indexer-systems-graph
   pull_request:
 
 jobs:
