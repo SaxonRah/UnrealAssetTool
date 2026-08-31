@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import collections
 import json
-import re
 import sqlite3
 import sys
 from pathlib import Path
@@ -31,8 +30,6 @@ CREATE TABLE blueprint_enum_entries(
 CREATE INDEX bp_enum_entries_raw_idx ON blueprint_enum_entries(enum_path,raw_name);
 CREATE INDEX bp_enum_entries_display_idx ON blueprint_enum_entries(enum_path,display_name);
 """
-
-_ENUM_RAW_RE = re.compile(r"^NewEnumerator\d+$")
 
 
 def _rows(path: Path):
@@ -437,15 +434,20 @@ def install(core_module, runtime_module=None) -> None:
         return result
 
     def scan_wrapper(args):
-        result = int(original_scan(args))
-        if result != 0:
-            return result
         if runtime_module is not None and hasattr(runtime_module, "_output"):
             output = runtime_module._output(args)
         else:
             project = Path(args.project).expanduser().resolve()
             output = Path(args.output).expanduser().resolve() if args.output else project.parent / ".uatool"
-        error = validation_error(Path(output))
+        output = Path(output).expanduser().resolve()
+        # A failed/old staged binary must not make a new scan look successful
+        # by leaving a previous enum manifest or data stream behind.
+        for filename in RAW_FILES:
+            (output / filename).unlink(missing_ok=True)
+        result = int(original_scan(args))
+        if result != 0:
+            return result
+        error = validation_error(output)
         if error:
             print(f"ERROR: Blueprint enum scan incomplete: {error}", file=sys.stderr)
             return 35
