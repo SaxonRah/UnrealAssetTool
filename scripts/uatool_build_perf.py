@@ -29,6 +29,7 @@ import uatool_validation_perf as validation_perf
 import uatool_blueprint_enums as blueprint_enums
 import uatool_blueprint_enum_edges as blueprint_enum_edges
 import uatool_mover_report as mover_report
+import uatool_mover_behavior as mover_behavior
 import uatool_systems as systems
 import uatool_systems_mover as systems_mover
 import uatool_project_graph as project_graph
@@ -286,6 +287,7 @@ def install(core) -> None:
     sqlite_perf.install(core)
     validation_perf.install()
     systems_mover.install(systems)
+    mover_behavior.install(core, runtime)
     mover_graph.install(project_graph)
     blueprint_enums.install(core, runtime)
     blueprint_enum_edges.install(core)
