@@ -20,10 +20,10 @@ import uatool_canonical_cleanup as canonical_cleanup
 import uatool_derived_freshness as derived_freshness
 import uatool_build_perf as build_perf
 
-# Schema 14 changes only the representation of bounded project neighborhoods:
-# project_edges remains authoritative, while each neighborhood stores compact
-# edge references instead of duplicating full edge/evidence payloads and text.
-FINAL_DERIVED_SCHEMA_VERSION = 14
+# Schema 15 minimizes bounded project-neighborhood hops to traversal metadata
+# plus authoritative project-edge IDs. Edge semantics, quality, coverage and
+# evidence remain canonical in project_edges and are joined on query.
+FINAL_DERIVED_SCHEMA_VERSION = 15
 project_graph.DERIVED_SCHEMA_VERSION = FINAL_DERIVED_SCHEMA_VERSION
 SCRIPT_DIR = Path(__file__).resolve().parent
 
@@ -163,6 +163,12 @@ def derive_output(output):
         print(
             "canonical cleanup: removed generated MaterialExpressionGuid rows="
             f"{cleanup['material_expression_guids']}"
+        )
+    if cleanup.get("blueprint_nodes_rewritten", 0):
+        print(
+            "canonical cleanup: removed redundant inline Blueprint pins="
+            f"{cleanup.get('inline_blueprint_pins', 0)} "
+            f"from nodes={cleanup['blueprint_nodes_rewritten']}"
         )
 
     # A freshness stamp exists only after a complete raw + derived validation.
