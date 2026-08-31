@@ -28,6 +28,7 @@ import uatool_sqlite_perf as sqlite_perf
 import uatool_validation_perf as validation_perf
 import uatool_blueprint_enums as blueprint_enums
 import uatool_blueprint_enum_edges as blueprint_enum_edges
+import uatool_mover_report as mover_report
 import uatool_runtime as runtime
 
 CACHE_DIR_NAME = "UnrealAssetToolBuildCache"
@@ -282,3 +283,4 @@ def install(core) -> None:
     validation_perf.install()
     blueprint_enums.install(core, runtime)
     blueprint_enum_edges.install(core)
+    mover_report.install(runtime)
