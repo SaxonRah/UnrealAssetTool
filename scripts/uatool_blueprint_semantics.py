@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Generic Blueprint semantic derivation over canonical UnrealAssetTool facts.
 
-This layer deliberately does not know about Mover, GAS, Smart Objects, or other
-gameplay domains. It normalizes every Blueprint node into a compact semantic
-role, projects canonical execution/data edges into a uniform semantic graph,
-and adds symbol/type/asset endpoint relations from exact scanner semantics.
+This layer is intentionally gameplay-domain neutral. It normalizes Blueprint
+nodes into broad program roles, preserves canonical exec/data topology exactly,
+and joins Control Rig editor wrappers to the authoritative RigVM model through
+the already-derived rigvm_editor_links stream.
 
-Domain-specific models should consume these facts instead of reparsing K2 node
-classes or reflected property blobs themselves.
+Mover, GAS, Smart Objects, and other gameplay systems should consume these
+facts instead of adding K2-node special cases here.
 """
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ import hashlib
 import json
 from pathlib import Path
 
-SEMANTIC_SCHEMA_VERSION = 2
+SEMANTIC_SCHEMA_VERSION = 3
 DERIVED_FILES = (
     "blueprint_semantic_nodes.jsonl",
     "blueprint_semantic_edges.jsonl",
@@ -63,8 +63,8 @@ CREATE INDEX bp_sem_graphs_coverage_idx ON blueprint_semantic_graphs(coverage,op
 """
 
 
-def _j(row: dict) -> str:
-    return json.dumps(row, ensure_ascii=False, separators=(",", ":"))
+def _j(value) -> str:
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
 def _sid(prefix: str, *parts: str) -> str:
@@ -74,10 +74,8 @@ def _sid(prefix: str, *parts: str) -> str:
 
 # operation -> semantic_kind, primary_effect, access_kind, symbol_kind
 #
-# These are broad program semantics, not gameplay-domain interpretations. The
-# scanner already assigned every operation below from exact reflected node
-# classes/state. This table only says what role that operation plays in a
-# generic program/data-flow model.
+# These are generic program roles. They intentionally describe *what kind of
+# operation a reflected node is* without asserting gameplay-domain meaning.
 _OPERATION_MODEL = {
     "function_entry": ("boundary", "control", "", "function"),
     "function_result": ("boundary", "control", "", "function"),
@@ -100,6 +98,7 @@ _OPERATION_MODEL = {
     "gameplay_task_call": ("async_call", "call", "", "function"),
     "ai_move_to": ("async_call", "call", "", "function"),
     "mover_play_montage": ("call", "call", "", "function"),
+    "anim_play_montage": ("call", "call", "", "function"),
     "in_app_purchase_query": ("async_call", "call", "", "function"),
     "in_app_purchase_checkout": ("async_call", "call", "", "function"),
     "in_app_purchase_finalize": ("async_call", "call", "", "function"),
@@ -147,7 +146,7 @@ _OPERATION_MODEL = {
     "chooser_context_parameters": ("value_source", "read", "read", "chooser_context"),
     "evaluate_proxy": ("selection", "select", "", "proxy"),
     "evaluate_live_link_frame": ("data_access", "read", "read", "live_link"),
-    "control_rig_node": ("rig_operation", "transform", "", "rig"),
+    "anim_node_reference": ("animation", "reference", "reference", "animation_node"),
     "anim_state_machine": ("animation", "control", "", "animation_state_machine"),
     "anim_state_entry": ("animation", "control", "", "animation_state"),
     "anim_transition": ("animation", "branch", "", "animation_transition"),
@@ -179,13 +178,40 @@ def _node_model(operation: str) -> tuple[str, str, str, str, bool]:
         return kind, effect, access, symbol_kind, False
     if operation == "node":
         return "opaque", "opaque", "", "", True
-    # Scanner-recognized future operations remain visible as fallback rather
-    # than being silently assigned a guessed role. Animation operation names are
-    # deliberately generic enough to retain an animation role until individually
-    # promoted above.
+    if operation == "control_rig_node":
+        # A ControlRigGraphNode is an editor wrapper. It becomes modeled only
+        # when the authoritative RigVM bridge resolves it below.
+        return "classified", "operation", "", "", False
+    # Many AnimGraph node classes are already scanner-normalized under stable
+    # anim_* operation names. Preserve that broad semantic role without guessing
+    # a finer effect that the scanner did not establish.
     if operation.startswith("anim_"):
         return "animation", "animation", "", "", False
     return "classified", "operation", "", "", False
+
+
+def _rigvm_model(link: dict) -> tuple[str, str, str, str]:
+    operation = str(link.get("rigvm_operation", "") or "")
+    resolved_function = str(link.get("resolved_function_name", "") or "")
+    template = str(link.get("template_notation", "") or "")
+
+    if operation == "rigvm_function_entry":
+        return "boundary", "control", "", "function"
+    if operation == "rigvm_function_return":
+        return "boundary", "control", "", "function"
+    if operation == "rigvm_reroute":
+        return "flow", "passthrough", "", ""
+    if operation == "rigvm_variable":
+        # Directional read/write semantics live in RigVM pins. At wrapper-node
+        # level we can state exact variable/reference identity without guessing.
+        return "symbol_access", "reference", "reference", "variable"
+    if operation == "rigvm_function_reference":
+        return "call", "call", "", "function"
+    if operation == "rigvm_library":
+        return "call", "call", "", "rigvm_library"
+    if operation in {"rigvm_dispatch", "rigvm_unit"} and (resolved_function or (template and template != "None")):
+        return "call", "call", "", "function"
+    return "rig_operation", "execute", "", "rigvm_node"
 
 
 def _target_for(node: dict, symbol_kind: str) -> tuple[str, str]:
@@ -203,7 +229,7 @@ def _target_for(node: dict, symbol_kind: str) -> tuple[str, str]:
     if operation in ("variable_get", "variable_set", "variable_set_ref", "variable_reference"):
         return "variable", f"{owner}::{symbol}" if owner and symbol else symbol or owner
     if operation == "property_access":
-        return "property_path", str(sem.get("access_path", "") or symbol)
+        return "property_path", str(sem.get("access_path", "") or sem.get("text_path", "") or symbol)
     if operation in ("event", "custom_event"):
         return "event", f"{owner}::{symbol}" if owner and symbol else symbol or owner
     if operation in ("input_key", "input_debug_key"):
@@ -287,7 +313,23 @@ def _endpoint_relation(operation: str, access_kind: str, target_kind: str) -> st
         "anim_state": "defines_animation_state",
         "anim_state_entry": "enters_animation_state",
         "anim_transition": "defines_animation_transition",
+        "control_rig_node": "maps_to_rigvm_node",
     }.get(operation, access_kind or ("references" if target_kind else ""))
+
+
+def _load_rigvm_links(output: Path, rows) -> dict[str, dict]:
+    path = output / "rigvm_editor_links.jsonl"
+    links: dict[str, dict] = {}
+    if not path.is_file():
+        return links
+    for link in rows(path):
+        node_id = str(link.get("node_id", "") or "")
+        if not node_id:
+            continue
+        if node_id in links:
+            raise RuntimeError(f"duplicate RigVM editor link node_id: {node_id}")
+        links[node_id] = link
+    return links
 
 
 def derive(output: Path, rows) -> tuple[list[dict], list[dict], list[dict]]:
@@ -295,6 +337,7 @@ def derive(output: Path, rows) -> tuple[list[dict], list[dict], list[dict]]:
     raw_nodes = list(rows(output / "blueprint_nodes.jsonl"))
     raw_pins = list(rows(output / "blueprint_pins.jsonl"))
     raw_edges = list(rows(output / "blueprint_edges.jsonl"))
+    rigvm_links = _load_rigvm_links(output, rows)
 
     pins_by_node: dict[str, list[dict]] = collections.defaultdict(list)
     for pin in raw_pins:
@@ -313,17 +356,27 @@ def derive(output: Path, rows) -> tuple[list[dict], list[dict], list[dict]]:
         if node_id in node_ids:
             raise RuntimeError(f"duplicate canonical Blueprint node_id: {node_id}")
         node_ids.add(node_id)
+
         operation = str(node.get("operation", "node") or "node")
         kind, effect, access, symbol_kind, opaque = _node_model(operation)
+        rigvm_link = rigvm_links.get(node_id) if operation == "control_rig_node" else None
+        rigvm_matched = bool(
+            rigvm_link
+            and str(rigvm_link.get("status", "") or "") == "matched"
+            and str(rigvm_link.get("rigvm_object_id", "") or "")
+        )
+        if rigvm_matched:
+            kind, effect, access, symbol_kind = _rigvm_model(rigvm_link)
+
         pins = pins_by_node.get(node_id, [])
         exec_in = exec_out = data_in = data_out = connected_in = connected_out = literal_in = 0
         for pin in pins:
-            direction = str(pin.get("direction", "") or "")
+            direction = str(pin.get("direction", "") or "").lower()
             pin_type = pin.get("type", {})
             pin_type = pin_type if isinstance(pin_type, dict) else {}
-            is_exec = str(pin_type.get("category", "") or "") == "exec"
+            is_exec = str(pin_type.get("category", "") or "").lower() == "exec"
             linked = int(pin.get("linked_count", 0) or 0)
-            if direction == "input":
+            if direction in {"input", "egpd_input", "0"}:
                 connected_in += int(linked > 0)
                 if is_exec:
                     exec_in += 1
@@ -334,7 +387,7 @@ def derive(output: Path, rows) -> tuple[list[dict], list[dict], list[dict]]:
                         for field in ("default_value", "default_object", "default_text")
                     ):
                         literal_in += 1
-            elif direction == "output":
+            elif direction in {"output", "egpd_output", "1"}:
                 connected_out += int(linked > 0)
                 if is_exec:
                     exec_out += 1
@@ -344,6 +397,10 @@ def derive(output: Path, rows) -> tuple[list[dict], list[dict], list[dict]]:
         sem = node.get("semantic", {})
         sem = sem if isinstance(sem, dict) else {}
         target_kind, target = _target_for(node, symbol_kind)
+        if rigvm_matched:
+            target_kind = "rigvm_node"
+            target = str(rigvm_link.get("rigvm_object_id", "") or "")
+
         row = {
             "semantic_node_id": _sid("bpsemnode:", node_id),
             "node_id": node_id,
@@ -375,7 +432,18 @@ def derive(output: Path, rows) -> tuple[list[dict], list[dict], list[dict]]:
             "latent": _bool_text(sem.get("latent")),
             "interface_call": _bool_text(sem.get("interface_call")),
         }
+        if operation == "control_rig_node":
+            row.update({
+                "rigvm_bridge_status": str((rigvm_link or {}).get("status", "") or "missing"),
+                "rigvm_confidence": str((rigvm_link or {}).get("confidence", "") or ""),
+                "rigvm_object_id": str((rigvm_link or {}).get("rigvm_object_id", "") or ""),
+                "rigvm_operation": str((rigvm_link or {}).get("rigvm_operation", "") or ""),
+                "rigvm_class": str((rigvm_link or {}).get("rigvm_class", "") or ""),
+                "rigvm_function": str((rigvm_link or {}).get("resolved_function_name", "") or ""),
+                "rigvm_template": str((rigvm_link or {}).get("template_notation", "") or ""),
+            })
         semantic_nodes.append(row)
+
         graph_id = row["graph_id"]
         if graph_id and graph_id not in graph_meta:
             graph_meta[graph_id] = {
@@ -441,16 +509,37 @@ def derive(output: Path, rows) -> tuple[list[dict], list[dict], list[dict]]:
         )
 
     for node in semantic_nodes:
-        if not node["target_kind"] or not node["target"]:
-            continue
-        relation = _endpoint_relation(node["operation"], node["access_kind"], node["target_kind"])
-        if relation:
-            add_edge(
-                blueprint_path=node["blueprint_path"], graph_id=node["graph_id"],
-                source_node_id=node["node_id"], relation=relation,
-                target_kind=node["target_kind"], target=node["target"],
-                evidence_kind="node_semantic",
+        if node["target_kind"] and node["target"]:
+            relation = _endpoint_relation(node["operation"], node["access_kind"], node["target_kind"])
+            if relation:
+                add_edge(
+                    blueprint_path=node["blueprint_path"], graph_id=node["graph_id"],
+                    source_node_id=node["node_id"], relation=relation,
+                    target_kind=node["target_kind"], target=node["target"],
+                    evidence_kind="node_semantic",
+                )
+
+        if node.get("rigvm_object_id"):
+            exact = (
+                ("has_rigvm_operation", "rigvm_operation", node.get("rigvm_operation", "")),
+                ("uses_rigvm_class", "class", node.get("rigvm_class", "")),
+                ("invokes_rigvm_function", "function", node.get("rigvm_function", "")),
             )
+            for relation, target_kind, target in exact:
+                add_edge(
+                    blueprint_path=node["blueprint_path"], graph_id=node["graph_id"],
+                    source_node_id=node["node_id"], relation=relation,
+                    target_kind=target_kind, target=str(target or ""),
+                    evidence_kind="rigvm_editor_link",
+                )
+            template = str(node.get("rigvm_template", "") or "")
+            if template and template != "None":
+                add_edge(
+                    blueprint_path=node["blueprint_path"], graph_id=node["graph_id"],
+                    source_node_id=node["node_id"], relation="uses_rigvm_template",
+                    target_kind="rigvm_template", target=template,
+                    evidence_kind="rigvm_editor_link",
+                )
 
     semantic_edges.sort(key=lambda r: (
         r["blueprint_path"], r["graph_id"], r["source_node_id"],
@@ -531,7 +620,7 @@ def validation_error(output: Path, rows) -> str | None:
     if set(raw_ids) != set(semantic_ids):
         return "Blueprint semantic node coverage does not exactly match canonical Blueprint nodes"
 
-    node_by_id = {str(row.get("node_id", "")): row for row in semantic_nodes}
+    node_by_id = {str(row.get("node_id", "") or ""): row for row in semantic_nodes}
     raw_flow = collections.Counter()
     for edge in rows(output / "blueprint_edges.jsonl"):
         relation = "controls_execution_of" if edge.get("edge_kind") == "execution" else "provides_value_to"
@@ -562,6 +651,38 @@ def validation_error(output: Path, rows) -> str | None:
             )] += 1
     if raw_flow != semantic_flow:
         return "Blueprint semantic flow edges do not exactly reconstruct canonical Blueprint edges"
+
+    rigvm_links = _load_rigvm_links(output, rows)
+    edge_keys = {
+        (
+            str(edge.get("source_node_id", "") or ""),
+            str(edge.get("relation", "") or ""),
+            str(edge.get("target_kind", "") or ""),
+            str(edge.get("target", "") or ""),
+        )
+        for edge in edges
+    }
+    for raw in raw_nodes:
+        if str(raw.get("operation", "") or "") != "control_rig_node":
+            continue
+        node_id = str(raw.get("node_id", "") or "")
+        semantic = node_by_id[node_id]
+        link = rigvm_links.get(node_id)
+        matched = bool(
+            link
+            and str(link.get("status", "") or "") == "matched"
+            and str(link.get("rigvm_object_id", "") or "")
+        )
+        if matched:
+            rigvm_object_id = str(link.get("rigvm_object_id", "") or "")
+            if semantic.get("semantic_kind") == "classified":
+                return f"matched Control Rig node remained semantic fallback: {node_id}"
+            if semantic.get("target_kind") != "rigvm_node" or semantic.get("target") != rigvm_object_id:
+                return f"Control Rig semantic RigVM target mismatch: {node_id}"
+            if (node_id, "maps_to_rigvm_node", "rigvm_node", rigvm_object_id) not in edge_keys:
+                return f"Control Rig semantic RigVM edge missing: {node_id}"
+        elif semantic.get("semantic_kind") != "classified":
+            return f"unmatched Control Rig node was marked modeled: {node_id}"
 
     graphs = list(rows(output / DERIVED_FILES[2]))
     graph_ids = [str(row.get("graph_id", "") or "") for row in graphs]
@@ -641,9 +762,10 @@ def query(conn, print_rows, pattern: str, limit: int) -> None:
             FROM blueprint_semantic_nodes
             WHERE blueprint_path LIKE ? OR graph_name LIKE ? OR operation LIKE ? OR semantic_kind LIKE ?
                OR primary_effect LIKE ? OR symbol LIKE ? OR owner LIKE ? OR target LIKE ? OR node_class LIKE ?
+               OR json LIKE ?
             LIMIT ?
             """,
-            (pattern,) * 9 + (limit,),
+            (pattern,) * 10 + (limit,),
         ),
         ("blueprint_path", "graph_name", "operation", "semantic_kind", "primary_effect", "symbol", "owner", "target_kind", "target"),
     )
