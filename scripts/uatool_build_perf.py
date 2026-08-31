@@ -29,6 +29,7 @@ import uatool_validation_perf as validation_perf
 import uatool_blueprint_enums as blueprint_enums
 import uatool_blueprint_enum_edges as blueprint_enum_edges
 import uatool_mover_report as mover_report
+import uatool_gameplay_camera_report as gameplay_camera_report
 import uatool_mover_behavior as mover_behavior
 import uatool_systems as systems
 import uatool_systems_mover as systems_mover
@@ -292,3 +293,4 @@ def install(core) -> None:
     blueprint_enums.install(core, runtime)
     blueprint_enum_edges.install(core)
     mover_report.install(runtime)
+    gameplay_camera_report.install(runtime)
