@@ -1,4 +1,4 @@
-static constexpr int32 SystemsSchemaVersion = 1;
+static constexpr int32 SystemsSchemaVersion = 2;
 static constexpr int32 MaxExportChars = 65536;
 static constexpr int32 MaxReferenceDepth = 8;
 static constexpr int32 MaxReferencesPerRoot = 4096;
@@ -62,6 +62,17 @@ struct FCounts
 
     int64 GameplayDataAssets = 0;
     int64 GameplayTags = 0;
+
+    int64 DataTableRows = 0;
+    int64 DataTableFields = 0;
+    int64 CurveTables = 0;
+    int64 CurveTableRows = 0;
+    int64 CurveTableKeys = 0;
+    int64 PrimaryDataAssets = 0;
+    int64 GameplayTagSettings = 0;
+    int64 GameplayTagSources = 0;
+    int64 GameplayTagDictionary = 0;
+    int64 GameplayTagRedirects = 0;
 };
 
 struct FWriters
@@ -89,6 +100,17 @@ struct FWriters
     FJsonlWriter GameplayDataAssets;
     FJsonlWriter GameplayTags;
 
+    FJsonlWriter DataTableRows;
+    FJsonlWriter DataTableFields;
+    FJsonlWriter CurveTables;
+    FJsonlWriter CurveTableRows;
+    FJsonlWriter CurveTableKeys;
+    FJsonlWriter PrimaryDataAssets;
+    FJsonlWriter GameplayTagSettings;
+    FJsonlWriter GameplayTagSources;
+    FJsonlWriter GameplayTagDictionary;
+    FJsonlWriter GameplayTagRedirects;
+
     bool Open(const FString& OutputDir)
     {
         return Assets.Open(FPaths::Combine(OutputDir, TEXT("systems_assets.jsonl"))) &&
@@ -108,7 +130,17 @@ struct FWriters
             InputMappings.Open(FPaths::Combine(OutputDir, TEXT("input_mappings.jsonl"))) &&
             InputProcessors.Open(FPaths::Combine(OutputDir, TEXT("input_processors.jsonl"))) &&
             GameplayDataAssets.Open(FPaths::Combine(OutputDir, TEXT("gameplay_data_assets.jsonl"))) &&
-            GameplayTags.Open(FPaths::Combine(OutputDir, TEXT("gameplay_tags.jsonl")));
+            GameplayTags.Open(FPaths::Combine(OutputDir, TEXT("gameplay_tags.jsonl"))) &&
+            DataTableRows.Open(FPaths::Combine(OutputDir, TEXT("data_table_rows.jsonl"))) &&
+            DataTableFields.Open(FPaths::Combine(OutputDir, TEXT("data_table_fields.jsonl"))) &&
+            CurveTables.Open(FPaths::Combine(OutputDir, TEXT("curve_tables.jsonl"))) &&
+            CurveTableRows.Open(FPaths::Combine(OutputDir, TEXT("curve_table_rows.jsonl"))) &&
+            CurveTableKeys.Open(FPaths::Combine(OutputDir, TEXT("curve_table_keys.jsonl"))) &&
+            PrimaryDataAssets.Open(FPaths::Combine(OutputDir, TEXT("primary_data_assets.jsonl"))) &&
+            GameplayTagSettings.Open(FPaths::Combine(OutputDir, TEXT("gameplay_tag_settings.jsonl"))) &&
+            GameplayTagSources.Open(FPaths::Combine(OutputDir, TEXT("gameplay_tag_sources.jsonl"))) &&
+            GameplayTagDictionary.Open(FPaths::Combine(OutputDir, TEXT("gameplay_tag_dictionary.jsonl"))) &&
+            GameplayTagRedirects.Open(FPaths::Combine(OutputDir, TEXT("gameplay_tag_redirects.jsonl")));
     }
 };
 
@@ -351,6 +383,8 @@ static FString DirectKindForClassPath(const FString& ClassPath)
     if (ClassPath == TEXT("/Script/EnhancedInput.PlayerMappableInputConfig")) return TEXT("player_mappable_input_config");
     if (ClassPath == TEXT("/Script/EnhancedInput.EnhancedInputPlatformData")) return TEXT("enhanced_input_platform_data");
 
+    if (ClassPath == TEXT("/Script/Engine.CurveTable")) return TEXT("curve_table");
+    if (ClassPath == TEXT("/Script/Engine.CompositeCurveTable")) return TEXT("composite_curve_table");
     if (ClassPath == TEXT("/Script/Engine.PrimaryAssetLabel")) return TEXT("primary_asset_label");
     if (ClassPath == TEXT("/Script/CommonInput.CommonInputActionDomain")) return TEXT("common_input_action_domain");
     if (ClassPath == TEXT("/Script/CommonInput.CommonInputActionDomainTable")) return TEXT("common_input_action_domain_table");
@@ -361,10 +395,12 @@ static bool IsCandidateClassPath(const FString& ClassPath)
 {
     return !DirectKindForClassPath(ClassPath).IsEmpty() ||
         ClassPath == TEXT("/Script/Engine.DataTable") ||
-        ClassPath.Contains(TEXT("DataTable"));
+        ClassPath == TEXT("/Script/Engine.CompositeDataTable") ||
+        ClassPath.Contains(TEXT("DataTable")) ||
+        ClassPath.Contains(TEXT("CurveTable"));
 }
 
-static FString KindForLoadedObject(UObject* Object, const FString& ClassPath)
+static FString KindForLoadedObject(UObject* Object, const FString& ClassPath, bool bPrimaryDataAssetCandidate = false)
 {
     FString Kind = DirectKindForClassPath(ClassPath);
     if (!Kind.IsEmpty())
@@ -384,6 +420,11 @@ static FString KindForLoadedObject(UObject* Object, const FString& ClassPath)
 
     if (UDataTable* Table = Cast<UDataTable>(Object))
     {
+        if (ClassInheritsName(Object->GetClass(), TEXT("MirrorDataTable")))
+        {
+            // Animation schema 1 owns MirrorDataTable semantics and identity.
+            return FString();
+        }
         if (const UScriptStruct* RowStruct = Table->GetRowStruct())
         {
             const FString RowStructPath = RowStruct->GetPathName();
@@ -396,6 +437,19 @@ static FString KindForLoadedObject(UObject* Object, const FString& ClassPath)
                 return TEXT("common_input_action_table");
             }
         }
+        return ClassInheritsName(Object->GetClass(), TEXT("CompositeDataTable"))
+            ? TEXT("composite_data_table")
+            : TEXT("data_table");
+    }
+    if (Cast<UCurveTable>(Object))
+    {
+        return ClassInheritsName(Object->GetClass(), TEXT("CompositeCurveTable"))
+            ? TEXT("composite_curve_table")
+            : TEXT("curve_table");
+    }
+    if (bPrimaryDataAssetCandidate || ClassInheritsName(Object->GetClass(), TEXT("PrimaryDataAsset")))
+    {
+        return TEXT("primary_data_asset");
     }
     return FString();
 }
