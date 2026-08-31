@@ -184,10 +184,26 @@ def _augment(output: Path, rows, nodes: list[dict], edges: list[dict], graph_mod
         target_kind = "class" if row.get("target_kind") == "class" else "mover_transition"
         register(owner, owner_kind, "first_class")
         register(target, target_kind, "partial" if target_kind == "class" else "first_class", row.get("transition_class", ""), family="class" if target_kind == "class" else "mover")
-        add(
-            owner, "has_movement_transition", target, owner_kind, target_kind,
-            {"stream": "mover_transitions.jsonl", "kind": "canonical_mover_topology", "transition_index": int(row.get("transition_index", 0) or 0)},
-        )
+        evidence = {
+            "stream": "mover_transitions.jsonl",
+            "kind": "canonical_mover_topology",
+            "transition_index": int(row.get("transition_index", 0) or 0),
+        }
+        add(owner, "has_movement_transition", target, owner_kind, target_kind, evidence)
+
+        asset = str(row.get("transition_asset_path", ""))
+        if asset:
+            asset_node = existing(asset) or register(asset, "blueprint", "first_class", family="blueprint", root=True)
+            relation = (
+                "generated_by_movement_transition_blueprint"
+                if target_kind == "class"
+                else "instance_of_movement_transition_blueprint"
+            )
+            add(
+                target, relation, asset,
+                target_kind, str(asset_node.get("node_kind", "blueprint")),
+                evidence,
+            )
 
     nodes.sort(key=lambda n: (str(n.get("path", "")), str(n.get("node_kind", "")), str(n.get("node_id", ""))))
     edges.sort(key=lambda e: (str(e.get("source", "")), str(e.get("relation", "")), str(e.get("target", "")), str(e.get("edge_id", ""))))
