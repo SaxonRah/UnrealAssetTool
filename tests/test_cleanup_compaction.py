@@ -72,6 +72,79 @@ class CleanupCompactionTest(unittest.TestCase):
             self.assertEqual(result["material_expression_guids"], 0)
             self.assertEqual(target.read_bytes(), before)
 
+    def test_inline_blueprint_pins_are_removed_only_with_authoritative_pin_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir)
+            pins = [
+                {"pin_id": "pin:1", "node_id": "node:1", "name": "A"},
+                {"pin_id": "pin:2", "node_id": "node:1", "name": "B"},
+            ]
+            node = {
+                "node_id": "node:1",
+                "blueprint_path": "/Game/BP_Test.BP_Test",
+                "title": "Test node",
+                "pins": pins,
+                "semantic": {"member_name": "DoThing"},
+            }
+            write_jsonl(output / "blueprint_pins.jsonl", pins)
+            write_jsonl(output / "blueprint_nodes.jsonl", [node])
+            pins_before = (output / "blueprint_pins.jsonl").read_bytes()
+
+            result = cleanup.apply(output)
+            self.assertEqual(result["blueprint_nodes_rewritten"], 1)
+            self.assertEqual(result["inline_blueprint_pins"], 2)
+            cleaned = list(rows(output / "blueprint_nodes.jsonl"))
+            self.assertEqual(len(cleaned), 1)
+            self.assertNotIn("pins", cleaned[0])
+            self.assertEqual(cleaned[0]["semantic"], {"member_name": "DoThing"})
+            self.assertEqual((output / "blueprint_pins.jsonl").read_bytes(), pins_before)
+            self.assertIsNone(cleanup.validation_error(output))
+
+            nodes_before = (output / "blueprint_nodes.jsonl").read_bytes()
+            result = cleanup.apply(output)
+            self.assertEqual(result["blueprint_nodes_rewritten"], 0)
+            self.assertEqual(result["inline_blueprint_pins"], 0)
+            self.assertEqual((output / "blueprint_nodes.jsonl").read_bytes(), nodes_before)
+
+    def test_legacy_inline_blueprint_pins_are_preserved_without_normalized_stream(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir)
+            node = {
+                "node_id": "node:legacy",
+                "pins": [{"pin_id": "pin:legacy", "node_id": "node:legacy"}],
+            }
+            write_jsonl(output / "blueprint_nodes.jsonl", [node])
+            before = (output / "blueprint_nodes.jsonl").read_bytes()
+
+            result = cleanup.apply(output)
+            self.assertEqual(result["blueprint_nodes_rewritten"], 0)
+            self.assertEqual(result["inline_blueprint_pins"], 0)
+            self.assertEqual((output / "blueprint_nodes.jsonl").read_bytes(), before)
+            self.assertIsNone(cleanup.validation_error(output))
+
+    def test_inline_pin_cleanup_refuses_incomplete_normalized_stream(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir)
+            write_jsonl(
+                output / "blueprint_pins.jsonl",
+                [{"pin_id": "pin:1", "node_id": "node:1"}],
+            )
+            write_jsonl(
+                output / "blueprint_nodes.jsonl",
+                [{
+                    "node_id": "node:1",
+                    "pins": [
+                        {"pin_id": "pin:1", "node_id": "node:1"},
+                        {"pin_id": "pin:missing", "node_id": "node:1"},
+                    ],
+                }],
+            )
+            before = (output / "blueprint_nodes.jsonl").read_bytes()
+
+            with self.assertRaisesRegex(RuntimeError, "normalized pin 'pin:missing' is missing"):
+                cleanup.apply(output)
+            self.assertEqual((output / "blueprint_nodes.jsonl").read_bytes(), before)
+
     def test_compact_neighborhood_references_authoritative_edge_and_renders_on_query(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             output = Path(temp_dir)
