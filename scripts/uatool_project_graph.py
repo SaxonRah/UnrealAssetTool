@@ -58,6 +58,40 @@ COVERAGE_RANK = {
     "first_class": 4,
 }
 
+# Combined systems schema 1 intentionally recognizes more asset families than it
+# deeply normalizes. Keep this policy explicit so newly recognized systems never
+# silently inherit first_class coverage merely by appearing in systems_assets.
+SYSTEMS_KIND_COVERAGE = {
+    "input_action": "first_class",
+    "input_mapping_context": "first_class",
+    "level_sequence": "first_class_depth_pending",
+    "metasound_source": "first_class_depth_pending",
+    "metasound_patch": "first_class_depth_pending",
+    "sound_cue": "first_class_depth_pending",
+    "sound_wave": "first_class_depth_pending",
+    "sound_class": "first_class_depth_pending",
+    "sound_mix": "first_class_depth_pending",
+    "sound_attenuation": "first_class_depth_pending",
+    "sound_concurrency": "first_class_depth_pending",
+    "player_mappable_input_config": "first_class_depth_pending",
+    "enhanced_input_platform_data": "first_class_depth_pending",
+    "primary_asset_label": "first_class_depth_pending",
+    "common_input_action_table": "first_class_depth_pending",
+    "common_input_action_domain": "first_class_depth_pending",
+    "common_input_action_domain_table": "first_class_depth_pending",
+    "gameplay_tag_table": "first_class_depth_pending",
+}
+
+
+def systems_kind_coverage(kind: str) -> str:
+    """Return truthful graph coverage for a systems schema-1 asset kind.
+
+    Unknown future systems kinds default to depth-pending instead of first-class,
+    preventing the graph from overclaiming semantic depth before a dedicated
+    normalizer/validator exists.
+    """
+    return SYSTEMS_KIND_COVERAGE.get(str(kind or ""), "first_class_depth_pending")
+
 
 def create_schema(conn) -> None:
     conn.executescript(_SQL)
@@ -156,7 +190,8 @@ def derive(output, rows):
     for filename, path_key, kind_key, family, class_key, package_key in specialist_streams:
         for r in rows(output / filename):
             kind = fixed_kinds.get(filename) or str(r.get(kind_key, "asset"))
-            register(r.get(path_key), kind, "first_class", r.get(class_key, ""),
+            coverage = systems_kind_coverage(kind) if filename == "systems_assets.jsonl" else "first_class"
+            register(r.get(path_key), kind, coverage, r.get(class_key, ""),
                      r.get(package_key, "") if package_key else "", family, True)
 
     # World instance nodes are typed, but not precomputed neighborhood roots.
