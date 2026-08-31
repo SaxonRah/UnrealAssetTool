@@ -75,6 +75,7 @@ class BlueprintProgramReportTest(unittest.TestCase):
             ])
             write_jsonl(out / "blueprint_semantic_blocks.jsonl", [
                 {"blueprint_path": bp, "graph_id": graph, "graph_name": "EventGraph", "block_id": "block-a", "block_index": 0},
+                {"blueprint_path": bp, "graph_id": graph, "graph_name": "EventGraph", "block_id": "block-dead", "block_index": 1},
             ])
             write_jsonl(out / "blueprint_execution_block_edges.jsonl", [])
             write_jsonl(out / "blueprint_execution_roots.jsonl", [
@@ -95,8 +96,10 @@ class BlueprintProgramReportTest(unittest.TestCase):
             self.assertEqual(built["component_count"], 1)
             self.assertEqual(built["component_property_count"], 1)
             self.assertEqual(built["root_count"], 1)
+            self.assertEqual(built["unreachable_block_count"], 1)
             self.assertEqual(built["endpoint_groups"]["calls"], ["/Script/Test.Lib:Run"])
             self.assertEqual(built["block_label"]["block-a"], "B0")
+            self.assertEqual(built["block_label"]["block-dead"], "B1")
             self.assertEqual(built["roots_by_graph"][graph][0]["root_name"], "BeginPlay")
 
             stream = io.StringIO()
@@ -108,7 +111,8 @@ class BlueprintProgramReportTest(unittest.TestCase):
             self.assertIn("DoThing(Value)", text)
             self.assertIn("calls (1)", text)
             self.assertIn("roots: event:BeginPlay->B0", text)
-            self.assertIn("B0", text)
+            self.assertIn("unreachable_blocks=1", text)
+            self.assertIn("B1 [unreachable]", text)
             self.assertIn("Run(Value=1)", text)
 
 
