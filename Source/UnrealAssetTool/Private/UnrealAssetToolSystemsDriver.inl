@@ -5,7 +5,7 @@ static bool SaveSystemsManifest(
     const FString& Error)
 {
     TSharedRef<FJsonObject> Root = MakeShared<FJsonObject>();
-    Root->SetNumberField(TEXT("schema_version"), SystemsSchemaVersion);
+    Root->SetNumberField(TEXT("schema_version"), 3);
     Root->SetStringField(TEXT("pass"), TEXT("UnrealAssetToolSystems"));
     Root->SetStringField(TEXT("generated_utc"), FDateTime::UtcNow().ToIso8601());
     Root->SetStringField(TEXT("engine_version"), FEngineVersion::Current().ToString());
@@ -41,6 +41,11 @@ static bool SaveSystemsManifest(
     C->SetNumberField(TEXT("gameplay_tag_sources"), Counts.GameplayTagSources);
     C->SetNumberField(TEXT("gameplay_tag_dictionary"), Counts.GameplayTagDictionary);
     C->SetNumberField(TEXT("gameplay_tag_redirects"), Counts.GameplayTagRedirects);
+    C->SetNumberField(TEXT("mover_blueprints"), GMoverCounts.Blueprints);
+    C->SetNumberField(TEXT("mover_components"), GMoverCounts.Components);
+    C->SetNumberField(TEXT("mover_modes"), GMoverCounts.Modes);
+    C->SetNumberField(TEXT("mover_settings"), GMoverCounts.Settings);
+    C->SetNumberField(TEXT("mover_transitions"), GMoverCounts.Transitions);
     Root->SetObjectField(TEXT("counts"), C);
 
     static const TCHAR* Names[] = {
@@ -71,7 +76,12 @@ static bool SaveSystemsManifest(
         TEXT("gameplay_tag_settings.jsonl"),
         TEXT("gameplay_tag_sources.jsonl"),
         TEXT("gameplay_tag_dictionary.jsonl"),
-        TEXT("gameplay_tag_redirects.jsonl")
+        TEXT("gameplay_tag_redirects.jsonl"),
+        TEXT("mover_blueprints.jsonl"),
+        TEXT("mover_components.jsonl"),
+        TEXT("mover_modes.jsonl"),
+        TEXT("mover_settings.jsonl"),
+        TEXT("mover_transitions.jsonl")
     };
     TArray<TSharedPtr<FJsonValue>> Files;
     for (const TCHAR* Name : Names)
@@ -117,9 +127,10 @@ static bool RunSystemsScan(FString& OutError)
         ToolPluginDir = NormalizeAbsolutePath(Plugin->GetBaseDir());
     }
 
+    GMoverCounts = FMoverCounts();
     FWriters Writers;
     FCounts Counts;
-    if (!Writers.Open(OutputDir))
+    if (!Writers.Open(OutputDir) || !GMoverWriters.Open(OutputDir))
     {
         OutError = TEXT("could not create systems JSONL output files");
         SaveSystemsManifest(OutputDir, Counts, false, OutError);
@@ -262,6 +273,21 @@ static bool RunSystemsScan(FString& OutError)
         return false;
     }
 
+    if (!ScanMoverProjectModel(
+            Assets,
+            ProjectDir,
+            bIncludeEngine,
+            bIncludeSelf,
+            ToolPluginDir,
+            Writers,
+            Counts,
+            SeenStateOwners,
+            OutError))
+    {
+        SaveSystemsManifest(OutputDir, Counts, false, OutError);
+        return false;
+    }
+
     if (!SaveSystemsManifest(OutputDir, Counts, true, FString()))
     {
         OutError = TEXT("could not write systems_manifest.json");
@@ -271,7 +297,7 @@ static bool RunSystemsScan(FString& OutError)
     UE_LOG(
         LogTemp,
         Display,
-        TEXT("UnrealAssetToolSystems: assets=%lld sequences=%lld audio=%lld actions=%lld contexts=%lld mappings=%lld data_rows=%lld data_fields=%lld curve_tables=%lld curve_rows=%lld curve_keys=%lld primary_data=%lld tag_sources=%lld tag_dictionary=%lld"),
+        TEXT("UnrealAssetToolSystems: assets=%lld sequences=%lld audio=%lld actions=%lld contexts=%lld mappings=%lld data_rows=%lld data_fields=%lld curve_tables=%lld curve_rows=%lld curve_keys=%lld primary_data=%lld tag_sources=%lld tag_dictionary=%lld mover_blueprints=%lld mover_components=%lld mover_modes=%lld mover_settings=%lld mover_transitions=%lld"),
         Counts.Assets,
         Counts.LevelSequences,
         Counts.AudioAssets,
@@ -285,7 +311,12 @@ static bool RunSystemsScan(FString& OutError)
         Counts.CurveTableKeys,
         Counts.PrimaryDataAssets,
         Counts.GameplayTagSources,
-        Counts.GameplayTagDictionary);
+        Counts.GameplayTagDictionary,
+        GMoverCounts.Blueprints,
+        GMoverCounts.Components,
+        GMoverCounts.Modes,
+        GMoverCounts.Settings,
+        GMoverCounts.Transitions);
     return true;
 }
 
