@@ -49,6 +49,11 @@ def _components_for(output: Path, rows, blueprint_path: str) -> list[dict]:
     return _rows_for(output, rows, "blueprint_components.jsonl", blueprint_path)
 
 
+def _optional_name(value) -> str:
+    value = str(value or "")
+    return "" if value in {"", "None"} else value
+
+
 def _short(value: str, max_chars: int = 180) -> str:
     value = " ".join(str(value or "").split())
     if len(value) <= max_chars:
@@ -299,14 +304,14 @@ def print_report(report: dict) -> None:
             str(row.get("variable_name", "") or "<unnamed>"),
             str(row.get("component_class", "") or "<unknown class>"),
         ]
-        parent = str(row.get("parent_component_or_variable", "") or "")
-        attach = str(row.get("attach_to", "") or "")
+        parent = _optional_name(row.get("parent_component_or_variable", ""))
+        attach = _optional_name(row.get("attach_to", ""))
         if parent:
             bits.append(f"parent={parent}")
         if attach:
             bits.append(f"attach={attach}")
         if bool(row.get("is_root", False)):
-            bits.append("root")
+            bits.append("scs_root")
         print("  " + " | ".join(bits))
 
     print("\n[component authored overrides]")
