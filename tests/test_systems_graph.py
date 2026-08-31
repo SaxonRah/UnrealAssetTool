@@ -44,6 +44,7 @@ class SystemsGraphSmokeTest(unittest.TestCase):
     def _write_systems_fixture(self) -> None:
         action = "/Game/Input/IA_Jump.IA_Jump"
         context = "/Game/Input/IMC_Default.IMC_Default"
+        sound_class = "/Game/Audio/SC_Master.SC_Master"
         rows_by_file: dict[str, list[dict]] = {name: [] for name in systems.JSONL_FILES}
         rows_by_file["systems_assets.jsonl"] = [
             {
@@ -59,6 +60,13 @@ class SystemsGraphSmokeTest(unittest.TestCase):
                 "family": "input",
                 "class_path": "/Script/EnhancedInput.InputMappingContext",
                 "package_name": "/Game/Input/IMC_Default",
+            },
+            {
+                "systems_path": sound_class,
+                "systems_kind": "sound_class",
+                "family": "audio",
+                "class_path": "/Script/Engine.SoundClass",
+                "package_name": "/Game/Audio/SC_Master",
             },
         ]
         rows_by_file["input_actions.jsonl"] = [{
@@ -127,9 +135,11 @@ class SystemsGraphSmokeTest(unittest.TestCase):
     def _write_project_inputs(self) -> None:
         action = "/Game/Input/IA_Jump.IA_Jump"
         context = "/Game/Input/IMC_Default.IMC_Default"
+        sound_class = "/Game/Audio/SC_Master.SC_Master"
         write_jsonl(self.output / "assets.jsonl", [
             {"object_path": action, "class_path": "/Script/EnhancedInput.InputAction", "package_name": "/Game/Input/IA_Jump"},
             {"object_path": context, "class_path": "/Script/EnhancedInput.InputMappingContext", "package_name": "/Game/Input/IMC_Default"},
+            {"object_path": sound_class, "class_path": "/Script/Engine.SoundClass", "package_name": "/Game/Audio/SC_Master"},
         ])
         write_jsonl(self.output / "asset_dependencies.jsonl", [{
             "source_package": "/Game/Input/IMC_Default",
@@ -146,11 +156,17 @@ class SystemsGraphSmokeTest(unittest.TestCase):
         try:
             systems.create_schema(conn)
             systems.load_database(conn, self.output, read_rows)
-            self.assertEqual(conn.execute("SELECT count(*) FROM systems_assets").fetchone()[0], 2)
+            self.assertEqual(conn.execute("SELECT count(*) FROM systems_assets").fetchone()[0], 3)
             self.assertEqual(conn.execute("SELECT count(*) FROM input_mappings").fetchone()[0], 1)
             self.assertEqual(conn.execute("SELECT count(*) FROM gameplay_tag_settings").fetchone()[0], 1)
         finally:
             conn.close()
+
+    def test_systems_kind_coverage_policy_defaults_conservatively(self) -> None:
+        self.assertEqual(project_graph.systems_kind_coverage("input_action"), "first_class")
+        self.assertEqual(project_graph.systems_kind_coverage("input_mapping_context"), "first_class")
+        self.assertEqual(project_graph.systems_kind_coverage("sound_class"), "first_class_depth_pending")
+        self.assertEqual(project_graph.systems_kind_coverage("future_system_kind"), "first_class_depth_pending")
 
     def test_project_graph_quality_and_neighborhoods(self) -> None:
         self._write_systems_fixture()
@@ -165,9 +181,12 @@ class SystemsGraphSmokeTest(unittest.TestCase):
         self.assertIsNone(project_graph.validation_error(self.output, read_rows))
         self.assertIsNone(project_graph_finalize.validation_error(self.output, read_rows))
 
-        root_paths = [node["path"] for node in nodes if node.get("root")]
-        self.assertEqual(len(root_paths), len(set(root_paths)))
+        root_nodes = {node["path"]: node for node in nodes if node.get("root")}
+        self.assertEqual(len(root_nodes), len([node for node in nodes if node.get("root")]))
         self.assertFalse(any(not node["path"].strip() for node in nodes))
+        self.assertEqual(root_nodes["/Game/Input/IA_Jump.IA_Jump"]["coverage"], "first_class")
+        self.assertEqual(root_nodes["/Game/Input/IMC_Default.IMC_Default"]["coverage"], "first_class")
+        self.assertEqual(root_nodes["/Game/Audio/SC_Master.SC_Master"]["coverage"], "first_class_depth_pending")
 
         generic = [edge for edge in edges if edge["relation"] == "depends_on_package"]
         self.assertEqual(len(generic), 1)
