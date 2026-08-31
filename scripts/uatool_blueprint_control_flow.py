@@ -101,6 +101,22 @@ def _node_classes(output: Path, rows) -> dict[str, str]:
     return result
 
 
+def _block_graph_names(output: Path, rows) -> dict[str, str]:
+    """Recover graph names from authoritative execution-block membership.
+
+    Historical/current block-edge rows do not always duplicate graph_name even
+    though their source block does. Keep graph_id from the edge identity, but
+    fill the human/query name from the block instead of emitting a known blank.
+    """
+    result: dict[str, str] = {}
+    for row in rows(output / "blueprint_execution_blocks.jsonl"):
+        block_id = str(row.get("block_id", "") or "")
+        graph_name = str(row.get("graph_name", "") or "")
+        if block_id and graph_name:
+            result[block_id] = graph_name
+    return result
+
+
 def derive(output: Path, rows=None) -> list[dict]:
     output = Path(output)
     rows = rows or _rows
@@ -108,13 +124,19 @@ def derive(output: Path, rows=None) -> list[dict]:
     dependencies = list(rows(output / "blueprint_data_dependencies.jsonl"))
     conditions, selectors = _dependency_maps(dependencies)
     node_classes = _node_classes(output, rows)
+    graph_names_by_block = _block_graph_names(output, rows)
 
     result: list[dict] = []
     for edge in block_edges:
         source_node_id = str(edge.get("source_node_id", "") or "")
+        source_block_id = str(edge.get("source_block_id", "") or "")
+        target_block_id = str(edge.get("target_block_id", "") or "")
         raw_pin = str(edge.get("source_pin_name", "") or "")
         display_pin = str(edge.get("source_pin_display_name", "") or raw_pin)
         node_class = node_classes.get(source_node_id, "")
+        graph_name = str(edge.get("graph_name", "") or "")
+        if not graph_name:
+            graph_name = graph_names_by_block.get(source_block_id, "") or graph_names_by_block.get(target_block_id, "")
 
         control_kind = "flow"
         source_operation = ""
@@ -154,17 +176,17 @@ def derive(output: Path, rows=None) -> list[dict]:
             "control_edge_id": _id(
                 str(edge.get("blueprint_path", "")),
                 str(edge.get("graph_id", "")),
-                str(edge.get("source_block_id", "")),
-                str(edge.get("target_block_id", "")),
+                source_block_id,
+                target_block_id,
                 source_node_id,
                 raw_pin,
             ),
             "schema_version": CONTROL_FLOW_SCHEMA_VERSION,
             "blueprint_path": str(edge.get("blueprint_path", "") or ""),
             "graph_id": str(edge.get("graph_id", "") or ""),
-            "graph_name": str(edge.get("graph_name", "") or ""),
-            "source_block_id": str(edge.get("source_block_id", "") or ""),
-            "target_block_id": str(edge.get("target_block_id", "") or ""),
+            "graph_name": graph_name,
+            "source_block_id": source_block_id,
+            "target_block_id": target_block_id,
             "source_node_id": source_node_id,
             "source_node_class": node_class,
             "source_operation": source_operation,
@@ -210,6 +232,7 @@ def validation_error(output: Path, rows=None) -> str | None:
     if len(control_keys) != len(control):
         return "Blueprint control edges contain duplicate source/target/pin identities"
 
+    graph_names_by_block = _block_graph_names(output, rows)
     for row in control:
         kind = str(row.get("control_kind", ""))
         if kind not in {"flow", "branch", "switch_case", "switch_default", "sequence"}:
@@ -223,6 +246,15 @@ def validation_error(output: Path, rows=None) -> str | None:
             return f"switch control edge lacks case identity: {row.get('control_edge_id')}"
         if kind == "sequence" and row.get("sequence_index") is None:
             return f"sequence control edge lacks output index: {row.get('control_edge_id')}"
+
+        source_block_id = str(row.get("source_block_id", "") or "")
+        target_block_id = str(row.get("target_block_id", "") or "")
+        expected_graph_name = graph_names_by_block.get(source_block_id, "") or graph_names_by_block.get(target_block_id, "")
+        if expected_graph_name and str(row.get("graph_name", "") or "") != expected_graph_name:
+            return (
+                "Blueprint control edge graph_name disagrees with execution block: "
+                f"{row.get('control_edge_id')} expected={expected_graph_name!r} actual={row.get('graph_name', '')!r}"
+            )
     return None
 
 
