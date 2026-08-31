@@ -2,8 +2,10 @@
 """Read-only report of canonical Mover/ChaosMover evidence in an existing scan."""
 from __future__ import annotations
 
+import argparse
 import collections
 from pathlib import Path
+import sys
 
 MOVER_MARKERS = ("/script/mover.", "/script/chaosmover.")
 
@@ -246,3 +248,29 @@ def print_report(report: dict, *, limit: int = 200) -> None:
     _print_counter("Mover property paths", report.get("property_paths", collections.Counter()), limit=120)
 
     print("================================")
+
+
+def install(runtime_module) -> None:
+    if getattr(runtime_module, "_mover_report_installed", False):
+        return
+    original_main = runtime_module.main
+
+    def main():
+        if len(sys.argv) > 1 and sys.argv[1] == "mover-report":
+            parser = argparse.ArgumentParser(
+                prog="uatool mover-report",
+                description="report canonical Mover/ChaosMover evidence from an existing scan",
+            )
+            parser.add_argument("output", help="source .uatool directory")
+            parser.add_argument("--limit", type=int, default=200, help="maximum detailed rows to print")
+            args = parser.parse_args(sys.argv[2:])
+            if args.limit < 1:
+                parser.error("--limit must be >= 1")
+            output = Path(args.output).expanduser().resolve()
+            report = build_report(output, runtime_module._rows)
+            print_report(report, limit=args.limit)
+            return 0
+        return original_main()
+
+    runtime_module.main = main
+    runtime_module._mover_report_installed = True
