@@ -2,7 +2,7 @@
 """Persist conservative Gameplay Camera director/provider semantics as derived data.
 
 The canonical Blueprint scan already contains the facts needed to reconstruct the
-GASP Gameplay Camera path.  This module keeps the polymorphic interface boundary
+GASP Gameplay Camera path. This module keeps the polymorphic interface boundary
 explicit while splitting camera context structs into queryable fields.
 """
 from __future__ import annotations
@@ -140,15 +140,11 @@ def _unique(values) -> list[str]:
 
 def _source_metadata(expression) -> dict:
     nodes = list(_walk(expression))
-    operations = _unique(node.get("operation", "") for node in nodes if isinstance(node, dict))
-    labels = _unique(node.get("label", "") for node in nodes if isinstance(node, dict))
-    node_ids = _unique(node.get("node_id", "") for node in nodes if isinstance(node, dict))
-    literals = _unique(node.get("literal", "") for node in nodes if isinstance(node, dict) and "literal" in node)
     return {
-        "source_operations": operations,
-        "source_labels": labels,
-        "source_node_ids": node_ids,
-        "literal_values": literals,
+        "source_operations": _unique(node.get("operation", "") for node in nodes if isinstance(node, dict)),
+        "source_labels": _unique(node.get("label", "") for node in nodes if isinstance(node, dict)),
+        "source_node_ids": _unique(node.get("node_id", "") for node in nodes if isinstance(node, dict)),
+        "literal_values": _unique(node.get("literal", "") for node in nodes if isinstance(node, dict) and "literal" in node),
     }
 
 
@@ -208,9 +204,7 @@ def _passthrough_field(expression) -> str:
             output = logical_field_name(str(node.get("output_pin", "") or ""))
             if output:
                 candidates.append(output)
-    if saw_camera_struct_break and len(set(candidates)) == 1:
-        return candidates[0]
-    return ""
+    return candidates[0] if saw_camera_struct_break and len(set(candidates)) == 1 else ""
 
 
 def _source_statements(node_ids: list[str], statement_by_node: dict[str, dict]) -> list[str]:
@@ -233,6 +227,23 @@ def _console_variable(statements: list[str]) -> str:
     return ""
 
 
+def _function_calls(node_ids: list[str], semantic_node_by_id: dict[str, dict]) -> list[str]:
+    result = []
+    for node_id in node_ids:
+        node = semantic_node_by_id.get(node_id)
+        if not node or str(node.get("operation", "") or "") != "function_call":
+            continue
+        target = str(node.get("target", "") or "")
+        if target:
+            result.append(target)
+            continue
+        owner = str(node.get("owner", "") or "")
+        symbol = str(node.get("symbol", "") or "")
+        if owner or symbol:
+            result.append(f"{owner}:{symbol}" if owner else symbol)
+    return _unique(result)
+
+
 def _return_struct_type(candidate: dict) -> str:
     for output in candidate.get("outputs", []) if isinstance(candidate.get("outputs"), list) else []:
         if not isinstance(output, dict) or str(output.get("name", "") or "") != "ReturnValue":
@@ -246,10 +257,20 @@ def derive(output: Path, rows=None) -> tuple[list[dict], list[dict], list[dict]]
     output = Path(output).expanduser().resolve()
     rows = rows or _rows
     report = director_report.build_report(output, rows)
+    semantic_node_by_id = {
+        str(row.get("node_id", "") or ""): row
+        for row in rows(output / "blueprint_semantic_nodes.jsonl")
+        if str(row.get("node_id", "") or "")
+    }
+    call_by_id = {
+        str(row.get("call_id", "") or ""): row
+        for row in report.get("camera_property_calls", [])
+        if isinstance(row, dict) and row.get("call_id")
+    }
 
     providers: list[dict] = []
     fields: list[dict] = []
-    provider_fields_by_name: dict[str, list[str]] = {}
+    provider_fields_by_director_name: dict[tuple[str, str], list[str]] = {}
 
     for candidate in report.get("implementation_candidates", []):
         if not isinstance(candidate, dict):
@@ -259,7 +280,9 @@ def derive(output: Path, rows=None) -> tuple[list[dict], list[dict], list[dict]]
         function_name = str(candidate.get("function_name", "") or "")
         call_id = str(candidate.get("call_id", "") or "")
         interface = str(candidate.get("interface_blueprint_path", "") or "")
-        if not bp or not function_id:
+        call = call_by_id.get(call_id, {})
+        director_bp = str(call.get("blueprint_path", "") or "")
+        if not bp or not function_id or not director_bp:
             continue
         provider_id = _stable_id("camera_provider", call_id, bp, function_id)
         return_deps = [
@@ -295,17 +318,17 @@ def derive(output: Path, rows=None) -> tuple[list[dict], list[dict], list[dict]]
                     "source_operations": metadata["source_operations"],
                     "source_labels": metadata["source_labels"],
                     "source_node_ids": metadata["source_node_ids"],
-                    "function_calls": list(dep.get("function_calls", [])) if isinstance(dep.get("function_calls"), list) else [],
+                    "function_calls": _function_calls(metadata["source_node_ids"], semantic_node_by_id),
                     "literal_values": metadata["literal_values"],
                     "expression": source,
                 }
                 fields.append(row)
-                provider_fields_by_name.setdefault(name, []).append(field_id)
+                provider_fields_by_director_name.setdefault((director_bp, name), []).append(field_id)
                 parsed_field_count += 1
         providers.append({
             "provider_id": provider_id,
             "schema_version": GAMEPLAY_CAMERA_BEHAVIOR_SCHEMA_VERSION,
-            "director_blueprint_path": next(iter(report.get("director_paths", set())), ""),
+            "director_blueprint_path": director_bp,
             "interface_blueprint_path": interface,
             "call_id": call_id,
             "provider_blueprint_path": bp,
@@ -361,7 +384,7 @@ def derive(output: Path, rows=None) -> tuple[list[dict], list[dict], list[dict]]
                 else:
                     source_kind = "expression"
                     source_name = ""
-                provider_candidate_ids = list(provider_fields_by_name.get(passthrough, [])) if passthrough else []
+                provider_candidate_ids = list(provider_fields_by_director_name.get((director_bp, passthrough), [])) if passthrough else []
                 input_id = _stable_id("camera_director_input", director_bp, eval_id, dep.get("dependency_id", ""), field_index, raw_name)
                 inputs.append({
                     "input_id": input_id,
@@ -382,13 +405,13 @@ def derive(output: Path, rows=None) -> tuple[list[dict], list[dict], list[dict]]
                     "source_operations": metadata["source_operations"],
                     "source_labels": metadata["source_labels"],
                     "source_node_ids": metadata["source_node_ids"],
-                    "function_calls": list(dep.get("function_calls", [])) if isinstance(dep.get("function_calls"), list) else [],
+                    "function_calls": _function_calls(metadata["source_node_ids"], semantic_node_by_id),
                     "literal_values": metadata["literal_values"],
                     "source_statements": statements,
                     "expression": source,
                 })
 
-    providers.sort(key=lambda row: (row["provider_blueprint_path"], row["function_id"], row["provider_id"]))
+    providers.sort(key=lambda row: (row["director_blueprint_path"], row["provider_blueprint_path"], row["function_id"], row["provider_id"]))
     fields.sort(key=lambda row: (row["provider_blueprint_path"], row["function_id"], row["field_index"], row["field_id"]))
     inputs.sort(key=lambda row: (row["director_blueprint_path"], row["evaluation_node_id"], row["field_index"], row["input_id"]))
     return providers, fields, inputs
@@ -420,8 +443,12 @@ def validation_error(output: Path, rows=None) -> str | None:
         seen_fields.add(key)
         counts[provider_id] = counts.get(provider_id, 0) + 1
     for provider_id, row in provider_by_id.items():
-        if not row.get("provider_blueprint_path") or not row.get("function_id"):
-            return f"Gameplay Camera provider missing Blueprint/function identity: {provider_id}"
+        if not row.get("director_blueprint_path") or not row.get("provider_blueprint_path") or not row.get("function_id"):
+            return f"Gameplay Camera provider missing director/Blueprint/function identity: {provider_id}"
+        if row.get("implementation_kind") != "implements_interface":
+            return f"Gameplay Camera provider is not a proven interface implementation: {provider_id}"
+        if row.get("provider_blueprint_path") == row.get("interface_blueprint_path"):
+            return f"Gameplay Camera provider incorrectly resolves to interface declaration: {provider_id}"
         if int(row.get("field_count", 0) or 0) != counts.get(provider_id, 0):
             return f"Gameplay Camera provider field count mismatch: {provider_id}"
     input_ids = [str(row.get("input_id", "") or "") for row in inputs]
@@ -471,7 +498,7 @@ def load_database(conn, output: Path, rows=None) -> None:
         )
     for row in rows(Path(output) / DERIVED_FILES[2]):
         conn.execute(
-            "INSERT OR REPLACE INTO gameplay_camera_director_inputs VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT OR REPLACE INTO gameplay_camera_director_inputs VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 row.get("input_id", ""), row.get("director_blueprint_path", ""), row.get("evaluation_node_id", ""), row.get("chooser_path", ""),
                 row.get("dependency_id", ""), int(row.get("field_index", 0) or 0), row.get("field_name", ""), row.get("raw_field_name", ""),
