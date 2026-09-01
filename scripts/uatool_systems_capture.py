@@ -178,6 +178,10 @@ def _capture_cli(runtime_module, core_module, systems_module, argv: list[str]) -
 
 
 def install(runtime_module, core_module, systems_module) -> None:
+    # Synthetic schema-unit-test objects also call the schema installer. Only
+    # patch the real public systems module into the canonical runtime CLI.
+    if getattr(systems_module, "__name__", "") != "uatool_systems":
+        return
     if getattr(runtime_module, "_systems_capture_installed", False):
         return
     original_main = runtime_module.main
