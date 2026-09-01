@@ -30,7 +30,7 @@ class SystemsCaptureTests(unittest.TestCase):
                 self.assertEqual(bundle.namelist(), list(capture.CAPTURE_FILES))
                 self.assertNotIn("world_actors.jsonl", bundle.namelist())
 
-    def test_native_isolated_gate_runs_systems_requests_exit_then_finalizes_writers(self):
+    def test_native_isolated_gate_runs_systems_requests_exit_and_finalizes_on_pre_exit(self):
         driver = (ROOT / "Source/UnrealAssetTool/Private/UnrealAssetToolSystemsDriver.inl").read_text(
             encoding="utf-8"
         )
@@ -46,10 +46,9 @@ class SystemsCaptureTests(unittest.TestCase):
         self.assertIn('#include "HAL/PlatformMisc.h"', scanner)
         self.assertIn('#include "UnrealAssetToolSystemsDriver.inl"', scanner)
         self.assertIn('#include "UnrealAssetToolSystemsFinalize.inl"', scanner)
-        self.assertLess(
-            scanner.index('#include "UnrealAssetToolSystemsDriver.inl"'),
-            scanner.index('#include "UnrealAssetToolSystemsFinalize.inl"'),
-        )
+        self.assertIn("FCoreDelegates::OnEnginePreExit.AddStatic", finalizer)
+        self.assertNotIn("GetOnPostEngineInit().AddStatic", finalizer)
+        self.assertIn("GSystemsOnlyWriterBuffersFinalized", finalizer)
         self.assertIn("GMoverWriters = FMoverWriters();", finalizer)
         self.assertIn("GGameplayCameraWriters = FGameplayCameraWriters();", finalizer)
         self.assertIn("GMassZoneGraphWriters = FMassZoneGraphWriters();", finalizer)
