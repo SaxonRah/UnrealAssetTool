@@ -41,6 +41,7 @@ import uatool_mover_behavior as mover_behavior
 import uatool_systems as systems
 import uatool_systems_mover as systems_mover
 import uatool_systems_gameplay_cameras as systems_gameplay_cameras
+import uatool_systems_mass_zonegraph as systems_mass_zonegraph
 import uatool_project_graph as project_graph
 import uatool_mover_graph as mover_graph
 import uatool_gameplay_camera_graph as gameplay_camera_graph
@@ -298,6 +299,7 @@ def install(core) -> None:
     validation_perf.install()
     systems_mover.install(systems)
     systems_gameplay_cameras.install(systems)
+    systems_mass_zonegraph.install(systems)
     mover_behavior.install(core, runtime)
     mover_graph.install(project_graph)
     gameplay_camera_graph.install(project_graph)
