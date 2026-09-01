@@ -7,6 +7,8 @@ import collections
 from pathlib import Path
 import sys
 
+import uatool_chooser_decisions as chooser_decisions
+
 CAMERA_MARKER = "/script/gameplaycameras."
 
 
@@ -185,6 +187,8 @@ def build_report(output: Path, rows) -> dict:
             "generated_class": target,
         })
 
+    decisions = chooser_decisions.decisions_for_output(output, rows, selected_choosers)
+
     director_chooser_links.sort(key=lambda row: (
         row.get("director_blueprint_path", ""), row.get("relation", ""), row.get("chooser_path", ""), row.get("source", "")
     ))
@@ -203,6 +207,7 @@ def build_report(output: Path, rows) -> dict:
         "chooser_results": selected_results,
         "chooser_context": selected_context,
         "chooser_references": selected_refs,
+        "chooser_decisions": decisions,
         "result_refs": result_refs,
         "column_refs": column_refs,
         "context_refs": context_refs,
@@ -232,12 +237,13 @@ def _print_refs(values: list[dict], *, indent: str = "      ") -> None:
 
 
 def print_report(report: dict, *, limit: int = 400) -> None:
+    decisions = report.get("chooser_decisions", [])
     print("=== GAMEPLAY CAMERA SELECTION REPORT ===")
     print(report.get("output", ""))
     print(
         "director_blueprints={bp} asset_director_links={asset_links} director_chooser_links={chooser_links} "
         "choosers={choosers} columns={columns} results={results} context={context} references={refs} "
-        "rig_result_refs={rig_refs} unresolved_rig_result_refs={unresolved}".format(
+        "rig_result_refs={rig_refs} unresolved_rig_result_refs={unresolved} decisions={decisions} decoded_decisions={decoded}".format(
             bp=len(report.get("director_blueprints", [])),
             asset_links=len(report.get("camera_asset_director_links", [])),
             chooser_links=len(report.get("director_chooser_links", [])),
@@ -248,6 +254,8 @@ def print_report(report: dict, *, limit: int = 400) -> None:
             refs=len(report.get("chooser_references", [])),
             rig_refs=int(report.get("rig_result_count", 0) or 0),
             unresolved=int(report.get("unresolved_rig_result_count", 0) or 0),
+            decisions=len(decisions),
+            decoded=sum(int(bool(row.get("fully_decoded", False))) for row in decisions),
         )
     )
 
@@ -308,6 +316,38 @@ def print_report(report: dict, *, limit: int = 400) -> None:
             )
         )
 
+    print("\n[Chooser decision rows]")
+    if not decisions:
+        print("<none decoded>")
+    rig_paths = report.get("camera_rig_paths", set())
+    for row in decisions[:limit]:
+        targets = [
+            str(ref.get("target_path", "") or "")
+            for ref in row.get("result_references", [])
+            if str(ref.get("target_path", "") or "") in rig_paths
+        ]
+        result_text = ", ".join(targets) or "<non-camera or unresolved result>"
+        print(
+            "  [{index}] when {condition} -> {result} | disabled={disabled} | decoded={decoded}".format(
+                index=row.get("row_index", 0),
+                condition=row.get("condition_text", ""),
+                result=result_text,
+                disabled=bool(row.get("disabled", False)),
+                decoded=bool(row.get("fully_decoded", False)),
+            )
+        )
+        for predicate in row.get("predicates", []):
+            print(
+                "      c{column} {property} | comparison={comparison} | raw={raw} | value={display} | decoded={decoded}".format(
+                    column=predicate.get("column_index", 0),
+                    property=predicate.get("property_name", ""),
+                    comparison=predicate.get("comparison", ""),
+                    raw=predicate.get("raw_value_name", ""),
+                    display=predicate.get("display_value", ""),
+                    decoded=bool(predicate.get("decoded", False)),
+                )
+            )
+
     print("\n[Chooser context]")
     for row in report.get("chooser_context", [])[:limit]:
         owner = str(row.get("asset_path", "") or "")
@@ -325,7 +365,6 @@ def print_report(report: dict, *, limit: int = 400) -> None:
         _print_refs(report.get("column_refs", {}).get((owner, index), []))
 
     print("\n[Chooser results]")
-    rig_paths = report.get("camera_rig_paths", set())
     for row in report.get("chooser_results", [])[:limit]:
         owner = str(row.get("asset_path", "") or "")
         index = int(row.get("index", 0) or 0)
