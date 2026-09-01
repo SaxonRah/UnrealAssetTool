@@ -1,8 +1,10 @@
 # Systems schema 4
 
-Systems schema 4 is the current gameplay-systems canonical extraction contract for the Issue #14 coverage-expansion branch.
+Systems schema 4 is the current gameplay-systems canonical extraction contract on `main`.
 
-It extends the earlier gameplay-data / Gameplay Tags model with reflection-backed Mover and Gameplay Cameras extraction while preserving the project rule that Unreal emits authored facts and deterministic Python derives higher-level semantics.
+It retains the schema-2 gameplay-data / Gameplay Tags model and adds reflection-backed Mover and Gameplay Cameras extraction while preserving the project rule that Unreal emits authored facts and deterministic Python derives higher-level semantics.
+
+Historical contracts remain documented in [systems-schema-1.md](systems-schema-1.md) and [systems-schema-2.md](systems-schema-2.md).
 
 ## Versioning
 
@@ -14,6 +16,17 @@ Gameplay Camera behavior schema = 2
 ```
 
 The schemas are independently versioned. A Python-only semantic/readability change does not require an Unreal rescan unless canonical C++ extraction changes.
+
+## Retained schema-2 gameplay data / Gameplay Tags
+
+Schema 4 preserves the accepted schema-2 canonical model for:
+
+- general DataTable rows/fields and exact object references;
+- CurveTable rows/keys;
+- PrimaryDataAsset identity;
+- Gameplay Tags settings, configured sources, merged dictionary and redirects.
+
+Project-specific table/PrimaryDataAsset meaning remains loss-minimizing rather than guessed. See [systems-schema-2.md](systems-schema-2.md) for the historical schema-2 contract and [schema.md](schema.md) for the current combined stream list.
 
 ## Mover
 
@@ -257,11 +270,3 @@ SandboxCharacter_Mover gameplay state
 ```
 
 This is sufficient to consider the Gameplay Cameras slice of Issue #14 first-class for the validated GASP corpus.
-
-## Boundaries
-
-- Runtime camera evaluation is not simulated.
-- Dynamic interface dispatch remains candidate-based when the evaluation-context actor type is not statically unique.
-- Unsupported Chooser column/value families remain lossless raw structs.
-- Reflection-derived topology is promoted only when object identity/property endpoints make the relationship exact.
-- A Python-only derived/readability change does not justify rescanning Unreal.
