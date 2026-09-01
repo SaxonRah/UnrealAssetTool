@@ -14,6 +14,9 @@ import json
 from pathlib import Path
 import sys
 
+import uatool_systems as systems
+import uatool_systems_input_validation as input_validation
+
 # Deliberately broad enough to catch City Sample custom/plugin classes, but avoid
 # the bare word "mass" because it is common English and creates excessive noise.
 MARKERS = (
@@ -289,6 +292,7 @@ def print_report(report: dict, *, row_limit: int = 30) -> None:
 
 
 def install(runtime_module) -> None:
+    input_validation.install(systems)
     if getattr(runtime_module, "_zonegraph_mass_evidence_installed", False):
         return
     original_main = runtime_module.main
