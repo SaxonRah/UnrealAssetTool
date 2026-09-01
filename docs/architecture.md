@@ -19,8 +19,8 @@ structural schema: 12
 world schema:      12
 animation schema:   1
 VFX schema:         1
-systems schema:     1
-derived schema:    14
+systems schema:     4
+derived schema:    20
 ```
 
 Each layer is independently versioned. Canonical scanner changes normally require Unreal to run again. Compatible Python-derived changes can normally be applied with `derive`, `pack` and `bundle` only.
@@ -61,7 +61,7 @@ world Unreal commandlet process
         +--> world schema 12
         +--> animation schema 1 passes
         +--> VFX schema 1 callback
-        +--> systems schema 1 callback
+        +--> systems schema 4 callback
         |
         v
 raw manifest validation
@@ -70,6 +70,9 @@ raw manifest validation
 canonical cleanup + deterministic derivation
         |
         +--> Blueprint/AI/PCG/material/world/animation/VFX views
+        +--> Gameplay Tags/gameplay-data joins
+        +--> Blueprint enum/control-flow/Chooser semantics
+        +--> Mover behavior and Gameplay Camera behavior
         +--> typed project graph
         +--> bounded quality-prioritized neighborhoods
         |
@@ -152,9 +155,11 @@ VFX schema 1 covers Niagara, Niagara Stateless and legacy Cascade. Canonical str
 
 Derived VFX views join exact canonical VFX topology/references and world/Blueprint evidence. Generic Asset Registry dependencies are excluded from semantic VFX evidence.
 
-### Systems schema 1
+### Systems schema 4
 
-Systems schema 1 covers several optional gameplay/editor systems in a reflection-first pass:
+Systems schema 4 extends the original reflection-first systems pass with accepted gameplay-data, Mover and Gameplay Cameras normalization while keeping optional plugin dependencies reflection-backed where practical.
+
+Coverage includes:
 
 - LevelSequence/MovieScene bindings, tracks, sections and channels;
 - SoundCue nodes;
@@ -162,9 +167,16 @@ Systems schema 1 covers several optional gameplay/editor systems in a reflection
 - core audio asset summaries/references;
 - Enhanced Input actions, mapping contexts, mappings, triggers and modifiers;
 - selected Common Input assets;
-- Gameplay Tag DataTables and selected gameplay-data assets.
+- general DataTable rows/fields and exact row references;
+- CurveTable rows/keys;
+- PrimaryDataAsset identity;
+- project Gameplay Tags settings, sources, dictionary and redirects;
+- Mover Blueprint/component/movement-mode/shared-setting/transition composition;
+- Gameplay Camera assets, rigs, nodes, node edges, transitions, directors and reflected rig references.
 
-The scanner avoids hard dependencies on optional LevelSequence, MovieScene, MetaSound, EnhancedInput, CommonInput/CommonUI and GameplayTags modules where reflection is sufficient.
+The canonical scanner does not invent direct ownership where the project uses indirect behavior. In GASP, for example, the camera director selects rigs through a Chooser table rather than through direct director-to-rig pointers.
+
+See [systems-schema-4.md](systems-schema-4.md) for the current systems contract. [systems-schema-1.md](systems-schema-1.md) and [systems-schema-2.md](systems-schema-2.md) are historical contracts.
 
 ## Facts-first rule
 
@@ -185,15 +197,19 @@ Niagara renderer/module relationship
 MovieScene track/section/channel containment
 MetaSound node/edge endpoint
 InputAction mapping/processor
+Mover movement-mode/transition ownership
+Gameplay Camera rig/node/transition topology
 ```
 
 Derived logic may later join or summarize these facts, but should not replace them.
 
 ## Deterministic derivation
 
-Derived schema 14 is disposable and reproducible from compatible canonical input. Major views include:
+Derived schema 20 is disposable and reproducible from compatible canonical input. Major views include:
 
 - Blueprint functions/events/calls/bindings/data provenance/execution blocks;
+- generic Blueprint semantic nodes/statements/control-flow edges;
+- Blueprint user-defined enum display semantics;
 - Animation Blueprint state-machine topology;
 - AI relations and summaries;
 - PCG/material parameters and visual relations;
@@ -201,7 +217,12 @@ Derived schema 14 is disposable and reproducible from compatible canonical input
 - world-to-system placement links;
 - animation relations/context/summaries;
 - VFX relations/context/summaries;
+- generic Chooser decisions and predicates;
+- Mover transition behaviors and concrete routes;
+- Gameplay Camera provider/director context behavior;
 - typed project nodes/edges/neighborhoods.
+
+Later independently versioned derived submodels can add readable semantics without forcing a canonical Unreal rescan. For example, Gameplay Camera behavior schema 2 decorates enum display names while preserving the raw `NewEnumeratorN` values and raw expression trees.
 
 ### World-to-system stitching
 
@@ -236,7 +257,7 @@ Every graph edge retains evidence/provenance. Asset Registry package dependencie
 
 Project neighborhoods are precomputed to depth 3 with a 256-edge budget. Traversal prioritizes exact semantic/reference evidence before package plumbing.
 
-Schema 14 stores compact neighborhood hops:
+Neighborhoods store compact references to authoritative project edges. Each hop records:
 
 ```text
 depth
@@ -305,8 +326,8 @@ If the target Editor runtime manifest is current and target-owned native/build i
 
 Primary UE 5.8.2 corpora:
 
-- **Game Animation Sample** — Blueprint/animation/Pose Search/Enhanced Input scale;
-- **Content Examples** — broad VFX, Sequencer, audio, MetaSound, material and gameplay-data breadth;
+- **Game Animation Sample** — Blueprint/animation/Pose Search/Enhanced Input scale plus accepted Mover and Gameplay Cameras validation;
+- **Content Examples** — broad VFX, Sequencer, audio, MetaSound, material and gameplay-data/Gameplay Tags breadth;
 - **StackOBot + Niagara Examples** — World Partition/LevelInstance/PCG/VFX and cross-project build regression;
 - **Cropout** — compact Blueprint/gameplay regression.
 
@@ -315,5 +336,7 @@ A scanner family is considered stable only after corpus-level validation of coun
 ## Remaining architecture boundary
 
 Asset Registry is intentionally universal; first-class semantic extraction is intentionally selective. The project should expand first-class coverage where an asset family's authored internals materially affect gameplay understanding, while preserving unsupported assets honestly as generic entities rather than fabricating semantics.
+
+Issue #14's remaining high-value work includes GAS, Smart Objects, AI Perception, ZoneGraph/Mass, Dataflow/GeometryCollection and AnimNext. Corpus availability still determines implementation order.
 
 See [coverage.md](coverage.md) for the current audit.
