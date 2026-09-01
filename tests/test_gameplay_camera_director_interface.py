@@ -39,6 +39,7 @@ class GameplayCameraDirectorInterfaceTest(unittest.TestCase):
         self.director = "/Game/Cameras/CameraDirector.CameraDirector"
         self.interface = "/Game/Blueprints/BPI_SandboxCharacter_Pawn.BPI_SandboxCharacter_Pawn"
         self.interface_class = "/Game/Blueprints/BPI_SandboxCharacter_Pawn.BPI_SandboxCharacter_Pawn_C"
+        self.interface_graph = "graph:interface-declaration"
         self.impl = "/Game/Blueprints/SandboxCharacter_Mover.SandboxCharacter_Mover"
         self.impl_graph = "graph:get-camera"
         self.call_node = "node:get-camera"
@@ -55,6 +56,12 @@ class GameplayCameraDirectorInterfaceTest(unittest.TestCase):
                 "implemented_interfaces": [],
             },
             {
+                "object_path": self.interface,
+                "parent_class": "/Script/CoreUObject.Interface",
+                "generated_class": self.interface_class,
+                "implemented_interfaces": [],
+            },
+            {
                 "object_path": self.impl,
                 "parent_class": "/Script/Engine.Character",
                 "generated_class": self.impl + "_C",
@@ -66,16 +73,31 @@ class GameplayCameraDirectorInterfaceTest(unittest.TestCase):
         write_jsonl(self.output / "blueprint_semantic_nodes.jsonl", [])
         write_jsonl(self.output / "blueprint_pins.jsonl", [])
         write_jsonl(self.output / "blueprint_semantic_blocks.jsonl", [])
-        write_jsonl(self.output / "blueprint_functions.jsonl", [{
-            "function_id": self.impl_graph,
-            "blueprint_path": self.impl,
-            "graph_id": self.impl_graph,
-            "graph_name": "Get_PropertiesForCamera",
-            "name": "Get_PropertiesForCamera",
-            "resolved_function": self.interface_class + ":Get_PropertiesForCamera",
-            "result_node_ids": ["node:return"],
-            "outputs": [{"name": "ReturnValue", "type": {"category": "struct"}}],
-        }])
+        write_jsonl(self.output / "blueprint_functions.jsonl", [
+            {
+                "function_id": self.interface_graph,
+                "blueprint_path": self.interface,
+                "graph_id": self.interface_graph,
+                "graph_name": "Get_PropertiesForCamera",
+                "name": "Get_PropertiesForCamera",
+                "resolved_function": self.interface_class + ":Get_PropertiesForCamera",
+                "result_node_ids": ["node:interface-return"],
+                "outputs": [{"name": "ReturnValue", "type": {"category": "struct"}}],
+            },
+            {
+                "function_id": self.impl_graph,
+                "blueprint_path": self.impl,
+                "graph_id": self.impl_graph,
+                "graph_name": "Get_PropertiesForCamera",
+                "name": "Get_PropertiesForCamera",
+                "resolved_function": self.interface_class + ":Get_PropertiesForCamera",
+                "result_node_ids": ["node:return"],
+                "outputs": [{"name": "ReturnValue", "type": {"category": "struct"}}],
+            },
+        ])
+        # Reproduce the real GASP shape: generic call resolution says "internal"
+        # because it found the Blueprint Interface declaration. The camera report
+        # must not mistake that declaration for executable implementation logic.
         write_jsonl(self.output / "blueprint_call_edges.jsonl", [{
             "call_id": self.call_node,
             "call_node_id": self.call_node,
@@ -86,23 +108,36 @@ class GameplayCameraDirectorInterfaceTest(unittest.TestCase):
             "target_name": "Get_PropertiesForCamera",
             "target_owner": "/Game/Blueprints/BPI_SandboxCharacter_Pawn.SKEL_BPI_SandboxCharacter_Pawn_C",
             "target_blueprint_path": self.interface,
-            "target_function_id": "",
-            "resolution": "external",
-            "candidate_count": 0,
-            "candidate_function_ids": [],
+            "target_function_id": self.interface_graph,
+            "resolution": "internal",
+            "candidate_count": 1,
+            "candidate_function_ids": [self.interface_graph],
             "interface_call": True,
         }])
-        write_jsonl(self.output / "blueprint_semantic_statements.jsonl", [{
-            "statement_id": "stmt:return",
-            "node_id": "node:return",
-            "blueprint_path": self.impl,
-            "graph_id": self.impl_graph,
-            "graph_name": "Get_PropertiesForCamera",
-            "block_id": "block:return",
-            "block_position": 1,
-            "operation": "function_result",
-            "text": "return ReturnValue=Make S_CharacterPropertiesForCamera(CameraMode=Aim, MovementMode=OnGround)",
-        }])
+        write_jsonl(self.output / "blueprint_semantic_statements.jsonl", [
+            {
+                "statement_id": "stmt:interface-return",
+                "node_id": "node:interface-return",
+                "blueprint_path": self.interface,
+                "graph_id": self.interface_graph,
+                "graph_name": "Get_PropertiesForCamera",
+                "block_id": "block:interface-return",
+                "block_position": 1,
+                "operation": "function_result",
+                "text": "return",
+            },
+            {
+                "statement_id": "stmt:return",
+                "node_id": "node:return",
+                "blueprint_path": self.impl,
+                "graph_id": self.impl_graph,
+                "graph_name": "Get_PropertiesForCamera",
+                "block_id": "block:return",
+                "block_position": 1,
+                "operation": "function_result",
+                "text": "return ReturnValue=Make S_CharacterPropertiesForCamera(CameraMode=Aim, MovementMode=OnGround)",
+            },
+        ])
         write_jsonl(self.output / "blueprint_data_dependencies.jsonl", [{
             "dependency_id": "dep:return",
             "blueprint_path": self.impl,
@@ -118,13 +153,17 @@ class GameplayCameraDirectorInterfaceTest(unittest.TestCase):
             "object_refs": [],
         }])
 
-    def test_traces_dynamic_interface_call_to_implementation_candidates(self) -> None:
+    def test_traces_dynamic_interface_call_to_real_implementation_candidates(self) -> None:
         self._fixture()
         report = director_report.build_report(self.output, rows)
         self.assertEqual(len(report["camera_property_calls"]), 1)
+        self.assertEqual(report["camera_property_calls"][0]["resolution"], "internal")
+        self.assertEqual(report["camera_property_calls"][0]["candidate_function_ids"], [self.interface_graph])
+
         self.assertEqual(len(report["implementation_candidates"]), 1)
         candidate = report["implementation_candidates"][0]
         self.assertEqual(candidate["blueprint_path"], self.impl)
+        self.assertNotEqual(candidate["blueprint_path"], self.interface)
         self.assertEqual(candidate["implementation_kind"], "implements_interface")
         self.assertEqual(candidate["interface_blueprint_path"], self.interface)
         self.assertEqual(candidate["dependencies"][0]["dependency_id"], "dep:return")
@@ -136,6 +175,7 @@ class GameplayCameraDirectorInterfaceTest(unittest.TestCase):
         text = buffer.getvalue()
         self.assertIn("[Camera property interface calls]", text)
         self.assertIn("[Get_PropertiesForCamera implementation candidates]", text)
+        self.assertIn("declaration/call-edge candidate_function_ids", text)
         self.assertIn("SandboxCharacter_Mover", text)
         self.assertIn("MovementMode=OnGround", text)
 
