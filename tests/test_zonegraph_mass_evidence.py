@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
-from scripts import uatool_zonegraph_mass_evidence as evidence
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPTS = ROOT / "scripts"
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
+
+import uatool_zonegraph_mass_evidence as evidence
 
 
 def _write(path: Path, rows: list[dict]) -> None:
