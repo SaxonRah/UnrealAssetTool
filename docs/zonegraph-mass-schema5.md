@@ -4,9 +4,9 @@ Systems schema 5 is the first canonical Mass + ZoneGraph slice. It is intentiona
 
 ## Evidence boundary
 
-The City Sample focused evidence establishes that authored Mass configuration/spawner/agent state and authored ZoneShape state are recoverable. It does **not** establish a trustworthy reflected representation of generated `FZoneGraphStorage` lane/lane-point/lane-link topology.
+The City Sample evidence proves authored Mass configuration/spawner/agent state and authored placed `ZoneShape` state. It does **not** prove generated `FZoneGraphStorage` lane/lane-point/lane-link topology.
 
-Therefore schema 5 normalizes only proven serialized/authored facts and deliberately does not claim generated lane connectivity.
+Schema 5 therefore normalizes only proven serialized/authored facts. Generated lane connectivity and transient ZoneShape connector caches are deliberately not promoted.
 
 ## Canonical streams
 
@@ -22,14 +22,14 @@ zonegraph_shapes.jsonl
 zonegraph_shape_points.jsonl
 ```
 
-The existing loss-minimizing streams remain authoritative for reflected object detail:
+The loss-minimizing reflected-state streams remain authoritative for optional object detail:
 
 ```text
 systems_properties.jsonl
 systems_references.jsonl
 ```
 
-Trait instances, generator instances and component state are written there rather than reducing every optional Mass type to a hand-maintained property list.
+Trait instances, generator instances and component state live there rather than reducing every optional Mass type to a hand-maintained property list.
 
 ## Mass model
 
@@ -45,7 +45,7 @@ Trait instances, generator instances and component state are written there rathe
 
 ### City Sample Mass acceptance
 
-The final isolated City Sample systems capture is valid and count-complete:
+The accepted isolated City Sample systems capture is valid and count-complete:
 
 ```text
 mass_entity_configs             28
@@ -57,9 +57,9 @@ mass_spawn_generator_assets      7
 mass_agent_components            36
 ```
 
-All physical JSONL row counts match the schema-5 manifest and all JSONL files validate. The earlier exact-4-KiB truncation pattern was traced to specialized static `FArchive` writer buffers and fixed by closing every systems writer group synchronously inside `RunSystemsScan()` before a success manifest is written.
+All physical JSONL row counts match the schema-5 manifest and all files validate.
 
-The Mass portion of schema 5 is therefore real-corpus accepted.
+The real-corpus capture exposed an exact-4-KiB truncation bug in specialized static `FArchive` writers. All systems writer groups are now closed synchronously inside `RunSystemsScan()` before a success manifest is written, so manifest success cannot precede JSONL finalization.
 
 ## ZoneGraph model
 
@@ -69,13 +69,9 @@ The Mass portion of schema 5 is therefore real-corpus accepted.
 
 A point `lane_profile` value is preserved exactly as reflected. City Sample commonly emits numeric selectors such as `255`; schema 5 does not reinterpret those values as asset paths or invent a lane-profile resolution table.
 
-Transient connector caches are not promoted as authored topology.
-
-Generated `FZoneGraphStorage` lanes, lane points and lane links are explicitly out of scope for schema 5 until a real scanner capture proves the exact serializable/reflected representation.
-
 ### City Sample placed-actor acceptance
 
-The isolated systems Asset Registry pass returns zero ZoneShape rows, but the canonical world layer proves that City Sample contains placed ZoneShape actors/components. The accepted focused world capture found exactly the same actor set:
+The Asset Registry systems pass returns zero ZoneShape rows because City Sample's authored ZoneShapes are placed world actors. The existing canonical world layer proves 61 ZoneShape actors/components, and the focused loaded-world capture returned exactly that same set:
 
 ```text
 worlds_requested                    1
@@ -89,7 +85,7 @@ shape_point_count_range          2..4
 generated_lane_topology          false
 ```
 
-Field coverage in that real corpus is complete for all core normalized point values:
+Core point-field coverage is complete:
 
 ```text
 position                       144/144
@@ -102,17 +98,17 @@ lane_connection_restrictions   144/144
 inner_turn_radius              144/144
 ```
 
-Shape-level `PerPointLaneProfiles` is present on 3/61 shapes; this is sparse authored state, not information loss. Shape types are 36 `Spline` and 25 `Polygon`; point types are 72 `Sharp` and 72 `LaneProfile`.
+Shape-level `PerPointLaneProfiles` is authored on 3/61 shapes. Shape types are 36 `Spline` / 25 `Polygon`; point types are 72 `Sharp` / 72 `LaneProfile`.
 
 The ownership boundary is therefore explicit: placed ZoneShapes are world-owned canonical facts. Zero Asset Registry ZoneShape rows must not be interpreted as zero ZoneShapes.
 
 ## Optional-system implementation
 
-The extractor introduces no hard link dependency on MassSpawner, MassActors or ZoneGraph modules. Optional-system recognition is based on loaded class inheritance and reflected `FProperty` structure, consistent with the existing Mover and Gameplay Cameras approach.
+The extractor introduces no hard link dependency on MassSpawner, MassActors or ZoneGraph modules. Optional-system recognition uses loaded class inheritance and reflected `FProperty` structure, consistent with the Mover and Gameplay Cameras slices.
 
-## Isolated systems capture
+## Evidence capture commands
 
-For real-corpus validation, the canonical launcher provides an isolated systems-only mode:
+Isolated Mass/systems capture:
 
 ```powershell
 python scripts\uatool.py systems-capture `
@@ -120,17 +116,7 @@ python scripts\uatool.py systems-capture `
     --editor "E:\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Win64-DebugGame-Cmd.exe"
 ```
 
-The command stages/reuses the normal cross-project plugin cache, builds UnrealAssetTool when needed, launches the editor with `-UnrealAssetToolSystemsOnly`, runs only the systems scanner, validates systems schema 5, and writes a focused archive at:
-
-```text
-N:\EpicVault\Projects\CitySample\.uatool\CitySample.systems-schema5-capture.zip
-```
-
-The archive contains the systems manifest, generic systems asset/property/reference evidence, and the nine Mass/ZoneGraph schema-5 streams. It intentionally excludes world, animation, VFX, database and derived outputs.
-
-## Focused authored ZoneGraph world capture
-
-ZoneShape validation uses a second narrow command on the same canonical launcher:
+Focused authored ZoneGraph world capture:
 
 ```powershell
 python scripts\uatool.py zonegraph-world-capture `
@@ -138,17 +124,7 @@ python scripts\uatool.py zonegraph-world-capture `
     --editor "E:\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Win64-DebugGame-Cmd.exe"
 ```
 
-The Python launcher reads the already-canonical `world_actors.jsonl` and `world_components.jsonl`, discovers only worlds containing exact `/Script/ZoneGraph.ZoneShape` / `/Script/ZoneGraph.ZoneShapeComponent` evidence, and writes that world list to the focused capture directory. `UnrealAssetToolZoneGraphWorld` then loads only those worlds and reflects the live placed actors/components.
-
-The focused archive contains only:
-
-```text
-zonegraph_world_manifest.json
-zonegraph_shapes.jsonl
-zonegraph_shape_points.jsonl
-```
-
-The capture cross-checks the emitted shape set against the pre-existing canonical world evidence. Its manifest explicitly records:
+The ZoneGraph command reads the existing canonical world actor/component streams, discovers only worlds already proven to contain exact `/Script/ZoneGraph.ZoneShape` evidence, and loads only those worlds. Its manifest records:
 
 ```text
 canonical_authored_zonegraph_capture = true
@@ -156,55 +132,87 @@ generated_lane_topology = false
 provenance = loaded_world_placed_actor_reflection
 ```
 
-## Canonical schema-5 acceptance / promotion
+## Canonical schema-5 promotion
 
-The accepted Mass and authored-ZoneGraph captures are intentionally separate during evidence gathering. Once both validate, a Python-only acceptance command composes them into the canonical corpus without rerunning Unreal and without running derive:
+The accepted Mass and ZoneGraph captures are composed with the Python-only command:
 
 ```powershell
 python scripts\uatool.py systems-schema5-accept `
     "N:\EpicVault\Projects\CitySample\CitySample.uproject"
 ```
 
-The command:
+It validates both accepted captures, overlays only the two world-owned ZoneGraph streams onto the complete isolated systems tree, reruns the ordinary composed schema-5 validator, promotes JSONLs first, and replaces `systems_manifest.json` last as the commit marker.
 
-1. validates the isolated systems schema-5 capture;
-2. validates the focused ZoneGraph capture against the existing world actor/component set;
-3. copies the complete isolated systems raw tree into a staging directory;
-4. overlays only `zonegraph_shapes.jsonl` and `zonegraph_shape_points.jsonl` from the accepted world capture;
-5. updates the systems manifest ZoneGraph counts/provenance while keeping `generated_lane_topology=false`;
-6. runs the ordinary composed systems-schema-5 validator over the staging tree;
-7. promotes JSONL files first and `systems_manifest.json` last as the commit marker;
-8. writes `systems_schema5_acceptance.json` and preserves `zonegraph_world_manifest.json` beside the canonical systems manifest.
+The accepted City Sample corpus now contains:
 
-No structural/world/animation/VFX streams are replaced and no derived output is touched.
+```text
+systems_schema5_acceptance.json
+zonegraph_world_manifest.json
+mass_zonegraph_graph_expectations.json
+```
 
-## Exact-semantic project graph boundary
+The first real canonical promotion completed successfully with:
 
-Schema-5 graph promotion is limited to relationships directly established by canonical rows:
+```text
+zonegraph_worlds:             1
+zonegraph_shapes:            61
+zonegraph_shape_points:     144
+exact_shape_set_match:     true
+generated_lane_topology:   false
+```
+
+Promotion never launches Unreal and never runs derive.
+
+## Final derived schema 21 graph contract
+
+Mass/ZoneGraph exact-semantic graph integration advances the composed final derived schema from 20 to **21**. The schema-5 installer promotes the already-loaded one-launcher composition's schema value during startup; no alternate public launcher is introduced.
+
+Acceptance computes `mass_zonegraph_graph_expectations.json` directly from canonical raw rows before the expensive derive. It contains the exact path-level edge keys and relation counts expected from schema 5.
+
+Only these proven relationships are promoted:
 
 - Mass config -> parent Mass config;
 - Mass config -> ordered Trait object;
 - MassSpawner Blueprint -> referenced entity config;
 - MassSpawner Blueprint -> referenced generator asset/instance when present;
+- generator Blueprint -> reflected parent class;
+- generator Blueprint -> proven `MassEntityZoneGraphSpawnPointsGenerator` base inheritance when applicable;
+- Blueprint -> owned MassAgent component;
 - MassAgent component -> embedded config parent;
-- generator Blueprint -> reflected parent class and proven ZoneGraph generator base inheritance;
 - world -> placed ZoneShape;
 - ZoneShape -> ZoneShapeComponent;
 - ZoneShape -> ordered synthetic point node.
 
-Every promoted relationship is `exact_semantic` with the originating stream/index/value retained as evidence. A ZoneGraph-based Mass spawn generator is **not** linked to a particular placed ZoneShape because the accepted corpus contains no canonical evidence for that specific binding.
+Every domain edge must be `exact_semantic` and retain evidence from its canonical source stream.
 
-## Acceptance boundary
+A ZoneGraph-based spawn generator is **not** linked to any particular placed ZoneShape because the accepted corpus contains no canonical evidence for that binding. The post-derive verifier rejects such an invented edge even if it uses a new relation name.
 
-Current status:
+After the schema-21 derive, verify the result with:
 
-1. UE 5.8 native systems compilation: accepted.
-2. Real City Sample isolated systems capture: accepted.
-3. Mass real-corpus invariants and row-count integrity: accepted.
-4. Authored ZoneShape Asset Registry path: rejected as incomplete for placed world actors.
-5. Focused authored ZoneGraph world capture: accepted (61 shapes / 144 points, exact actor-set match, zero truncation).
-6. Generated `FZoneGraphStorage` lane topology: explicitly not promoted.
-7. Canonical systems-schema-5 promotion: implemented; pending execution against the accepted local captures.
-8. Exact-semantic project-graph promotion: implemented with synthetic invariants; pending the next real derive.
+```powershell
+python scripts\uatool.py mass-zonegraph-graph-verify `
+    "N:\EpicVault\Projects\CitySample\CitySample.uproject"
+```
 
-City Sample derive is intentionally deferred until canonical schema-5 promotion succeeds. That promotion is Python-only and reuses the already accepted captures.
+The verifier requires `manifest.json` to report derived schema 21, compares the actual domain edge set exactly against the raw expectation set, checks canonical evidence streams and `exact_semantic` quality, verifies Mass config roots and ZoneGraph point targets, and writes:
+
+```text
+mass_zonegraph_graph_verification.json
+```
+
+The acceptance, ZoneGraph-world, graph-expectation and graph-verification manifests are included in upload bundles when present.
+
+## Acceptance status
+
+1. UE 5.8 native systems compilation: **accepted**.
+2. Real City Sample isolated systems capture: **accepted**.
+3. Mass real-corpus integrity: **accepted**.
+4. Asset Registry ZoneShape path: **rejected as incomplete for placed actors**.
+5. Focused authored ZoneGraph world capture: **accepted** (61 shapes / 144 points).
+6. Generated `FZoneGraphStorage` lane topology: **explicitly not promoted**.
+7. Canonical systems-schema-5 promotion: **accepted and executed**.
+8. Schema-21 exact-semantic graph implementation: **implemented and CI-covered**.
+9. Real City Sample schema-21 derive: **pending**.
+10. Post-derive Mass/ZoneGraph graph verification and final query/bundle acceptance: **pending**.
+
+The City Sample derive remains intentionally deferred until the current scripts have emitted the exact real-corpus graph expectation counts from the already-accepted canonical raw files.
