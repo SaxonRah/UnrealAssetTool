@@ -3,9 +3,8 @@ from __future__ import annotations
 import json
 import sys
 import tempfile
+import unittest
 from pathlib import Path
-
-import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
@@ -76,40 +75,8 @@ def _fixture(root: Path) -> tuple[str, str, str, str]:
     return config, generator, world, shape
 
 
-def test_public_composition_promotes_final_schema21() -> None:
-    import uatool
-    import uatool_core
-    import uatool_project_graph
-
-    assert uatool.FINAL_DERIVED_SCHEMA_VERSION == accept.TARGET_DERIVED_SCHEMA_VERSION
-    assert uatool_core.DERIVED_SCHEMA_VERSION == accept.TARGET_DERIVED_SCHEMA_VERSION
-    assert uatool_project_graph.DERIVED_SCHEMA_VERSION == accept.TARGET_DERIVED_SCHEMA_VERSION
-    for filename in (
-        accept.ACCEPTANCE_MANIFEST,
-        "zonegraph_world_manifest.json",
-        accept.GRAPH_EXPECTATIONS_MANIFEST,
-        accept.GRAPH_VERIFICATION_MANIFEST,
-    ):
-        assert filename in uatool_core.DEFAULT_BUNDLE_FILES
-
-
-def test_graph_expectations_are_exact_raw_contract() -> None:
-    with tempfile.TemporaryDirectory() as temp:
-        root = Path(temp)
-        _fixture(root)
-        expectations = accept._graph_expectations(root)
-        edges = accept._expected_graph_edges(root)
-
-        assert expectations["target_derived_schema_version"] == 21
-        assert expectations["generated_lane_topology"] is False
-        assert expectations["unsupported_generator_to_placed_shape_edges"] == 0
-        assert expectations["expected_exact_semantic_edge_count"] == len(edges)
-        assert expectations["expected_relation_counts"]["has_zonegraph_shape_point"] == 2
-        assert expectations["expected_relation_counts"]["inherits_zonegraph_spawn_generator_base"] == 1
-
-
 def _write_valid_derived_contract(root: Path) -> tuple[str, str]:
-    config, generator, _world, shape = _fixture(root)
+    _config, generator, _world, shape = _fixture(root)
     expectations = accept._graph_expectations(root)
     (root / accept.GRAPH_EXPECTATIONS_MANIFEST).write_text(
         json.dumps(expectations), encoding="utf-8"
@@ -136,29 +103,66 @@ def _write_valid_derived_contract(root: Path) -> tuple[str, str]:
     return generator, shape
 
 
-def test_postderive_graph_verifier_accepts_exact_contract() -> None:
-    with tempfile.TemporaryDirectory() as temp:
-        root = Path(temp)
-        _write_valid_derived_contract(root)
-        result = accept._verify_graph(root)
-        assert result["verified"] is True
-        assert result["derived_schema_version"] == 21
-        assert result["unsupported_generator_to_placed_shape_edges"] == 0
-        assert (root / accept.GRAPH_VERIFICATION_MANIFEST).is_file()
+class MassZoneGraphSchema21ContractTests(unittest.TestCase):
+    def test_public_composition_promotes_final_schema21(self) -> None:
+        import uatool
+        import uatool_core
+        import uatool_project_graph
+
+        self.assertEqual(uatool.FINAL_DERIVED_SCHEMA_VERSION, accept.TARGET_DERIVED_SCHEMA_VERSION)
+        self.assertEqual(uatool_core.DERIVED_SCHEMA_VERSION, accept.TARGET_DERIVED_SCHEMA_VERSION)
+        self.assertEqual(uatool_project_graph.DERIVED_SCHEMA_VERSION, accept.TARGET_DERIVED_SCHEMA_VERSION)
+        for filename in (
+            accept.ACCEPTANCE_MANIFEST,
+            "zonegraph_world_manifest.json",
+            accept.GRAPH_EXPECTATIONS_MANIFEST,
+            accept.GRAPH_VERIFICATION_MANIFEST,
+        ):
+            self.assertIn(filename, uatool_core.DEFAULT_BUNDLE_FILES)
+
+    def test_graph_expectations_are_exact_raw_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            _fixture(root)
+            expectations = accept._graph_expectations(root)
+            edges = accept._expected_graph_edges(root)
+
+            self.assertEqual(expectations["target_derived_schema_version"], 21)
+            self.assertFalse(expectations["generated_lane_topology"])
+            self.assertEqual(expectations["unsupported_generator_to_placed_shape_edges"], 0)
+            self.assertEqual(expectations["expected_exact_semantic_edge_count"], len(edges))
+            self.assertEqual(expectations["expected_relation_counts"]["has_zonegraph_shape_point"], 2)
+            self.assertEqual(
+                expectations["expected_relation_counts"]["inherits_zonegraph_spawn_generator_base"],
+                1,
+            )
+
+    def test_postderive_graph_verifier_accepts_exact_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            _write_valid_derived_contract(root)
+            result = accept._verify_graph(root)
+            self.assertTrue(result["verified"])
+            self.assertEqual(result["derived_schema_version"], 21)
+            self.assertEqual(result["unsupported_generator_to_placed_shape_edges"], 0)
+            self.assertTrue((root / accept.GRAPH_VERIFICATION_MANIFEST).is_file())
+
+    def test_postderive_graph_verifier_rejects_invented_generator_shape_binding(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            generator, shape = _write_valid_derived_contract(root)
+            rows = accept._rows_list(root, "project_edges.jsonl")
+            rows.append({
+                "source": generator,
+                "relation": "invented_generator_shape_binding",
+                "target": shape,
+                "edge_quality": "exact_semantic",
+                "evidence": [{"stream": "guessed"}],
+            })
+            _write_jsonl(root / "project_edges.jsonl", rows)
+            with self.assertRaisesRegex(RuntimeError, "unsupported generator-to-placed-ZoneShape"):
+                accept._verify_graph(root)
 
 
-def test_postderive_graph_verifier_rejects_invented_generator_shape_binding() -> None:
-    with tempfile.TemporaryDirectory() as temp:
-        root = Path(temp)
-        generator, shape = _write_valid_derived_contract(root)
-        rows = accept._rows_list(root, "project_edges.jsonl")
-        rows.append({
-            "source": generator,
-            "relation": "invented_generator_shape_binding",
-            "target": shape,
-            "edge_quality": "exact_semantic",
-            "evidence": [{"stream": "guessed"}],
-        })
-        _write_jsonl(root / "project_edges.jsonl", rows)
-        with pytest.raises(RuntimeError, match="unsupported generator-to-placed-ZoneShape"):
-            accept._verify_graph(root)
+if __name__ == "__main__":
+    unittest.main()
