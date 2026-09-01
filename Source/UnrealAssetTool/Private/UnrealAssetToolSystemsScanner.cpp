@@ -17,6 +17,7 @@
 #include "GameplayTagsManager.h"
 #include "GameplayTagsSettings.h"
 #include "HAL/FileManager.h"
+#include "HAL/PlatformMisc.h"
 #include "Interfaces/IPluginManager.h"
 #include "Misc/CommandLine.h"
 #include "Misc/CoreDelegates.h"
