@@ -100,6 +100,12 @@ def _resolve_archive(project: Path, value: str | None) -> Path:
     return project.parent / ".uatool" / f"{project.stem}.zonegraph-world-capture.zip"
 
 
+def _resolve_report(project: Path, value: str | None) -> Path:
+    if value:
+        return Path(value).expanduser().resolve()
+    return project.parent / ".uatool" / f"{project.stem}.zonegraph-world-capture.txt"
+
+
 def _write_archive(output: Path, archive: Path) -> None:
     archive.parent.mkdir(parents=True, exist_ok=True)
     if archive.exists():
@@ -184,6 +190,115 @@ def _validate_capture(output: Path, expected_shapes: set[str]) -> dict:
     return manifest
 
 
+def _short(value, limit: int = 180) -> str:
+    text = str(value or "").replace("\r", "\\r").replace("\n", "\\n")
+    return text if len(text) <= limit else text[: limit - 3] + "..."
+
+
+def _counter_lines(label: str, rows: list[dict], field: str, limit: int = 8) -> list[str]:
+    counts = collections.Counter(str(row.get(field, "") or "<blank>") for row in rows)
+    result = [f"{label}:"]
+    for value, count in counts.most_common(limit):
+        result.append(f"  {count}: {_short(value)}")
+    if len(counts) > limit:
+        result.append(f"  ... {len(counts) - limit} more distinct values")
+    return result
+
+
+def _semantic_report(output: Path, manifest: dict, expected_shapes: set[str]) -> str:
+    shapes = list(_rows(output / "zonegraph_shapes.jsonl"))
+    points = list(_rows(output / "zonegraph_shape_points.jsonl"))
+    counts = manifest.get("counts", {}) if isinstance(manifest, dict) else {}
+    lines = [
+        "UnrealAssetTool focused authored ZoneGraph capture",
+        f"worlds_requested: {int(counts.get('worlds_requested', 0) or 0)}",
+        f"worlds_loaded: {int(counts.get('worlds_loaded', 0) or 0)}",
+        f"expected_shapes_from_world_corpus: {len(expected_shapes)}",
+        f"zonegraph_shapes: {len(shapes)}",
+        f"zonegraph_shape_points: {len(points)}",
+        "exact_shape_set_match: True",
+        "generated_lane_topology: False",
+        f"truncated_point_rows: {sum(1 for row in points if bool(row.get('truncated', False)))}",
+    ]
+
+    point_counts = [int(row.get("point_count", 0) or 0) for row in shapes]
+    if point_counts:
+        lines.append(f"shape_point_count_range: {min(point_counts)}..{max(point_counts)}")
+
+    shape_fields = (
+        "shape_type",
+        "lane_profile",
+        "tags",
+        "reverse_lane_profile",
+        "polygon_routing_type",
+        "relative_location",
+        "relative_rotation",
+        "per_point_lane_profiles",
+    )
+    lines.append("\n[shape field coverage]")
+    for field in shape_fields:
+        nonblank = sum(1 for row in shapes if str(row.get(field, "") or ""))
+        lines.append(f"{field}: {nonblank}/{len(shapes)}")
+
+    point_fields = (
+        "position",
+        "rotation",
+        "tangent_length",
+        "point_type",
+        "lane_profile",
+        "reverse_lane_profile",
+        "lane_connection_restrictions",
+        "inner_turn_radius",
+    )
+    lines.append("\n[point field coverage]")
+    for field in point_fields:
+        nonblank = sum(1 for row in points if str(row.get(field, "") or ""))
+        lines.append(f"{field}: {nonblank}/{len(points)}")
+
+    lines.append("")
+    lines.extend(_counter_lines("[shape_type values]", shapes, "shape_type"))
+    lines.append("")
+    lines.extend(_counter_lines("[point_type values]", points, "point_type"))
+    lines.append("")
+    lines.extend(_counter_lines("[point reverse_lane_profile values]", points, "reverse_lane_profile"))
+
+    if shapes:
+        first = shapes[0]
+        last = shapes[-1]
+        lines.extend([
+            "\n[sample shapes]",
+            "first: " + " | ".join(
+                f"{field}={_short(first.get(field, ''))}"
+                for field in ("world_path", "shape_path", "point_count", "shape_type", "lane_profile", "tags")
+            ),
+            "last: " + " | ".join(
+                f"{field}={_short(last.get(field, ''))}"
+                for field in ("world_path", "shape_path", "point_count", "shape_type", "lane_profile", "tags")
+            ),
+        ])
+    if points:
+        first = points[0]
+        last = points[-1]
+        fields = (
+            "shape_path",
+            "point_index",
+            "position",
+            "rotation",
+            "tangent_length",
+            "point_type",
+            "lane_profile",
+            "reverse_lane_profile",
+            "lane_connection_restrictions",
+            "inner_turn_radius",
+        )
+        lines.extend([
+            "\n[sample points]",
+            "first: " + " | ".join(f"{field}={_short(first.get(field, ''))}" for field in fields),
+            "last: " + " | ".join(f"{field}={_short(last.get(field, ''))}" for field in fields),
+        ])
+    return "\n".join(lines) + "\n"
+
+
 def _capture_cli(runtime_module, core_module, argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="uatool zonegraph-world-capture",
@@ -199,6 +314,7 @@ def _capture_cli(runtime_module, core_module, argv: list[str]) -> int:
     parser.add_argument("--corpus", help="existing canonical corpus; defaults to <Project>/.uatool")
     parser.add_argument("--output", help="focused capture directory")
     parser.add_argument("--archive", help="focused capture ZIP")
+    parser.add_argument("--report", help="semantic inspection report path")
     args = parser.parse_args(argv)
 
     project = _resolve_project(args.project)
@@ -206,6 +322,7 @@ def _capture_cli(runtime_module, core_module, argv: list[str]) -> int:
     corpus = _resolve_corpus(project, args.corpus)
     output = _resolve_output(project, args.output)
     archive = _resolve_archive(project, args.archive)
+    report_path = _resolve_report(project, args.report)
     worlds, expected_shapes = discover_zonegraph_worlds(corpus)
 
     print(
@@ -254,13 +371,11 @@ def _capture_cli(runtime_module, core_module, argv: list[str]) -> int:
     print(f"raw focused ZoneGraph archive: {archive}")
 
     manifest = _validate_capture(output, expected_shapes)
-    counts = manifest.get("counts", {})
-    print("focused authored ZoneGraph counts:")
-    print(f"  worlds_requested: {int(counts.get('worlds_requested', 0) or 0)}")
-    print(f"  worlds_loaded: {int(counts.get('worlds_loaded', 0) or 0)}")
-    print(f"  zonegraph_shapes: {int(counts.get('zonegraph_shapes', 0) or 0)}")
-    print(f"  zonegraph_shape_points: {int(counts.get('zonegraph_shape_points', 0) or 0)}")
-    print("  generated_lane_topology: False")
+    report = _semantic_report(output, manifest, expected_shapes)
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(report, encoding="utf-8", newline="\n")
+    print(f"focused ZoneGraph inspection report: {report_path}")
+    print(report, end="")
     print(f"focused ZoneGraph capture archive: {archive}")
     print(f"focused ZoneGraph capture total elapsed: {time.perf_counter() - overall_started:.2f}s")
     if result != 0:
