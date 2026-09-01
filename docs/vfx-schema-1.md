@@ -2,13 +2,15 @@
 
 VFX schema 1 is UnrealAssetTool's canonical authored-effects layer for Niagara, Niagara Stateless and legacy Cascade.
 
+Current project baseline:
+
 ```text
 structural=12
 world=12
 animation=1
 vfx=1
-systems=1
-derived=14
+systems=4
+derived=20
 ```
 
 The VFX pass runs inside the world Editor process. It uses reflection for Niagara/plugin-specific state rather than requiring Niagara as a hard build dependency.
@@ -87,7 +89,7 @@ Rows retain emitter/LOD order, emitter name/significance, LOD state, module role
 
 ## Derived VFX
 
-Derived schema 14 adds:
+The current final derived schema is 20. The VFX-specific derived streams introduced earlier remain:
 
 ```text
 vfx_relations.jsonl

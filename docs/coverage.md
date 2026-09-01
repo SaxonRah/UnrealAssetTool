@@ -23,8 +23,8 @@ structural=12
 world=12
 animation=1
 vfx=1
-systems=1
-derived=14
+systems=4
+derived=20
 ```
 
 ---
@@ -35,7 +35,8 @@ derived=14
 | --- | --- | --- | --- |
 | Files/source/config | `first_class` | Physical files, kinds, bounded text chunks | Not a C++ semantic compiler/indexer |
 | Asset Registry | `first_class` fallback | Asset identity/class/package/tags/dependencies | Package dependency is not semantic object linkage |
-| Blueprint/K2 | `first_class` | Graphs, nodes, pins, links, state, refs, functions/events/calls/data provenance/execution blocks | Uncommon node-specific meaning may remain generic class/pin/property state |
+| Blueprint/K2 | `first_class` | Graphs, nodes, pins, links, state, refs, functions/events/calls/data provenance/execution blocks plus generic semantic statements/control flow | Uncommon node-specific meaning may remain generic class/pin/property state |
+| Blueprint user-defined enums | `first_class` | Enum identity, entries, raw/authored/display names and conservative readable enum decoration | Ambiguous enum typing is left raw rather than guessed |
 | Animation Blueprint state machines | `first_class` | Machines, states, aliases/conduits, transitions, transition rules, pose/cache/link nodes | Runtime generated/compiled VM behavior is not simulated |
 | UMG Widget Blueprint | `first_class_depth_pending` | Widget tree, properties, bindings, animations, animation bindings plus Blueprint graphs | Slate/runtime rendering/style semantics are not modeled as a separate graph |
 | Control Rig / RigVM | `first_class_depth_pending` | Compact objects/pins/links/references and editor-link reconstruction | Full raw property dump is opt-in; richer RigVM opcode/runtime semantics are not modeled |
@@ -55,7 +56,7 @@ derived=14
 | Animation curves | `first_class` | Float/transform curves and individual keys/tangents | Compression/runtime evaluation is not modeled |
 | Pose Search | `first_class` | Databases, schemas, channels, roles, interaction assets, normalization sets | Search index/runtime query results are not extracted |
 | PoseAsset | `first_class` | Poses, tracks, transforms and curve values | Runtime pose blending not simulated |
-| Chooser / Proxy | `first_class_depth_pending` | Tables, rows/columns/context, concrete struct types, raw settings/refs | Many uncommon column/value types are lossless raw structs rather than dedicated semantics |
+| Chooser / Proxy | `first_class_depth_pending` | Tables, rows/columns/context, concrete struct types, raw settings/refs; supported enum columns are promoted into queryable decisions/predicates | Many uncommon column/value types remain lossless raw structs rather than guessed semantics |
 | IK Rig / IK Retargeter | `first_class_depth_pending` | Bones/chains/goals/solvers, rig refs, ops and poses | Solver/op-specific semantics are mostly concrete type + raw authored state |
 | Niagara | `first_class_depth_pending` | Systems, handles, emitters/versions, renderers, stages, scripts, data channels, parameter collections, effect types | Stateful module/function execution-stack semantics are not normalized |
 | Niagara Stateless | `first_class` | Stateless emitters, ordered modules/renderers and child state | Runtime simulation output not evaluated |
@@ -65,7 +66,11 @@ derived=14
 | SoundCue | `first_class_depth_pending` | Nodes, child counts, node state/references | No dedicated normalized SoundCue edge stream yet |
 | Enhanced Input: InputAction/MappingContext | `first_class` | Actions, contexts, exact action/key mappings, trigger/modifier objects | Runtime input stack/user remapping state is out of scope |
 | Common Input | `first_class_depth_pending` | Action tables and action-domain assets recognized; authored state/refs preserved | Row/domain semantics are not deeply normalized |
-| Gameplay Tag DataTables | `first_class_depth_pending` | DataTable rows with tag/comment | Full project tag dictionary/config/native tags/redirects are not normalized |
+| General DataTable / CurveTable | `first_class` | DataTable row struct/type, rows/fields, exact object references; CurveTable rows and keys | Family-specific interpretation of arbitrary project row structs is intentionally not guessed |
+| PrimaryDataAsset | `first_class_depth_pending` | PrimaryDataAsset identity plus generic reflected state/references | Arbitrary project-specific PrimaryDataAsset semantics are not normalized by family |
+| Gameplay Tags project model | `first_class` | Settings, configured sources, merged project dictionary and redirects plus tag-bearing gameplay data | Exhaustive native C++ registration provenance/restricted-tag special cases and all cross-system tag semantics are not yet normalized |
+| Mover | `first_class` | Mover Blueprint/component composition, movement modes, starting mode, shared settings, transitions and exact backend-class references; derived transition behaviors/routes | Runtime simulation/layered-move execution is not simulated |
+| Gameplay Cameras | `first_class` | CameraAsset -> director, CameraRig roots/nodes/edges/transitions/prefab refs, generic Chooser selection decisions and polymorphic Blueprint camera-property providers/director context | Runtime camera evaluation/blending is not executed; polymorphic providers remain candidates unless runtime actor type disambiguates them |
 | Typed project graph | `first_class` | Typed nodes/edges, provenance, coverage and quality classes | It reflects extractor depth; it must not imply unsupported subsystem semantics |
 
 ---
@@ -78,10 +83,8 @@ These systems are visible through existing generic layers, Blueprint/component s
 | --- | --- | --- |
 | Gameplay Framework native classes | Blueprint subclasses/defaults plus placed Actor/component state | Native GameMode/GameState/PlayerState/Controller/Pawn relationship summary across project settings/maps |
 | AI Perception | Component templates/placed components can be seen through Blueprint/world state | Sense configs, dominant sense, stimuli sources and sense relationships |
-| Navigation | Nav actors/volumes/components can appear as world objects | NavMesh tiles/areas/costs, NavLink topology, agent settings and navigation project settings |
+| Navigation | Nav actors/volumes/components can appear as world objects | NavMesh areas/costs, NavLink topology, agent settings and authored navigation project settings; generated NavMesh tile serialization is not a goal |
 | Gameplay Ability System | GameplayAbility Blueprints still receive normal Blueprint graph coverage | GameplayAbility/GameplayEffect/AbilitySystemComponent/AttributeSet/Cue/tag/cost/cooldown relationships |
-| Mover | Mover components/classes can be visible as Blueprint/world component state | Movement modes, layered moves, transitions, input/output state and Mover-specific composition |
-| Gameplay Cameras | Blueprint actors/components and referenced assets can be discovered generically | Camera Asset -> rig -> node -> transition -> director topology |
 | Landscape/Foliage/HLOD | World actors/components/assets are discoverable | Landscape layer/material/component topology, foliage type/instance semantics, HLOD composition |
 | SkeletalMesh / PhysicsAsset | Asset identity/references and use by animation assets can be seen | Skeleton/LOD/material/morph/cloth data and physics bodies/constraints |
 | StaticMesh | Asset identity/references/material use can be seen generically | LOD/section/socket/collision/Nanite authored topology |
@@ -91,20 +94,17 @@ These systems are visible through existing generic layers, Blueprint/component s
 
 # Generic-only high-value gaps
 
-Repository scanning found no dedicated extractor/model for these major UE 5.8 families. They still benefit from universal file/Asset Registry/source indexing where present.
+Repository scanning has no dedicated semantic model yet for these major UE 5.8 families. They still benefit from universal file/Asset Registry/source indexing where present.
 
 | Family | Why it matters for gameplay understanding | Suggested priority |
 | --- | --- | --- |
 | Smart Objects | Designer-authored interaction slots/behaviors/tags used by AI and players | **High** |
 | ZoneGraph | Lane/zone topology used by Smart Objects/Mass/crowds/traffic | **High** when Mass/crowd projects are targeted |
 | Mass Entity / Mass Gameplay | Entity configs, traits, processors, representation/spawn/StateTree composition | **High** for City Sample / large-scale AI |
-| General DataTable / CurveTable | Common project-owned gameplay data and asset references | **High**; broad, relatively tractable reflection target |
-| Gameplay Tag project configuration | Config/native tag dictionary, sources, redirects, restricted tags | **High** because tags connect many systems |
 | Gameplay Effects / GAS data | Core ability/effect/attribute relationships | **High** for Lyra/action/RPG projects |
 | Dataflow | General-purpose node graph used by Geometry Collection/Chaos Cloth/Flesh and other authoring | Medium-high |
 | Geometry Collection / Chaos destruction | Breakable geometry, clustering, materials and Dataflow links | Medium-high |
 | AnimNext | New animation graph/data ecosystem not represented by animation schema 1 | Medium-high for forward-looking animation projects |
-| Gameplay Camera assets | Camera rigs/transitions/directors are authored data assets | Medium |
 | Groom / Hair | Groom assets/bindings/physics relationships | Medium for character-heavy projects |
 | Texture/RenderTarget/VirtualTexture internals | Rendering resource relationships beyond material refs | Medium-low for gameplay-focused indexing |
 | Iris/replication configuration | Important runtime networking system but mostly code/config rather than content graph | Medium-low unless networking analysis becomes a goal |
@@ -115,11 +115,11 @@ The priorities above are about **AI/project-understanding value**, not engine im
 
 # Specific depth gaps discovered by repository audit
 
-## 1. Systems graph coverage currently overstates some roots
+## 1. Systems graph coverage can still overstate recognition-only roots
 
-`systems_assets.jsonl` contains both deeply normalized assets and recognition/reflection-only assets. `scripts/uatool_project_graph.py` currently registers the whole `systems_assets` specialist stream as `first_class`, and the finalizer preserves that canonical root typing.
+`systems_assets.jsonl` contains both deeply normalized assets and recognition/reflection-only assets. Coverage policy must continue distinguishing assets whose family internals are normalized from assets that are primarily reflected state/references.
 
-This can overstate coverage for assets such as:
+Examples that need conservative treatment include:
 
 ```text
 PlayerMappableInputConfig
@@ -132,9 +132,7 @@ PrimaryAssetLabel
 Common Input action-domain assets
 ```
 
-These assets are useful and intentionally recognized, but several are primarily reflected state/references rather than fully normalized family internals.
-
-**Recommended fix:** give systems asset kinds an explicit coverage policy (`first_class` vs `first_class_depth_pending`) and preserve it into project nodes/edges/neighborhoods instead of assigning blanket first-class coverage.
+The project graph should not promote generic systems recognition into unsupported family semantics.
 
 ## 2. Sequencer has container depth but not key depth
 
@@ -154,38 +152,56 @@ Frontend nodes/edges are exact, but dedicated streams do not yet expose vertex d
 
 **Recommended next depth:** add typed vertex/literal rows before adding higher-level interpretations.
 
-## 5. Gameplay Tags are only partially modeled
+## 5. Gameplay Tags have a project model; remaining depth is provenance and joins
 
-Gameplay Tag DataTables are normalized, but UE projects can define tags in config and C++ and can configure table sources, redirects, restricted tags and replication settings.
+Systems schema 2 added settings, sources, merged dictionary and redirects, and schema 4 retains that model. The remaining tag work is narrower than the old gap: native C++ registration provenance where recoverable, restricted-tag special cases, replication/config depth and richer cross-system tag joins.
 
-**Recommended fix:** add project-level Gameplay Tags config/native-source indexing and join tag references across supported systems.
+## 6. AI coverage omits perception/navigation semantics
 
-## 6. AI coverage omits perception/navigation
+Behavior Tree, Blackboard, EQS and StateTree are first-class, but AI Perception and authored Navigation settings/links/areas have no dedicated extractor.
 
-Behavior Tree, Blackboard, EQS and StateTree are first-class, but AI Perception and Navigation have no dedicated extractor.
+**Recommended priority:** AI Perception first when a representative corpus is available, then authored navigation configuration/links/areas rather than serializing generated NavMesh data wholesale.
 
-**Recommended priority:** AI Perception first (small, high semantic value), then authored navigation configuration/links/areas rather than serializing the generated NavMesh wholesale.
+## 7. Remaining modern gameplay-framework gaps
 
-## 7. Modern gameplay framework gaps
-
-Current UE 5.8 projects increasingly use Smart Objects, Mass, ZoneGraph, Mover, Gameplay Cameras and GAS. None has a dedicated model in this repository today.
-
-**Recommended order for broad project understanding:**
+Mover and Gameplay Cameras now have dedicated first-class models. The remaining Issue #14 modern-framework work is:
 
 ```text
-Gameplay Tags project model
-General DataTables
-GAS
+Gameplay Ability System
 Smart Objects
 AI Perception
-Mover
-Gameplay Cameras
 ZoneGraph + Mass
 Dataflow / GeometryCollection
 AnimNext
 ```
 
-Corpus availability should still determine the actual implementation order.
+Corpus availability determines implementation order. City Sample is the intended evidence corpus for the next ZoneGraph/Mass slice; schema design should follow the observed UE 5.8 serialized/reflected shapes rather than API-name guesses.
+
+---
+
+# Issue #14 status
+
+Accepted slices:
+
+```text
+Gameplay Tags project model
+General DataTable / CurveTable / PrimaryDataAsset coverage
+Mover
+Gameplay Cameras
+```
+
+Still open:
+
+```text
+Gameplay Ability System
+Smart Objects
+AI Perception
+ZoneGraph + Mass
+Dataflow / GeometryCollection
+AnimNext
+```
+
+Some accepted slices intentionally stop at a conservative boundary. For example, PrimaryDataAsset has first-class identity but project-specific payload semantics remain reflected/raw unless a broadly reusable family can be proven.
 
 ---
 
@@ -197,54 +213,37 @@ Corpus availability should still determine the actual implementation order.
 | World | Yes | Yes | Yes | Yes | ContentExamples/StackOBot + others |
 | Animation | Yes | Yes | Yes | Yes | GASP + ContentExamples |
 | VFX | Yes | Yes | Yes | Yes | ContentExamples + StackOBot/Niagara Examples |
-| Systems | Yes | Yes | Yes | Yes | StackOBot + ContentExamples + GASP |
+| Systems schema 4 | Yes | Yes | Yes | Yes | StackOBot + ContentExamples + GASP |
 | Project graph/neighborhoods | Yes | Yes | Yes | n/a | StackOBot + ContentExamples + GASP |
 
-At the pipeline level, the planned indexed families are wired end-to-end. The remaining gaps are primarily **domain depth and unmodeled subsystems**, not forgotten pack/query plumbing.
+At the pipeline level, implemented families are wired end-to-end. The remaining gaps are primarily **domain depth and unmodeled subsystems**, not forgotten pack/query plumbing.
 
 ---
 
 # Automated regression coverage audit
 
-The project has strong real-corpus validation but relatively little focused automated unit coverage for its Python surface.
+Focused Python regression coverage now includes:
 
-Current `tests/` files:
-
-```text
-test_cleanup_compaction.py
-test_derived_perf.py
-test_neighborhood_priority.py
-test_systems_graph.py
-```
-
-Strongly covered in unit/smoke tests:
-
-- generated-value cleanup;
-- schema-14 neighborhood compaction/reconstruction;
-- derived freshness/performance helpers;
-- neighborhood quality priority;
-- systems/project-graph synthetic integration.
-
-Underrepresented in focused tests:
-
-- structural/base Blueprint derivation in `uatool_core.py`;
-- world stitching;
-- animation validators and animation stitching;
-- VFX validators and VFX stitching;
+- canonical/compact Blueprint pin and property storage;
+- Blueprint semantic nodes/statements/control flow;
+- user-defined enum extraction/rendering/inference;
+- RigVM semantic bridging;
+- world/animation/VFX stitching regressions;
 - build freshness/fallback/cache policy;
-- SQLite/query parity across specialist tables;
-- manifest compatibility/error-path behavior.
+- Chooser decision interpretation/storage/graph promotion;
+- Mover extraction/behavior/graph semantics;
+- Gameplay Camera canonical topology, director/provider behavior, enum readability and graph promotion;
+- systems validation/SQLite/project-graph integration;
+- derived freshness, neighborhood compaction and storage invariants.
 
-The existing UE corpora catch many of these failures, but targeted Python tests would shorten feedback loops and make refactoring safer.
-
-**Recommended testing priority:** animation/VFX/world derivation invariants first, then build-policy unit tests and query/SQLite parity.
+Real UE corpora remain required because unit tests cannot substitute for actual serialized UE 5.8 shapes. New subsystem work should add synthetic invariants only after a representative corpus has established what the authored data actually looks like.
 
 ---
 
 # What “complete” means now
 
-The original planned indexer roadmap is complete: Blueprint/world/AI/PCG/material/animation/VFX/Sequencer/audio/input and a typed provenance-aware project graph are all implemented and validated.
+The original planned indexer roadmap plus the accepted Issue #14 gameplay-data, Gameplay Tags, Mover and Gameplay Cameras slices are implemented and corpus-validated.
 
-The repository is **not complete with respect to the entire Unreal Engine 5.8 content ecosystem**, and it should not claim to be. The next phase should be evidence-driven expansion into the high-value gaps above, while keeping unsupported families honestly marked as partial or generic-only.
+The repository is **not complete with respect to the entire Unreal Engine 5.8 content ecosystem**, and it should not claim to be. Expansion remains evidence-driven: acquire a representative corpus, inspect exact reflected/serialized facts, then normalize only semantics the evidence supports.
 
-See [architecture.md](architecture.md), [schema.md](schema.md), [animation-schema-1.md](animation-schema-1.md), [vfx-schema-1.md](vfx-schema-1.md) and [systems-schema-1.md](systems-schema-1.md) for the maintained technical references.
+See [architecture.md](architecture.md), [schema.md](schema.md), [animation-schema-1.md](animation-schema-1.md), [vfx-schema-1.md](vfx-schema-1.md) and [systems-schema-4.md](systems-schema-4.md) for the maintained technical references. Historical systems contracts remain in [systems-schema-1.md](systems-schema-1.md) and [systems-schema-2.md](systems-schema-2.md).

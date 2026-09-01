@@ -11,8 +11,8 @@ structural=12
 world=12
 animation=1
 vfx=1
-systems=1
-derived=14
+systems=4
+derived=20
 ```
 
 ## Why one checkout
@@ -69,12 +69,12 @@ using target project's BuildId
 run structural commandlet
       v
 run world process
-      +--> world
-      +--> animation
-      +--> VFX
-      +--> systems
+      +--> world schema 12
+      +--> animation schema 1
+      +--> VFX schema 1
+      +--> systems schema 4
       v
-derive / pack / bundle
+derive schema 20 / pack / bundle
       v
 move generated Binaries/Intermediate to Saved cache
       v

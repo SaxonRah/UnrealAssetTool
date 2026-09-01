@@ -2,13 +2,15 @@
 
 Animation schema 1 is UnrealAssetTool's canonical authored-animation layer.
 
+Current project baseline:
+
 ```text
 structural schema: 12
 world schema:      12
 animation schema:   1
 vfx schema:         1
-systems schema:     1
-derived schema:    14
+systems schema:     4
+derived schema:    20
 ```
 
 It is implemented by several internal passes so optional/plugin-heavy families remain build-safe, but they form one public schema:
@@ -180,6 +182,15 @@ Skeleton, mirror axis and source/mirrored row mappings are normalized with entry
 
 Uncommon column semantics are preserved losslessly rather than guessed from display text.
 
+Derived schema 20 additionally persists a conservative generic decision layer for supported enum columns:
+
+```text
+chooser_decisions.jsonl
+chooser_decision_predicates.jsonl
+```
+
+That layer keeps raw structs and refuses ambiguous/cardinality-mismatched interpretations. Chooser decision schema 1 is independently versioned from animation schema 1.
+
 ### ProxyTable / ProxyAsset
 
 - distinct identities;
@@ -208,7 +219,7 @@ Uncommon column semantics are preserved losslessly rather than guessed from disp
 
 ## Derived animation layer
 
-Derived schema 14 adds:
+The current final derived schema is 20. The animation-specific derived streams introduced earlier remain:
 
 ```text
 animation_relations.jsonl
