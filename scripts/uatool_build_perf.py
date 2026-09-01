@@ -33,6 +33,7 @@ import uatool_chooser_graph as chooser_graph
 import uatool_mover_report as mover_report
 import uatool_gameplay_camera_report as gameplay_camera_report
 import uatool_gameplay_camera_selection_report as gameplay_camera_selection_report
+import uatool_gameplay_camera_director_report as gameplay_camera_director_report
 import uatool_mover_behavior as mover_behavior
 import uatool_systems as systems
 import uatool_systems_mover as systems_mover
@@ -304,3 +305,4 @@ def install(core) -> None:
     mover_report.install(runtime)
     gameplay_camera_report.install(runtime)
     gameplay_camera_selection_report.install(runtime)
+    gameplay_camera_director_report.install(runtime)
