@@ -5,7 +5,7 @@ static bool SaveSystemsManifest(
     const FString& Error)
 {
     TSharedRef<FJsonObject> Root = MakeShared<FJsonObject>();
-    Root->SetNumberField(TEXT("schema_version"), SystemsSchemaVersion);
+    Root->SetNumberField(TEXT("schema_version"), 4);
     Root->SetStringField(TEXT("pass"), TEXT("UnrealAssetToolSystems"));
     Root->SetStringField(TEXT("generated_utc"), FDateTime::UtcNow().ToIso8601());
     Root->SetStringField(TEXT("engine_version"), FEngineVersion::Current().ToString());
@@ -31,6 +31,28 @@ static bool SaveSystemsManifest(
     C->SetNumberField(TEXT("input_processors"), Counts.InputProcessors);
     C->SetNumberField(TEXT("gameplay_data_assets"), Counts.GameplayDataAssets);
     C->SetNumberField(TEXT("gameplay_tags"), Counts.GameplayTags);
+    C->SetNumberField(TEXT("data_table_rows"), Counts.DataTableRows);
+    C->SetNumberField(TEXT("data_table_fields"), Counts.DataTableFields);
+    C->SetNumberField(TEXT("curve_tables"), Counts.CurveTables);
+    C->SetNumberField(TEXT("curve_table_rows"), Counts.CurveTableRows);
+    C->SetNumberField(TEXT("curve_table_keys"), Counts.CurveTableKeys);
+    C->SetNumberField(TEXT("primary_data_assets"), Counts.PrimaryDataAssets);
+    C->SetNumberField(TEXT("gameplay_tag_settings"), Counts.GameplayTagSettings);
+    C->SetNumberField(TEXT("gameplay_tag_sources"), Counts.GameplayTagSources);
+    C->SetNumberField(TEXT("gameplay_tag_dictionary"), Counts.GameplayTagDictionary);
+    C->SetNumberField(TEXT("gameplay_tag_redirects"), Counts.GameplayTagRedirects);
+    C->SetNumberField(TEXT("mover_blueprints"), GMoverCounts.Blueprints);
+    C->SetNumberField(TEXT("mover_components"), GMoverCounts.Components);
+    C->SetNumberField(TEXT("mover_modes"), GMoverCounts.Modes);
+    C->SetNumberField(TEXT("mover_settings"), GMoverCounts.Settings);
+    C->SetNumberField(TEXT("mover_transitions"), GMoverCounts.Transitions);
+    C->SetNumberField(TEXT("gameplay_camera_assets"), GGameplayCameraCounts.Assets);
+    C->SetNumberField(TEXT("gameplay_camera_rigs"), GGameplayCameraCounts.Rigs);
+    C->SetNumberField(TEXT("gameplay_camera_nodes"), GGameplayCameraCounts.Nodes);
+    C->SetNumberField(TEXT("gameplay_camera_node_edges"), GGameplayCameraCounts.NodeEdges);
+    C->SetNumberField(TEXT("gameplay_camera_transitions"), GGameplayCameraCounts.Transitions);
+    C->SetNumberField(TEXT("gameplay_camera_directors"), GGameplayCameraCounts.Directors);
+    C->SetNumberField(TEXT("gameplay_camera_rig_references"), GGameplayCameraCounts.RigReferences);
     Root->SetObjectField(TEXT("counts"), C);
 
     static const TCHAR* Names[] = {
@@ -51,7 +73,29 @@ static bool SaveSystemsManifest(
         TEXT("input_mappings.jsonl"),
         TEXT("input_processors.jsonl"),
         TEXT("gameplay_data_assets.jsonl"),
-        TEXT("gameplay_tags.jsonl")
+        TEXT("gameplay_tags.jsonl"),
+        TEXT("data_table_rows.jsonl"),
+        TEXT("data_table_fields.jsonl"),
+        TEXT("curve_tables.jsonl"),
+        TEXT("curve_table_rows.jsonl"),
+        TEXT("curve_table_keys.jsonl"),
+        TEXT("primary_data_assets.jsonl"),
+        TEXT("gameplay_tag_settings.jsonl"),
+        TEXT("gameplay_tag_sources.jsonl"),
+        TEXT("gameplay_tag_dictionary.jsonl"),
+        TEXT("gameplay_tag_redirects.jsonl"),
+        TEXT("mover_blueprints.jsonl"),
+        TEXT("mover_components.jsonl"),
+        TEXT("mover_modes.jsonl"),
+        TEXT("mover_settings.jsonl"),
+        TEXT("mover_transitions.jsonl"),
+        TEXT("gameplay_camera_assets.jsonl"),
+        TEXT("gameplay_camera_rigs.jsonl"),
+        TEXT("gameplay_camera_nodes.jsonl"),
+        TEXT("gameplay_camera_node_edges.jsonl"),
+        TEXT("gameplay_camera_transitions.jsonl"),
+        TEXT("gameplay_camera_directors.jsonl"),
+        TEXT("gameplay_camera_rig_references.jsonl")
     };
     TArray<TSharedPtr<FJsonValue>> Files;
     for (const TCHAR* Name : Names)
@@ -97,9 +141,11 @@ static bool RunSystemsScan(FString& OutError)
         ToolPluginDir = NormalizeAbsolutePath(Plugin->GetBaseDir());
     }
 
+    GMoverCounts = FMoverCounts();
+    GGameplayCameraCounts = FGameplayCameraCounts();
     FWriters Writers;
     FCounts Counts;
-    if (!Writers.Open(OutputDir))
+    if (!Writers.Open(OutputDir) || !GMoverWriters.Open(OutputDir) || !GGameplayCameraWriters.Open(OutputDir))
     {
         OutError = TEXT("could not create systems JSONL output files");
         SaveSystemsManifest(OutputDir, Counts, false, OutError);
@@ -110,6 +156,16 @@ static bool RunSystemsScan(FString& OutError)
         FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry"));
     IAssetRegistry& Registry = AssetRegistryModule.Get();
     Registry.SearchAllAssets(true);
+
+    TArray<FTopLevelAssetPath> PrimaryAssetBases;
+    PrimaryAssetBases.Add(UPrimaryDataAsset::StaticClass()->GetClassPathName());
+    TSet<FTopLevelAssetPath> ExcludedPrimaryAssetClasses;
+    TSet<FTopLevelAssetPath> PrimaryDataAssetClasses;
+    Registry.GetDerivedClassNames(
+        PrimaryAssetBases,
+        ExcludedPrimaryAssetClasses,
+        PrimaryDataAssetClasses);
+    PrimaryDataAssetClasses.Add(UPrimaryDataAsset::StaticClass()->GetClassPathName());
 
     TArray<FAssetData> Assets;
     Registry.GetAllAssets(Assets, true);
@@ -122,7 +178,8 @@ static bool RunSystemsScan(FString& OutError)
     for (const FAssetData& Asset : Assets)
     {
         const FString ClassPath = Asset.AssetClassPath.ToString();
-        if (!IsCandidateClassPath(ClassPath))
+        const bool bPrimaryDataAssetCandidate = PrimaryDataAssetClasses.Contains(Asset.AssetClassPath);
+        if (!IsCandidateClassPath(ClassPath) && !bPrimaryDataAssetCandidate)
         {
             continue;
         }
@@ -147,7 +204,7 @@ static bool RunSystemsScan(FString& OutError)
         {
             continue;
         }
-        const FString Kind = KindForLoadedObject(Object, ClassPath);
+        const FString Kind = KindForLoadedObject(Object, ClassPath, bPrimaryDataAssetCandidate);
         if (Kind.IsEmpty())
         {
             continue;
@@ -192,11 +249,26 @@ static bool RunSystemsScan(FString& OutError)
         {
             bOk = ScanInputMappingContext(Object, Asset, Writers, Counts, SeenStateOwners);
         }
-        else if (Kind == TEXT("primary_asset_label") ||
-                 Kind == TEXT("common_input_action_table") ||
-                 Kind == TEXT("common_input_action_domain") ||
-                 Kind == TEXT("common_input_action_domain_table") ||
-                 Kind == TEXT("gameplay_tag_table"))
+        else if (UDataTable* DataTable = Cast<UDataTable>(Object))
+        {
+            bOk = ScanGameplayDataAsset(Object, Asset, Kind, Writers, Counts) &&
+                ScanDataTableDetails(DataTable, Asset, Kind, Writers, Counts);
+        }
+        else if (UCurveTable* CurveTable = Cast<UCurveTable>(Object))
+        {
+            bOk = ScanCurveTableDetails(CurveTable, Asset, Kind, Writers, Counts);
+        }
+        else if (Kind == TEXT("primary_data_asset"))
+        {
+            bOk = ScanPrimaryDataAsset(Object, Asset, Kind, Writers, Counts);
+        }
+        else if (Kind == TEXT("primary_asset_label"))
+        {
+            bOk = ScanGameplayDataAsset(Object, Asset, Kind, Writers, Counts) &&
+                ScanPrimaryDataAsset(Object, Asset, Kind, Writers, Counts);
+        }
+        else if (Kind == TEXT("common_input_action_domain") ||
+                 Kind == TEXT("common_input_action_domain_table"))
         {
             bOk = ScanGameplayDataAsset(Object, Asset, Kind, Writers, Counts);
         }
@@ -209,6 +281,43 @@ static bool RunSystemsScan(FString& OutError)
         }
     }
 
+    if (!ScanGameplayTagProjectModel(Writers, Counts))
+    {
+        OutError = TEXT("failed while scanning project Gameplay Tags model");
+        SaveSystemsManifest(OutputDir, Counts, false, OutError);
+        return false;
+    }
+
+    if (!ScanMoverProjectModel(
+            Assets,
+            ProjectDir,
+            bIncludeEngine,
+            bIncludeSelf,
+            ToolPluginDir,
+            Writers,
+            Counts,
+            SeenStateOwners,
+            OutError))
+    {
+        SaveSystemsManifest(OutputDir, Counts, false, OutError);
+        return false;
+    }
+
+    if (!ScanGameplayCameraProjectModel(
+            Assets,
+            ProjectDir,
+            bIncludeEngine,
+            bIncludeSelf,
+            ToolPluginDir,
+            Writers,
+            Counts,
+            SeenStateOwners,
+            OutError))
+    {
+        SaveSystemsManifest(OutputDir, Counts, false, OutError);
+        return false;
+    }
+
     if (!SaveSystemsManifest(OutputDir, Counts, true, FString()))
     {
         OutError = TEXT("could not write systems_manifest.json");
@@ -218,19 +327,33 @@ static bool RunSystemsScan(FString& OutError)
     UE_LOG(
         LogTemp,
         Display,
-        TEXT("UnrealAssetToolSystems: assets=%lld sequences=%lld tracks=%lld sections=%lld channels=%lld audio=%lld metasound_nodes=%lld metasound_edges=%lld actions=%lld contexts=%lld mappings=%lld gameplay_tags=%lld"),
+        TEXT("UnrealAssetToolSystems: assets=%lld sequences=%lld audio=%lld actions=%lld contexts=%lld mappings=%lld data_rows=%lld data_fields=%lld curve_tables=%lld curve_rows=%lld curve_keys=%lld primary_data=%lld tag_sources=%lld tag_dictionary=%lld mover_blueprints=%lld mover_components=%lld mover_modes=%lld mover_settings=%lld mover_transitions=%lld camera_assets=%lld camera_rigs=%lld camera_nodes=%lld camera_node_edges=%lld camera_transitions=%lld camera_directors=%lld camera_rig_refs=%lld"),
         Counts.Assets,
         Counts.LevelSequences,
-        Counts.MovieSceneTracks,
-        Counts.MovieSceneSections,
-        Counts.MovieSceneChannels,
         Counts.AudioAssets,
-        Counts.MetaSoundNodes,
-        Counts.MetaSoundEdges,
         Counts.InputActions,
         Counts.InputMappingContexts,
         Counts.InputMappings,
-        Counts.GameplayTags);
+        Counts.DataTableRows,
+        Counts.DataTableFields,
+        Counts.CurveTables,
+        Counts.CurveTableRows,
+        Counts.CurveTableKeys,
+        Counts.PrimaryDataAssets,
+        Counts.GameplayTagSources,
+        Counts.GameplayTagDictionary,
+        GMoverCounts.Blueprints,
+        GMoverCounts.Components,
+        GMoverCounts.Modes,
+        GMoverCounts.Settings,
+        GMoverCounts.Transitions,
+        GGameplayCameraCounts.Assets,
+        GGameplayCameraCounts.Rigs,
+        GGameplayCameraCounts.Nodes,
+        GGameplayCameraCounts.NodeEdges,
+        GGameplayCameraCounts.Transitions,
+        GGameplayCameraCounts.Directors,
+        GGameplayCameraCounts.RigReferences);
     return true;
 }
 

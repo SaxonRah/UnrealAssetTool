@@ -72,6 +72,7 @@ struct FReferenceContext
     FString OwnerKind;
     FString RootProperty;
     int32 Rows = 0;
+    int32 MaxRows = MaxReferencesPerRoot;
     FWriters* Writers = nullptr;
     FCounts* Counts = nullptr;
 };
@@ -83,7 +84,7 @@ static void EmitReference(
     const FString& TargetPath,
     const FString& TargetClass)
 {
-    if (!Context.Writers || !Context.Counts || TargetPath.IsEmpty() || Context.Rows >= MaxReferencesPerRoot)
+    if (!Context.Writers || !Context.Counts || TargetPath.IsEmpty() || Context.Rows >= Context.MaxRows)
     {
         return;
     }
@@ -111,7 +112,7 @@ static void CollectReferences(
     int32 Depth,
     FReferenceContext& Context)
 {
-    if (!Property || !ValuePtr || Depth > MaxReferenceDepth || Context.Rows >= MaxReferencesPerRoot)
+    if (!Property || !ValuePtr || Depth > MaxReferenceDepth || Context.Rows >= Context.MaxRows)
     {
         return;
     }
@@ -174,7 +175,7 @@ static void CollectReferences(
     {
         FScriptArrayHelper Helper(ArrayProperty, ValuePtr);
         const int32 Limit = FMath::Min(Helper.Num(), 4096);
-        for (int32 Index = 0; Index < Limit; ++Index)
+        for (int32 Index = 0; Index < Limit && Context.Rows < Context.MaxRows; ++Index)
         {
             CollectReferences(
                 ArrayProperty->Inner,
@@ -190,7 +191,7 @@ static void CollectReferences(
     {
         FScriptSetHelper Helper(SetProperty, ValuePtr);
         int32 Emitted = 0;
-        for (int32 Index = 0; Index < Helper.GetMaxIndex() && Emitted < 4096; ++Index)
+        for (int32 Index = 0; Index < Helper.GetMaxIndex() && Emitted < 4096 && Context.Rows < Context.MaxRows; ++Index)
         {
             if (!Helper.IsValidIndex(Index))
             {
@@ -210,7 +211,7 @@ static void CollectReferences(
     {
         FScriptMapHelper Helper(MapProperty, ValuePtr);
         int32 Emitted = 0;
-        for (int32 Index = 0; Index < Helper.GetMaxIndex() && Emitted < 4096; ++Index)
+        for (int32 Index = 0; Index < Helper.GetMaxIndex() && Emitted < 4096 && Context.Rows < Context.MaxRows; ++Index)
         {
             if (!Helper.IsValidIndex(Index))
             {

@@ -13,7 +13,7 @@
 - world scanner schema: **12**
 - animation scanner schema: **1**
 - VFX scanner schema: **1**
-- systems scanner schema: **1**
+- systems scanner schema: **2**
 - derived schema: **14**
 
 The schemas are independently versioned because they represent different extraction lifecycles. A change to a Python-only derived view does not require renumbering canonical Unreal scanner output.
@@ -42,7 +42,8 @@ UnrealAssetTool currently has dedicated extraction for:
 - Niagara, Niagara Stateless and legacy Cascade VFX;
 - LevelSequence/Sequencer structure;
 - MetaSound, SoundCue and core audio assets;
-- Enhanced Input and selected Common Input/gameplay-data assets;
+- Enhanced Input and selected Common Input assets;
+- general DataTable and CurveTable authored rows/values/references, PrimaryDataAsset identity and the project Gameplay Tags settings/source/dictionary/redirect model;
 - typed project-level graph edges and bounded neighborhoods with per-hop provenance/coverage quality.
 
 Unsupported asset families still appear through Asset Registry identity/tags/package dependencies. Their presence in `assets.jsonl` does **not** imply that UnrealAssetTool understands their internal authored structure.
@@ -67,7 +68,7 @@ manifest.json             structural schema 12 + derived schema 14
 world_manifest.json       world schema 12
 animation_manifest.json   animation schema 1
 vfx_manifest.json         VFX schema 1
-systems_manifest.json     systems schema 1
+systems_manifest.json     systems schema 2
 ```
 
 Derived schema 14 includes:
@@ -219,7 +220,8 @@ A scanner family is not considered stable merely because it compiles. Corpus val
 - [Build performance and bundle size](docs/build-performance-and-size.md)
 - [Animation schema 1](docs/animation-schema-1.md)
 - [VFX schema 1](docs/vfx-schema-1.md)
-- [Systems schema 1](docs/systems-schema-1.md)
+- [Systems schema 1](docs/systems-schema-1.md) — historical stable contract
+- [Systems schema 2](docs/systems-schema-2.md) — current gameplay-data/tag extension
 
 ## Coverage policy
 

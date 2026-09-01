@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """Cheap freshness guard for deterministic derived output.
 
-Derived JSONL and SQLite are disposable caches over canonical scanner facts.  The
+Derived JSONL and SQLite are disposable caches over canonical scanner facts. The
 expensive derived pass should run when canonical inputs or derived Python logic
-change, not every time a user asks to pack or bundle an already-current output.
+change, not every time a user asks to inspect, pack, or report an already-current
+output.
 
 The stamp deliberately uses file metadata for large canonical/derived JSONL
 rather than re-hashing gigabytes of data. Scanner and cleanup rewrites change
-size and/or mtime in normal operation. The Python implementation itself is
+size and/or mtime in normal operation. Python that can affect derived output is
 content-hashed so a derived-code edit invalidates the stamp even when the schema
-number does not change.
+number does not change. Pure read-only reporting helpers are excluded because
+they cannot alter derived JSONL.
 """
 from __future__ import annotations
 
@@ -21,10 +23,21 @@ from pathlib import Path
 STAMP_FILE = ".derived_freshness.json"
 STAMP_VERSION = 1
 
+# These modules only read existing canonical/derived output. Changes to their
+# presentation or validation UI must not force deterministic data regeneration.
+NON_DERIVED_SCRIPTS = frozenset({
+    "uatool_blueprint_program_report.py",
+    "uatool_mover_report.py",
+    "uatool_semantic_report.py",
+    "uatool_verify_bundle.py",
+})
+
 
 def _script_fingerprint(script_dir: Path) -> str:
     digest = hashlib.sha256()
     for path in sorted(script_dir.glob("uatool*.py"), key=lambda item: item.name.lower()):
+        if path.name in NON_DERIVED_SCRIPTS:
+            continue
         digest.update(path.name.encode("utf-8"))
         digest.update(b"\0")
         with path.open("rb") as handle:

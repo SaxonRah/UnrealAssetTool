@@ -102,6 +102,21 @@ class SystemsGraphSmokeTest(unittest.TestCase):
             "raw_value": "",
             "truncated": False,
         }]
+        # Systems schema 2 always emits one project Gameplay Tags settings row,
+        # even when the test project has no explicit dictionary sources/tags.
+        rows_by_file["gameplay_tag_settings.jsonl"] = [{
+            "settings_path": "/Script/GameplayTags.Default__GameplayTagsSettings",
+            "class_path": "/Script/GameplayTags.GameplayTagsSettings",
+            "config_file_name": "",
+            "import_tags_from_config": "False",
+            "warn_on_invalid_tags": "True",
+            "fast_replication": "False",
+            "invalid_tag_characters": "",
+            "gameplay_tag_table_list": "",
+            "restricted_config_files": "",
+            "num_bits_for_container_size": 6,
+            "net_index_first_bit_segment": 16,
+        }]
         for filename, rows in rows_by_file.items():
             write_jsonl(self.output / filename, rows)
         counts = {
@@ -109,7 +124,7 @@ class SystemsGraphSmokeTest(unittest.TestCase):
             for name in systems.JSONL_FILES
         }
         (self.output / "systems_manifest.json").write_text(json.dumps({
-            "schema_version": 1,
+            "schema_version": systems.SYSTEMS_SCHEMA_VERSION,
             "pass": "UnrealAssetToolSystems",
             "success": True,
             "error": "",
@@ -143,6 +158,7 @@ class SystemsGraphSmokeTest(unittest.TestCase):
             systems.load_database(conn, self.output, read_rows)
             self.assertEqual(conn.execute("SELECT count(*) FROM systems_assets").fetchone()[0], 3)
             self.assertEqual(conn.execute("SELECT count(*) FROM input_mappings").fetchone()[0], 1)
+            self.assertEqual(conn.execute("SELECT count(*) FROM gameplay_tag_settings").fetchone()[0], 1)
         finally:
             conn.close()
 

@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
-"""Canonicalize schema-13 typed graph roots and rebuild bounded neighborhoods.
+"""Canonicalize typed graph roots and add schema-2 gameplay-data topology.
 
 The universal Asset Registry layer may initially type an asset differently from a
 later first-class specialist stream. This finalizer uses those specialist streams
 as the authority for root typing, folds duplicate edge identities after that
 canonicalization, and rebuilds neighborhoods without changing evidence.
+
+Systems schema 2 also introduces normalized authored structures that are not
+UObjects (DataTable rows, CurveTable rows, Gameplay Tag sources/redirects and
+Primary Asset IDs). They are added here as typed semantic nodes before canonical
+root folding. Scalar table fields and individual curve keys remain queryable raw
+facts rather than graph nodes so bounded neighborhoods retain useful structure.
 """
 from __future__ import annotations
 
@@ -15,6 +21,22 @@ import json
 import uatool_project_graph as graph
 
 
+# Systems schema 2 adds dedicated normalized internals for ordinary DataTables
+# and CurveTables. Composite tables expose a useful resolved row view, but their
+# authored composition still relies primarily on reflected parent-table state,
+# so they remain depth-pending. Arbitrary PrimaryDataAsset subclasses receive a
+# stable PrimaryAssetId plus exact reflected state/references, but no guessed
+# subclass-specific semantics.
+SCHEMA2_SYSTEMS_KIND_COVERAGE = {
+    "data_table": "first_class",
+    "curve_table": "first_class",
+    "composite_data_table": "first_class_depth_pending",
+    "composite_curve_table": "first_class_depth_pending",
+    "primary_data_asset": "first_class_depth_pending",
+}
+graph.SYSTEMS_KIND_COVERAGE.update(SCHEMA2_SYSTEMS_KIND_COVERAGE)
+
+
 def _edge_id(source_kind: str, source: str, relation: str, target_kind: str, target: str) -> str:
     basis = "\x1f".join((source_kind, source, relation, target_kind, target))
     return "pedge:" + hashlib.sha1(basis.encode("utf-8")).hexdigest()[:24]
@@ -22,6 +44,11 @@ def _edge_id(source_kind: str, source: str, relation: str, target_kind: str, tar
 
 def _node_id(kind: str, path: str) -> str:
     return "pnode:" + hashlib.sha1(f"{kind}\x1f{path}".encode("utf-8")).hexdigest()[:24]
+
+
+def _package(path: str) -> str:
+    value = str(path or "")
+    return value.split(".", 1)[0] if value.startswith("/") else ""
 
 
 def _bp_kind(row: dict) -> str:
@@ -61,6 +88,9 @@ def _canonical_roots(output, rows) -> dict[str, str]:
         for row in rows(output / filename):
             add(row.get(path_key), fixed_kind or row.get(kind_key, "asset"))
 
+    for row in rows(output / "gameplay_tag_settings.jsonl"):
+        add(row.get("settings_path"), "gameplay_tag_settings")
+
     for row in rows(output / "worlds.jsonl"):
         add(row.get("world_path"), "world")
     return roots
@@ -94,7 +124,324 @@ def _best_path_node(nodes_by_path: dict[str, list[dict]], path: str) -> dict:
     )
 
 
+def _schema2_gameplay_extension(output, rows, nodes: list[dict], edges: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Add exact schema-2 gameplay structure without inventing family semantics."""
+    extended_nodes = [dict(node) for node in nodes]
+    extended_edges = [dict(edge) for edge in edges]
+    node_keys = {
+        (str(node.get("node_kind", "")), str(node.get("path", "")))
+        for node in extended_nodes
+    }
+
+    def add_node(
+        path: str,
+        kind: str,
+        coverage: str,
+        *,
+        class_path: str = "",
+        package_name: str = "",
+        family: str = "gameplay",
+        root: bool = False,
+        replace: bool = False,
+    ) -> None:
+        path = str(path or "")
+        kind = str(kind or "")
+        if not path.strip() or not kind:
+            return
+        key = (kind, path)
+        if key in node_keys and not replace:
+            return
+        if replace:
+            extended_nodes[:] = [
+                node for node in extended_nodes
+                if (str(node.get("node_kind", "")), str(node.get("path", ""))) != key
+            ]
+        extended_nodes.append({
+            "node_id": _node_id(kind, path),
+            "node_kind": kind,
+            "path": path,
+            "coverage": coverage,
+            "class_path": str(class_path or ""),
+            "package_name": str(package_name or _package(path)),
+            "family": str(family or "gameplay"),
+            "root": bool(root),
+        })
+        node_keys.add(key)
+
+    def add_edge(
+        source_kind: str,
+        source: str,
+        relation: str,
+        target_kind: str,
+        target: str,
+        *,
+        quality: str = "exact_semantic",
+        evidence: dict,
+    ) -> None:
+        source = str(source or "")
+        target = str(target or "")
+        if not source.strip() or not target.strip() or not relation or source == target:
+            return
+        value = dict(evidence)
+        value.setdefault("quality", quality)
+        extended_edges.append({
+            "edge_id": _edge_id(source_kind, source, relation, target_kind, target),
+            "source_kind": source_kind,
+            "source": source,
+            "relation": relation,
+            "target_kind": target_kind,
+            "target": target,
+            "source_coverage": "external_or_excluded",
+            "target_coverage": "external_or_excluded",
+            "edge_quality": quality,
+            "evidence_count": 1,
+            "evidence": [value],
+        })
+
+    # Promote schema-2 specialist roots to their explicit truthful coverage. The
+    # graph module's policy is updated above before derive() runs; replacing here
+    # also keeps direct finalize() callers deterministic.
+    for row in rows(output / "systems_assets.jsonl"):
+        kind = str(row.get("systems_kind", ""))
+        if kind not in SCHEMA2_SYSTEMS_KIND_COVERAGE:
+            continue
+        add_node(
+            str(row.get("systems_path", "")),
+            kind,
+            SCHEMA2_SYSTEMS_KIND_COVERAGE[kind],
+            class_path=str(row.get("class_path", "")),
+            package_name=str(row.get("package_name", "")),
+            root=True,
+            replace=True,
+        )
+
+    for row in rows(output / "data_table_rows.jsonl"):
+        table = str(row.get("table_path", ""))
+        row_path = str(row.get("row_path", ""))
+        add_node(
+            row_path,
+            "data_table_row",
+            "first_class",
+            class_path=str(row.get("row_struct", "")),
+            package_name=_package(table),
+            replace=True,
+        )
+        add_edge(
+            str(next((n.get("node_kind") for n in extended_nodes if n.get("path") == table and n.get("root")), "data_table")),
+            table,
+            "contains_data_table_row",
+            "data_table_row",
+            row_path,
+            evidence={
+                "stream": "data_table_rows.jsonl",
+                "kind": "canonical_structure",
+                "row_index": int(row.get("row_index", 0)),
+                "row_name": str(row.get("row_name", "")),
+            },
+        )
+
+    for row in rows(output / "curve_table_rows.jsonl"):
+        table = str(row.get("table_path", ""))
+        row_path = str(row.get("row_path", ""))
+        add_node(
+            row_path,
+            "curve_table_row",
+            "first_class",
+            package_name=_package(table),
+            replace=True,
+        )
+        add_edge(
+            str(next((n.get("node_kind") for n in extended_nodes if n.get("path") == table and n.get("root")), "curve_table")),
+            table,
+            "contains_curve_table_row",
+            "curve_table_row",
+            row_path,
+            evidence={
+                "stream": "curve_table_rows.jsonl",
+                "kind": "canonical_structure",
+                "row_index": int(row.get("row_index", 0)),
+                "row_name": str(row.get("row_name", "")),
+                "curve_mode": str(row.get("curve_mode", "")),
+                "key_count": int(row.get("key_count", 0)),
+            },
+        )
+
+    for row in rows(output / "primary_data_assets.jsonl"):
+        asset = str(row.get("asset_path", ""))
+        primary_id = str(row.get("primary_asset_id", ""))
+        if not primary_id or not bool(row.get("primary_asset_id_valid", False)):
+            continue
+        id_path = "primary_asset_id:" + primary_id
+        add_node(id_path, "primary_asset_id", "first_class", family="gameplay")
+        add_edge(
+            str(row.get("asset_kind", "primary_data_asset")),
+            asset,
+            "declares_primary_asset_id",
+            "primary_asset_id",
+            id_path,
+            evidence={
+                "stream": "primary_data_assets.jsonl",
+                "kind": "canonical_field",
+                "primary_asset_type": str(row.get("primary_asset_type", "")),
+                "primary_asset_name": str(row.get("primary_asset_name", "")),
+            },
+        )
+
+    settings_rows = list(rows(output / "gameplay_tag_settings.jsonl"))
+    settings_path = str(settings_rows[0].get("settings_path", "")) if settings_rows else ""
+    if settings_path:
+        add_node(
+            settings_path,
+            "gameplay_tag_settings",
+            "first_class",
+            class_path=str(settings_rows[0].get("class_path", "")),
+            family="gameplay_tags",
+            root=True,
+            replace=True,
+        )
+
+    source_paths: dict[str, str] = {}
+    for row in rows(output / "gameplay_tag_sources.jsonl"):
+        source_name = str(row.get("source_name", ""))
+        source_path = "gameplay_tag_source:" + source_name
+        source_paths[source_name] = source_path
+        add_node(source_path, "gameplay_tag_source", "first_class", family="gameplay_tags")
+        if settings_path:
+            add_edge(
+                "gameplay_tag_settings",
+                settings_path,
+                "defines_gameplay_tag_source",
+                "gameplay_tag_source",
+                source_path,
+                evidence={
+                    "stream": "gameplay_tag_sources.jsonl",
+                    "kind": "canonical_structure",
+                    "source_index": int(row.get("source_index", 0)),
+                    "source_type": str(row.get("source_type", "")),
+                    "config_file": str(row.get("config_file", "")),
+                },
+            )
+
+    dictionary_tags: set[str] = set()
+    dictionary_rows = list(rows(output / "gameplay_tag_dictionary.jsonl"))
+    for row in dictionary_rows:
+        tag = str(row.get("tag", ""))
+        if not tag:
+            continue
+        dictionary_tags.add(tag)
+        tag_path = "gameplay_tag:" + tag
+        add_node(tag_path, "gameplay_tag", "first_class", family="gameplay_tags")
+
+    for row in dictionary_rows:
+        tag = str(row.get("tag", ""))
+        if not tag:
+            continue
+        tag_path = "gameplay_tag:" + tag
+        for source_name in row.get("sources", []) if isinstance(row.get("sources", []), list) else []:
+            source_name = str(source_name)
+            source_path = source_paths.get(source_name)
+            if source_path:
+                add_edge(
+                    "gameplay_tag_source",
+                    source_path,
+                    "declares_gameplay_tag",
+                    "gameplay_tag",
+                    tag_path,
+                    evidence={
+                        "stream": "gameplay_tag_dictionary.jsonl",
+                        "kind": "canonical_source_membership",
+                        "tag_index": int(row.get("tag_index", 0)),
+                    },
+                )
+        parent = str(row.get("parent_tag", ""))
+        if parent:
+            parent_path = "gameplay_tag:" + parent
+            add_node(
+                parent_path,
+                "gameplay_tag",
+                "first_class" if parent in dictionary_tags else "partial",
+                family="gameplay_tags",
+            )
+            add_edge(
+                "gameplay_tag",
+                tag_path,
+                "parent_gameplay_tag",
+                "gameplay_tag",
+                parent_path,
+                evidence={
+                    "stream": "gameplay_tag_dictionary.jsonl",
+                    "kind": "canonical_hierarchy",
+                    "tag_index": int(row.get("tag_index", 0)),
+                },
+            )
+
+    for row in rows(output / "gameplay_tag_redirects.jsonl"):
+        index = int(row.get("redirect_index", 0))
+        source_name = str(row.get("source_name", ""))
+        old_tag = str(row.get("old_tag", ""))
+        new_tag = str(row.get("new_tag", ""))
+        redirect_path = f"gameplay_tag_redirect:{source_name}:{index}"
+        add_node(redirect_path, "gameplay_tag_redirect", "first_class", family="gameplay_tags")
+        source_path = source_paths.get(source_name)
+        if source_path:
+            add_edge(
+                "gameplay_tag_source",
+                source_path,
+                "contains_gameplay_tag_redirect",
+                "gameplay_tag_redirect",
+                redirect_path,
+                evidence={
+                    "stream": "gameplay_tag_redirects.jsonl",
+                    "kind": "canonical_structure",
+                    "redirect_index": index,
+                },
+            )
+        if old_tag:
+            old_path = "gameplay_tag:" + old_tag
+            add_node(
+                old_path,
+                "gameplay_tag",
+                "first_class" if old_tag in dictionary_tags else "partial",
+                family="gameplay_tags",
+            )
+            add_edge(
+                "gameplay_tag_redirect",
+                redirect_path,
+                "redirects_from_gameplay_tag",
+                "gameplay_tag",
+                old_path,
+                evidence={
+                    "stream": "gameplay_tag_redirects.jsonl",
+                    "kind": "canonical_field",
+                    "redirect_index": index,
+                },
+            )
+        if new_tag:
+            new_path = "gameplay_tag:" + new_tag
+            add_node(
+                new_path,
+                "gameplay_tag",
+                "first_class" if new_tag in dictionary_tags else "partial",
+                family="gameplay_tags",
+            )
+            add_edge(
+                "gameplay_tag_redirect",
+                redirect_path,
+                "redirects_to_gameplay_tag",
+                "gameplay_tag",
+                new_path,
+                evidence={
+                    "stream": "gameplay_tag_redirects.jsonl",
+                    "kind": "canonical_field",
+                    "redirect_index": index,
+                },
+            )
+
+    return extended_nodes, extended_edges
+
+
 def finalize(output, rows, nodes: list[dict], edges: list[dict]):
+    nodes, edges = _schema2_gameplay_extension(output, rows, nodes, edges)
     canonical_roots = _canonical_roots(output, rows)
     nodes_by_key = {
         (str(n.get("node_kind", "")), str(n.get("path", ""))): dict(n)

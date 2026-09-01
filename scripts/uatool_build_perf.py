@@ -26,6 +26,24 @@ from pathlib import Path
 import uatool_bundle_perf as bundle_perf
 import uatool_sqlite_perf as sqlite_perf
 import uatool_validation_perf as validation_perf
+import uatool_blueprint_enums as blueprint_enums
+import uatool_blueprint_enum_edges as blueprint_enum_edges
+import uatool_chooser_derived as chooser_derived
+import uatool_chooser_graph as chooser_graph
+import uatool_mover_report as mover_report
+import uatool_gameplay_camera_report as gameplay_camera_report
+import uatool_gameplay_camera_selection_report as gameplay_camera_selection_report
+import uatool_gameplay_camera_director_report as gameplay_camera_director_report
+import uatool_gameplay_camera_behavior as gameplay_camera_behavior
+import uatool_gameplay_camera_behavior_graph as gameplay_camera_behavior_graph
+import uatool_mover_behavior as mover_behavior
+import uatool_systems as systems
+import uatool_systems_mover as systems_mover
+import uatool_systems_gameplay_cameras as systems_gameplay_cameras
+import uatool_project_graph as project_graph
+import uatool_mover_graph as mover_graph
+import uatool_gameplay_camera_graph as gameplay_camera_graph
+import uatool_runtime as runtime
 
 CACHE_DIR_NAME = "UnrealAssetToolBuildCache"
 CACHE_DIRS = ("Binaries", "Intermediate")
@@ -271,8 +289,24 @@ def install(core) -> None:
         core, project, editor, build_script_arg, active_plugin_root
     )
 
-    # These are orthogonal performance policies but are installed here before
-    # the composition root captures core globals, keeping one canonical CLI.
+    # These policies/installers must run before the composition root captures
+    # core globals. Blueprint enum support is installed here after canonical
+    # cleanup has already installed logical compact-pin expansion.
     bundle_perf.install(core)
     sqlite_perf.install(core)
     validation_perf.install()
+    systems_mover.install(systems)
+    systems_gameplay_cameras.install(systems)
+    mover_behavior.install(core, runtime)
+    mover_graph.install(project_graph)
+    gameplay_camera_graph.install(project_graph)
+    blueprint_enums.install(core, runtime)
+    blueprint_enum_edges.install(core)
+    chooser_derived.install(core, runtime)
+    gameplay_camera_behavior.install(core, runtime)
+    chooser_graph.install(project_graph)
+    gameplay_camera_behavior_graph.install(project_graph)
+    mover_report.install(runtime)
+    gameplay_camera_report.install(runtime)
+    gameplay_camera_selection_report.install(runtime)
+    gameplay_camera_director_report.install(runtime)

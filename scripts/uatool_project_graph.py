@@ -526,8 +526,8 @@ def validation_error(output, rows) -> str | None:
                 return f"project neighborhood depth invalid: {root}"
             if str(hop.get("edge_id","")) not in edge_ids:
                 return f"project neighborhood references unknown edge: {root}"
-            if hop.get("edge_quality") not in QUALITY_RANK or not hop.get("source_coverage") or not hop.get("target_coverage"):
-                return f"project neighborhood hop lacks quality/coverage: {root}"
+            if str(hop.get("direction", "")) not in {"in", "out"}:
+                return f"project neighborhood direction invalid: {root}"
     expected_roots={str(n.get("path","")) for n in nodes if n.get("root") and any(e.get("source")==n.get("path") or e.get("target")==n.get("path") for e in edges)}
     if seen_roots != expected_roots:
         return "project neighborhoods do not exactly cover connected graph roots"

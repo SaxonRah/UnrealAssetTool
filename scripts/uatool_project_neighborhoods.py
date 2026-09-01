@@ -29,9 +29,9 @@ def rebuild(
 ):
     """Return deterministic bounded neighborhoods over an existing project graph.
 
-    With ``compact=True`` the traversal emits schema-14 hop references directly.
-    This avoids materializing the old expanded source/target/evidence payload and
-    rendered text only to discard it immediately afterward.
+    With ``compact=True`` the traversal emits schema-15 hop references directly.
+    Each hop stores only traversal depth/direction and the authoritative edge ID;
+    edge semantics, quality, coverage and provenance are joined on demand.
     """
 
     adjacency = collections.defaultdict(list)
@@ -93,10 +93,6 @@ def rebuild(
                         "depth": depth + 1,
                         "direction": direction,
                         "edge_id": edge_id,
-                        "edge_quality": edge["edge_quality"],
-                        "source_coverage": edge["source_coverage"],
-                        "target_coverage": edge["target_coverage"],
-                        "evidence_count": edge["evidence_count"],
                     })
                 else:
                     hops.append({
