@@ -355,6 +355,20 @@ static bool RunSystemsScan(FString& OutError)
         return false;
     }
 
+    // All schema streams must be physically finalized before the success
+    // manifest is published. In particular, the schema-3/4/5 writer groups are
+    // static globals and otherwise retain FArchive file-writer buffers until
+    // module shutdown. City Sample proved those buffers flush in 4096-byte
+    // chunks, leaving truncated JSONL tails (and even zero-byte small streams)
+    // when systems-only mode exits immediately. Replacing every writer group
+    // here destroys the active FArchive instances synchronously, before any
+    // success manifest or RequestExit can be observed.
+    Writers = FWriters();
+    GMoverWriters = FMoverWriters();
+    GGameplayCameraWriters = FGameplayCameraWriters();
+    GMassZoneGraphWriters = FMassZoneGraphWriters();
+    UE_LOG(LogTemp, Display, TEXT("UnrealAssetToolSystems: finalized all JSONL writers before manifest"));
+
     if (!SaveSystemsManifest(OutputDir, Counts, true, FString()))
     {
         OutError = TEXT("could not write systems_manifest.json");
