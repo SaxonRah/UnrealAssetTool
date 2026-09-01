@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import argparse
 import collections
+import contextlib
+import io
 import json
 from pathlib import Path
 import sys
@@ -245,7 +247,7 @@ def _print_counter(title: str, counter: collections.Counter, limit: int = 100) -
         print(f"  … {len(counter) - limit} more")
 
 
-def print_report(report: dict, *, row_limit: int = 30) -> None:
+def _print_report_impl(report: dict, *, row_limit: int = 30) -> None:
     print("=== ZONEGRAPH + MASS EVIDENCE REPORT ===")
     print(report.get("output", ""))
     print("diagnostic_only=True semantic_promotion=False")
@@ -291,6 +293,32 @@ def print_report(report: dict, *, row_limit: int = 30) -> None:
     print("========================================")
 
 
+def render_report(report: dict, *, row_limit: int = 30) -> str:
+    """Render the report independently of the process console encoding."""
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        _print_report_impl(report, row_limit=row_limit)
+    return buffer.getvalue()
+
+
+def _write_console_safe(text: str, stream=None) -> None:
+    """Write arbitrary report text without failing on legacy Windows encodings."""
+    stream = sys.stdout if stream is None else stream
+    try:
+        stream.write(text)
+    except UnicodeEncodeError:
+        encoding = getattr(stream, "encoding", None) or "utf-8"
+        escaped = text.encode(encoding, errors="backslashreplace").decode(encoding)
+        stream.write(escaped)
+    flush = getattr(stream, "flush", None)
+    if callable(flush):
+        flush()
+
+
+def print_report(report: dict, *, row_limit: int = 30, stream=None) -> None:
+    _write_console_safe(render_report(report, row_limit=row_limit), stream=stream)
+
+
 def install(runtime_module) -> None:
     input_validation.install(systems)
     if getattr(runtime_module, "_zonegraph_mass_evidence_installed", False):
@@ -318,6 +346,11 @@ def install(runtime_module) -> None:
                 action="store_true",
                 help="also scan source_chunks.jsonl for City Sample/custom plugin evidence",
             )
+            parser.add_argument(
+                "--report",
+                type=Path,
+                help="also write the complete report as UTF-8 text",
+            )
             args = parser.parse_args(sys.argv[2:])
             if args.limit < 1:
                 parser.error("--limit must be >= 1")
@@ -328,7 +361,12 @@ def install(runtime_module) -> None:
                 include_source=args.include_source,
                 example_limit=args.limit,
             )
-            print_report(report, row_limit=args.limit)
+            rendered = render_report(report, row_limit=args.limit)
+            if args.report is not None:
+                report_path = args.report.expanduser().resolve()
+                report_path.parent.mkdir(parents=True, exist_ok=True)
+                report_path.write_text(rendered, encoding="utf-8", newline="\n")
+            _write_console_safe(rendered)
             return 0
         return original_main()
 
