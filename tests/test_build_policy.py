@@ -59,6 +59,52 @@ class BuildPolicyRegressionTest(unittest.TestCase):
         os.utime(game_cpp, (now, now))
         self.assertFalse(build_perf._module_only_is_safe(core, self.project, self.editor, active))
 
+    def test_plugin_discovery_stops_at_plugin_roots_and_prunes_payloads(self) -> None:
+        plugins = self.root / "Plugins"
+
+        ordinary = plugins / "Category" / "Ordinary"
+        ordinary.mkdir(parents=True)
+        (ordinary / "Ordinary.uplugin").write_text("{}\n", encoding="utf-8")
+        # A descriptor hidden inside an existing plugin's Content tree must not
+        # be treated as a separately discoverable project plugin.
+        fake_nested = ordinary / "Content" / "Huge" / "UnrealAssetTool.uplugin"
+        fake_nested.parent.mkdir(parents=True)
+        fake_nested.write_text("{}\n", encoding="utf-8")
+
+        actual = plugins / "Tools" / "UnrealAssetTool"
+        actual.mkdir(parents=True)
+        (actual / "UnrealAssetTool.uplugin").write_text("{}\n", encoding="utf-8")
+
+        all_roots = build_perf._discover_plugin_roots(plugins)
+        self.assertEqual(set(all_roots), {ordinary.resolve(), actual.resolve()})
+
+        matching = build_perf._discover_plugin_roots(plugins, "UnrealAssetTool.uplugin")
+        self.assertEqual(matching, [actual.resolve()])
+
+    def test_native_freshness_ignores_plugin_content_but_checks_source(self) -> None:
+        plugin = self.root / "Plugins" / "Category" / "OtherPlugin"
+        plugin.mkdir(parents=True)
+        descriptor = plugin / "OtherPlugin.uplugin"
+        descriptor.write_text("{}\n", encoding="utf-8")
+        source = plugin / "Source" / "OtherPlugin" / "Private" / "Other.cpp"
+        source.parent.mkdir(parents=True)
+        source.write_text("// source\n", encoding="utf-8")
+        payload = plugin / "Content" / "Generated" / "ShouldNotCount.cpp"
+        payload.parent.mkdir(parents=True)
+        payload.write_text("// not a native build input\n", encoding="utf-8")
+
+        now = time.time()
+        os.utime(descriptor, (now - 20, now - 20))
+        os.utime(source, (now - 20, now - 20))
+        os.utime(payload, (now, now))
+
+        active = self.root / "Plugins" / "UnrealAssetTool"
+        core = self._core_for_manifest()
+        self.assertTrue(build_perf._module_only_is_safe(core, self.project, self.editor, active))
+
+        os.utime(source, (now, now))
+        self.assertFalse(build_perf._module_only_is_safe(core, self.project, self.editor, active))
+
     def test_cache_enable_flag_and_round_trip(self) -> None:
         cache_root = self.root / "Saved" / build_perf.CACHE_DIR_NAME
         stage_root = self.root / "Plugins" / "UnrealAssetTool"
