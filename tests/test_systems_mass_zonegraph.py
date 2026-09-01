@@ -227,7 +227,7 @@ class SystemsMassZoneGraphTests(unittest.TestCase):
         self.assertTrue(fake._mass_zonegraph_schema_installed)
 
     def test_public_composition_installs_schema5(self):
-        import uatool_build_perf  # noqa: F401
+        import uatool  # noqa: F401
         import uatool_systems
 
         self.assertEqual(uatool_systems.SYSTEMS_SCHEMA_VERSION, 5)
