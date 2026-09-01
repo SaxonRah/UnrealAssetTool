@@ -36,6 +36,7 @@ import uatool_gameplay_camera_selection_report as gameplay_camera_selection_repo
 import uatool_gameplay_camera_director_report as gameplay_camera_director_report
 import uatool_gameplay_camera_behavior as gameplay_camera_behavior
 import uatool_gameplay_camera_behavior_graph as gameplay_camera_behavior_graph
+import uatool_zonegraph_mass_evidence as zonegraph_mass_evidence
 import uatool_mover_behavior as mover_behavior
 import uatool_systems as systems
 import uatool_systems_mover as systems_mover
@@ -310,3 +311,4 @@ def install(core) -> None:
     gameplay_camera_report.install(runtime)
     gameplay_camera_selection_report.install(runtime)
     gameplay_camera_director_report.install(runtime)
+    zonegraph_mass_evidence.install(runtime)
