@@ -8,6 +8,8 @@ from pathlib import Path
 
 import uatool_systems_capture as systems_capture
 import uatool_zonegraph_world_capture as zonegraph_world_capture
+import uatool_systems_schema5_accept as systems_schema5_accept
+import uatool_mass_zonegraph_graph as mass_zonegraph_graph
 
 MASS_ZONEGRAPH_FILES = (
     "mass_entity_configs.jsonl",
@@ -56,16 +58,18 @@ CREATE TABLE mass_agent_components(
 CREATE INDEX mass_agent_components_blueprint_idx ON mass_agent_components(blueprint_path,component_name);
 CREATE INDEX mass_agent_components_config_idx ON mass_agent_components(entity_config_parent_path);
 CREATE TABLE zonegraph_shapes(
- shape_path TEXT PRIMARY KEY,package_name TEXT NOT NULL,class_path TEXT NOT NULL,
+ shape_path TEXT PRIMARY KEY,world_path TEXT NOT NULL,package_name TEXT NOT NULL,class_path TEXT NOT NULL,
  component_path TEXT NOT NULL,component_class TEXT NOT NULL,point_count INTEGER NOT NULL,
  shape_type TEXT NOT NULL,lane_profile TEXT NOT NULL,tags TEXT NOT NULL,reverse_lane_profile TEXT NOT NULL,
- polygon_routing_type TEXT NOT NULL,relative_location TEXT NOT NULL,relative_rotation TEXT NOT NULL,json TEXT NOT NULL);
+ polygon_routing_type TEXT NOT NULL,relative_location TEXT NOT NULL,relative_rotation TEXT NOT NULL,
+ per_point_lane_profiles TEXT NOT NULL,json TEXT NOT NULL);
 CREATE INDEX zonegraph_shapes_component_idx ON zonegraph_shapes(component_class,component_path);
+CREATE INDEX zonegraph_shapes_world_idx ON zonegraph_shapes(world_path,shape_path);
 CREATE TABLE zonegraph_shape_points(
- shape_path TEXT NOT NULL,point_index INTEGER NOT NULL,position TEXT NOT NULL,rotation TEXT NOT NULL,
- tangent_length TEXT NOT NULL,point_type TEXT NOT NULL,lane_profile TEXT NOT NULL,
- lane_connection_restrictions TEXT NOT NULL,raw_value TEXT NOT NULL,truncated INTEGER NOT NULL,json TEXT NOT NULL,
- PRIMARY KEY(shape_path,point_index));
+ shape_path TEXT NOT NULL,world_path TEXT NOT NULL,point_index INTEGER NOT NULL,position TEXT NOT NULL,rotation TEXT NOT NULL,
+ tangent_length TEXT NOT NULL,point_type TEXT NOT NULL,lane_profile TEXT NOT NULL,reverse_lane_profile TEXT NOT NULL,
+ lane_connection_restrictions TEXT NOT NULL,inner_turn_radius TEXT NOT NULL,raw_value TEXT NOT NULL,
+ truncated INTEGER NOT NULL,json TEXT NOT NULL,PRIMARY KEY(shape_path,point_index));
 CREATE INDEX zonegraph_shape_points_shape_idx ON zonegraph_shape_points(shape_path,point_index);
 """
 
@@ -212,12 +216,16 @@ def validation_error(output: Path, rows=None) -> str | None:
     for row in points:
         if str(row.get("shape_path", "")) not in shape_set:
             return f"ZoneGraph point references unknown shape: {row.get('shape_path')}"
+        if bool(row.get("truncated", False)):
+            return f"ZoneGraph point raw value is truncated: {row.get('shape_path')}[{row.get('point_index')}]"
     for shape in shapes:
         path = str(shape.get("shape_path", "") or "")
         if "ZoneShape" not in str(shape.get("class_path", "") or ""):
             return f"ZoneGraph shape has unexpected class: {path} -> {shape.get('class_path')}"
         if "ZoneShapeComponent" not in str(shape.get("component_class", "") or ""):
             return f"ZoneGraph shape has unexpected component class: {path} -> {shape.get('component_class')}"
+        if bool(shape.get("generated_lane_topology", False)):
+            return f"ZoneGraph shape incorrectly claims generated lane topology: {path}"
         if int(shape.get("point_count", 0) or 0) != point_counts[path]:
             return f"ZoneGraph shape point_count mismatch: {path}"
 
@@ -263,17 +271,19 @@ def load_database(conn, output: Path, rows=None) -> None:
             r.get("entity_config_parent_class", ""), r.get("config_guid", ""),
             r.get("raw_entity_config", ""), int(bool(r.get("truncated", False))), _j(r)))
     for r in rows(output / "zonegraph_shapes.jsonl"):
-        conn.execute("INSERT OR REPLACE INTO zonegraph_shapes VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
-            r.get("shape_path", ""), r.get("package_name", ""), r.get("class_path", ""),
+        conn.execute("INSERT OR REPLACE INTO zonegraph_shapes VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
+            r.get("shape_path", ""), r.get("world_path", ""), r.get("package_name", ""), r.get("class_path", ""),
             r.get("component_path", ""), r.get("component_class", ""), int(r.get("point_count", 0) or 0),
             r.get("shape_type", ""), r.get("lane_profile", ""), r.get("tags", ""),
             r.get("reverse_lane_profile", ""), r.get("polygon_routing_type", ""),
-            r.get("relative_location", ""), r.get("relative_rotation", ""), _j(r)))
+            r.get("relative_location", ""), r.get("relative_rotation", ""),
+            r.get("per_point_lane_profiles", ""), _j(r)))
     for r in rows(output / "zonegraph_shape_points.jsonl"):
-        conn.execute("INSERT OR REPLACE INTO zonegraph_shape_points VALUES(?,?,?,?,?,?,?,?,?,?,?)", (
-            r.get("shape_path", ""), int(r.get("point_index", 0) or 0), r.get("position", ""),
-            r.get("rotation", ""), r.get("tangent_length", ""), r.get("point_type", ""),
-            r.get("lane_profile", ""), r.get("lane_connection_restrictions", ""),
+        conn.execute("INSERT OR REPLACE INTO zonegraph_shape_points VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
+            r.get("shape_path", ""), r.get("world_path", ""), int(r.get("point_index", 0) or 0),
+            r.get("position", ""), r.get("rotation", ""), r.get("tangent_length", ""), r.get("point_type", ""),
+            r.get("lane_profile", ""), r.get("reverse_lane_profile", ""),
+            r.get("lane_connection_restrictions", ""), r.get("inner_turn_radius", ""),
             r.get("raw_value", ""), int(bool(r.get("truncated", False))), _j(r)))
 
 
@@ -332,17 +342,17 @@ def query(conn, print_rows, pattern: str, limit: int) -> None:
 
     print("\n[ZoneGraph authored shapes / points]")
     print_rows(conn.execute(
-        """SELECT shape_path,point_count,shape_type,lane_profile,tags,polygon_routing_type
+        """SELECT world_path,shape_path,point_count,shape_type,lane_profile,tags,polygon_routing_type,per_point_lane_profiles
            FROM zonegraph_shapes
-           WHERE shape_path LIKE ? OR shape_type LIKE ? OR lane_profile LIKE ? OR tags LIKE ? LIMIT ?""",
-        (pattern, pattern, pattern, pattern, limit)),
-        ("shape_path", "point_count", "shape_type", "lane_profile", "tags", "polygon_routing_type"))
+           WHERE world_path LIKE ? OR shape_path LIKE ? OR shape_type LIKE ? OR lane_profile LIKE ? OR tags LIKE ? LIMIT ?""",
+        (pattern, pattern, pattern, pattern, pattern, limit)),
+        ("world_path", "shape_path", "point_count", "shape_type", "lane_profile", "tags", "polygon_routing_type", "per_point_lane_profiles"))
     print_rows(conn.execute(
-        """SELECT shape_path,point_index,position,rotation,tangent_length,point_type,lane_profile
+        """SELECT shape_path,point_index,position,rotation,tangent_length,point_type,lane_profile,reverse_lane_profile,lane_connection_restrictions,inner_turn_radius
            FROM zonegraph_shape_points
            WHERE shape_path LIKE ? OR position LIKE ? OR point_type LIKE ? OR lane_profile LIKE ? LIMIT ?""",
         (pattern, pattern, pattern, pattern, limit)),
-        ("shape_path", "point_index", "position", "rotation", "tangent_length", "point_type", "lane_profile"))
+        ("shape_path", "point_index", "position", "rotation", "tangent_length", "point_type", "lane_profile", "reverse_lane_profile", "lane_connection_restrictions", "inner_turn_radius"))
 
 
 def install(systems_module) -> None:
@@ -387,6 +397,9 @@ def install(systems_module) -> None:
     # importable and before runtime.main is captured by the user-facing CLI.
     import uatool_core as core_module
     import uatool_runtime as runtime_module
+    import uatool_project_graph as project_graph_module
 
     systems_capture.install(runtime_module, core_module, systems_module)
     zonegraph_world_capture.install(runtime_module, core_module, systems_module)
+    systems_schema5_accept.install(runtime_module, systems_module)
+    mass_zonegraph_graph.install(project_graph_module)
