@@ -6,6 +6,8 @@ import collections
 import json
 from pathlib import Path
 
+import uatool_systems_capture as systems_capture
+
 MASS_ZONEGRAPH_FILES = (
     "mass_entity_configs.jsonl",
     "mass_entity_traits.jsonl",
@@ -378,3 +380,11 @@ def install(systems_module) -> None:
     systems_module.load_database = load_database_wrapper
     systems_module.query = query_wrapper
     systems_module._mass_zonegraph_schema_installed = True
+
+    # Keep the public interface on the one canonical scripts/uatool.py launcher.
+    # build_perf calls this install() during composition, after core/runtime are
+    # importable and before runtime.main is captured by the user-facing CLI.
+    import uatool_core as core_module
+    import uatool_runtime as runtime_module
+
+    systems_capture.install(runtime_module, core_module, systems_module)
