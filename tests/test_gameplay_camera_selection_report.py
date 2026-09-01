@@ -42,6 +42,7 @@ class GameplayCameraSelectionReportTest(unittest.TestCase):
         self.rig = "/Game/Cameras/Rigs/CameraRig_Close.CameraRig_Close"
         self.asset = "/Game/Cameras/CameraAsset.CameraAsset"
         self.director = self.asset + ":BlueprintCameraDirector_0"
+        self.enum = "/Game/Cameras/E_CameraStyle.E_CameraStyle"
 
     def tearDown(self) -> None:
         self.temp.cleanup()
@@ -68,11 +69,21 @@ class GameplayCameraSelectionReportTest(unittest.TestCase):
             "column_count": 1,
             "context_count": 1,
         }])
+        raw_column = (
+            "/Script/Chooser.EnumColumn("
+            "InputValue=/Script/Chooser.EnumContextProperty(Binding=("
+            f"Enum=\"/Script/Engine.UserDefinedEnum'{self.enum}'\","
+            "PropertyBindingChain=(\"CameraStyle_GUID\"),ContextIndex=0,"
+            "IsBoundToRoot=False,DisplayName=\"CameraStyle\")),"
+            "DefaultRowValue=(ValueName=\"\",Comparison=MatchEqual,Value=0),"
+            "RowValues=((ValueName=\"E_CameraStyle::NewEnumerator2\",Value=2)),"
+            "bDisabled=False)"
+        )
         write_jsonl(self.output / "chooser_columns.jsonl", [{
             "asset_path": self.chooser,
             "index": 0,
             "struct_type": "/Script/Chooser.EnumColumn",
-            "raw_value": "(RowValues=(Aim),InputValue=CameraStyle)",
+            "raw_value": raw_column,
             "truncated": False,
         }])
         write_jsonl(self.output / "chooser_results.jsonl", [{
@@ -97,6 +108,17 @@ class GameplayCameraSelectionReportTest(unittest.TestCase):
             "reference_kind": "export_text_object",
             "target_path": self.rig,
             "target_class": "/Script/GameplayCameras.CameraRigAsset",
+        }])
+        write_jsonl(self.output / "blueprint_enum_entries.jsonl", [{
+            "enum_path": self.enum,
+            "enum_index": 2,
+            "numeric_value": 2,
+            "raw_name": "E_CameraStyle::NewEnumerator2",
+            "authored_name": "Close",
+            "display_name": "Close",
+            "tooltip": "",
+            "hidden": False,
+            "is_max": False,
         }])
         write_jsonl(self.output / "gameplay_camera_assets.jsonl", [{
             "camera_asset_path": self.asset,
@@ -138,6 +160,10 @@ class GameplayCameraSelectionReportTest(unittest.TestCase):
             report["result_refs"][(self.chooser, 0)][0]["target_path"],
             self.rig,
         )
+        self.assertEqual(len(report["chooser_decisions"]), 1)
+        decision = report["chooser_decisions"][0]
+        self.assertTrue(decision["fully_decoded"])
+        self.assertEqual(decision["condition_text"], "CameraStyle == Close")
 
         buffer = io.StringIO()
         with redirect_stdout(buffer):
@@ -146,7 +172,8 @@ class GameplayCameraSelectionReportTest(unittest.TestCase):
         self.assertIn("BP_Director", text)
         self.assertIn("CHT_CameraRig", text)
         self.assertIn("CameraRig_Close", text)
-        self.assertIn("RowValues=(Aim)", text)
+        self.assertIn("CameraStyle == Close", text)
+        self.assertIn("decoded=True", text)
 
 
 if __name__ == "__main__":
