@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import sys
 import tempfile
@@ -106,6 +107,79 @@ class ZoneGraphMassEvidenceTests(unittest.TestCase):
     def test_bare_english_mass_is_not_a_marker(self):
         row = {"text": "This object has a large physical mass."}
         self.assertEqual(evidence._markers_in_text(evidence._row_text(row)), ())
+
+    def test_console_output_survives_legacy_windows_encoding(self):
+        report = {
+            "output": "C:/CitySample/.uatool",
+            "include_source": True,
+            "stream_stats": {
+                "source_chunks.jsonl": {
+                    "exists": True,
+                    "total_rows": 1,
+                    "matched_rows": 1,
+                    "examples": [
+                        {
+                            "markers": ["zonegraph"],
+                            "row": {
+                                "path": "Source/Traffic.cpp",
+                                "text": "ZoneGraph control=\x9b and snowman=☃",
+                            },
+                        }
+                    ],
+                }
+            },
+            "marker_counts": {},
+            "class_values": {},
+            "property_values": {},
+            "path_values": {},
+            "matched_value_keys": {},
+            "relation_counts": {},
+        }
+
+        raw = io.BytesIO()
+        stream = io.TextIOWrapper(raw, encoding="cp1252", errors="strict")
+        evidence.print_report(report, row_limit=5, stream=stream)
+        stream.flush()
+        output = raw.getvalue().decode("cp1252")
+
+        self.assertIn("ZONEGRAPH + MASS EVIDENCE REPORT", output)
+        self.assertIn("ZoneGraph", output)
+        self.assertIn("\\x9b", output)
+        self.assertIn("\\u2603", output)
+
+    def test_rendered_report_can_be_written_as_utf8_losslessly(self):
+        report = {
+            "output": "C:/CitySample/.uatool",
+            "include_source": True,
+            "stream_stats": {
+                "source_chunks.jsonl": {
+                    "exists": True,
+                    "total_rows": 1,
+                    "matched_rows": 1,
+                    "examples": [
+                        {
+                            "markers": ["massentity"],
+                            "row": {"text": "MassEntity control=\x9b snowman=☃"},
+                        }
+                    ],
+                }
+            },
+            "marker_counts": {},
+            "class_values": {},
+            "property_values": {},
+            "path_values": {},
+            "matched_value_keys": {},
+            "relation_counts": {},
+        }
+
+        rendered = evidence.render_report(report, row_limit=5)
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "report.txt"
+            path.write_text(rendered, encoding="utf-8", newline="\n")
+            round_trip = path.read_text(encoding="utf-8")
+
+        self.assertIn("\x9b", round_trip)
+        self.assertIn("☃", round_trip)
 
 
 if __name__ == "__main__":
