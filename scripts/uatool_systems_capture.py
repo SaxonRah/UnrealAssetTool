@@ -161,11 +161,20 @@ def _capture_cli(runtime_module, core_module, systems_module, argv: list[str]) -
     if not bool(manifest.get("success", False)):
         raise RuntimeError(f"isolated systems capture failed: {manifest.get('error', '')}")
 
+    # Preserve the raw native evidence before semantic/schema validation. If a
+    # validator catches a malformed or unexpected real-corpus row, this archive
+    # is still useful for diagnosis and avoids forcing another expensive capture
+    # merely to share the failing files.
+    _write_capture_archive(output, archive)
+    print(f"raw systems capture archive: {archive}")
+
     error = systems_module.validation_error(output)
     if error:
-        raise RuntimeError(f"isolated systems capture validation failed: {error}")
+        raise RuntimeError(
+            "isolated systems capture validation failed: "
+            f"{error}; raw archive preserved at {archive}"
+        )
 
-    _write_capture_archive(output, archive)
     _print_schema5_counts(output)
     print(f"systems capture archive: {archive}")
     print(f"systems capture total elapsed: {time.perf_counter() - overall_started:.2f}s")
