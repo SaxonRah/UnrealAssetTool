@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Read-only evidence report for ZoneGraph and Mass in an existing scan.
+"""Read-only evidence reports for ZoneGraph and Mass in an existing scan.
 
-This module is intentionally diagnostic.  It does not claim semantic ownership or
-promote relationships.  It streams broad keyword matches out of already-canonical
-and already-derived UnrealAssetTool rows so a real corpus can establish which UE
-5.8 classes/properties/references deserve first-class normalization.
+These commands are intentionally diagnostic. They do not claim semantic ownership
+or promote relationships. The broad report discovers relevant UE 5.8 evidence;
+the focused report narrows an existing corpus around serialization-critical Mass
+and ZoneGraph families before a first-class systems schema is designed.
 """
 from __future__ import annotations
 
@@ -105,6 +105,163 @@ PATH_KEYS = {
     "filename",
     "path",
 }
+
+# Focuses intentionally use exact engine/project identifiers as anchors and more
+# general field/type words only as detail signals. A row is never selected merely
+# because it contains "Traits", "Points", or "Lanes"; it must first be tied to a
+# relevant Mass/ZoneGraph object or authored City Sample system.
+FOCUS_DEFINITIONS = {
+    "mass-config": {
+        "description": "MassEntityConfigAsset composition, traits, inheritance and references",
+        "anchors": (
+            "/script/massspawner.massentityconfigasset",
+            "massentityconfigasset",
+            "fmassentityconfig",
+            "masscrowdagentconfig",
+            "masscrowdpuppetconfig",
+            "massplayercharacteragentconfig",
+            "citysampleintersectionagentconfig",
+            "masstrafficvehicleagentconfig",
+            "masstrafficparkedvehicleagentconfig",
+            "_trafficvehicleagentconfig",
+            "_parkedvehicleagentconfig",
+            "_traileragentconfig",
+        ),
+        "details": (
+            "traits",
+            "trait",
+            "parent",
+            "baseconfig",
+            "entityconfig",
+            "template",
+            "tsoftobjectptr<umassentityconfigasset>",
+            "tobjectptr<umassentityconfigasset>",
+        ),
+    },
+    "mass-spawner": {
+        "description": "MassSpawner entity types, counts, generators and configured asset topology",
+        "anchors": (
+            "/script/massspawner.massspawner",
+            "bp_masscrowdspawner",
+            "bp_masstrafficvehiclespawner",
+            "bp_masstraffictrailerspawner",
+            "bp_masstrafficparkedvehiclespawner",
+            "bp_masstrafficintersectionspawner",
+            "massentityzonegraphspawnpointsgenerator",
+            "masstrafficvehiclespawndatagenerator",
+            "masstrafficparkedvehiclespawndatagenerator",
+            "masstrafficintersectionspawndatagenerator",
+        ),
+        "details": (
+            "entitytypes",
+            "entitytype",
+            "spawndatagenerators",
+            "spawndatagenerator",
+            "entityconfig",
+            "count",
+            "proportion",
+            "density",
+            "generator",
+            "spawn",
+        ),
+    },
+    "mass-agent": {
+        "description": "Actor-side MassAgent/MassTraffic components and authored entity configuration",
+        "anchors": (
+            "/script/massactors.massagentcomponent",
+            "massagentcomponent",
+            ":massagent",
+            "masstrafficvehiclecomponent",
+            ":masstrafficvehicle",
+        ),
+        "details": (
+            "entityconfig",
+            "agentconfig",
+            "massagent",
+            "massentity",
+            "config",
+            "template",
+        ),
+    },
+    "zone-shape": {
+        "description": "ZoneShape authored shape points, tags, lane profiles and routing state",
+        "anchors": (
+            "/script/zonegraph.zoneshape",
+            "/script/zonegraph.zoneshapecomponent",
+            "zoneshapecomponent",
+            "zoneshape_",
+            "citysamplecityzoneshapes",
+            "citysamplefreewayzoneshapes",
+        ),
+        "details": (
+            "points",
+            "point",
+            "laneprofiles",
+            "laneprofile",
+            "fzonelaneprofileref",
+            "tags",
+            "fzonegraphtag",
+            "shapetype",
+            "fzoneshapetype",
+            "polygonroutingtype",
+            "routing",
+            "connections",
+            "laneconnections",
+        ),
+    },
+    "zone-data": {
+        "description": "ZoneGraphData generated/storage topology including lanes, points and links",
+        "anchors": (
+            "/script/zonegraph.zonegraphdata",
+            "zonegraphdata",
+            "zonegraphstorage",
+            "fzonegraphstorage",
+        ),
+        "details": (
+            "lanes",
+            "lane",
+            "lanelinks",
+            "lanelink",
+            "lanepoints",
+            "lanepoint",
+            "laneprofiles",
+            "laneprofile",
+            "bounds",
+            "tags",
+            "storage",
+            "builddata",
+        ),
+    },
+    "bridge": {
+        "description": "Exact Mass to ZoneGraph bridge objects, annotations, builders and tags",
+        "anchors": (
+            "massentityzonegraphspawnpointsgenerator",
+            "zonegraphcrowdlaneannotations",
+            "zonegraphdisturbanceannotation",
+            "smartobjectzoneannotations",
+            "zonegraphcloscrowdlanetest",
+            "zonegraphclosecrowdlanetest",
+            "zonegraphtagfor",
+            "masstrafficbuilderbaseactor",
+            "masstrafficzonegraphdatamodifier",
+            "bp_masstrafficcitytrafficbuilder",
+            "bp_masstrafficfreewaytrafficbuilder",
+        ),
+        "details": (
+            "lane",
+            "tag",
+            "filter",
+            "generator",
+            "annotation",
+            "zonegraphdata",
+            "massentity",
+            "spawn",
+            "build",
+        ),
+    },
+}
+
+FOCUS_NAMES = tuple(FOCUS_DEFINITIONS)
 
 
 def _row_text(row: dict) -> str:
@@ -231,6 +388,135 @@ def build_report(
     }
 
 
+def _focus_hits(text: str, definition: dict) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    lowered = text.lower()
+    anchors = tuple(value for value in definition["anchors"] if value in lowered)
+    if not anchors:
+        return (), ()
+    details = tuple(value for value in definition["details"] if value in lowered)
+    return anchors, details
+
+
+def _focus_counter_value(row: dict, keys: tuple[str, ...]) -> str:
+    for key in keys:
+        value = row.get(key)
+        if value not in (None, ""):
+            return str(value)
+    return ""
+
+
+def _focus_bucket() -> dict:
+    return {
+        "matched_rows": 0,
+        "high_signal_rows": 0,
+        "anchor_counts": collections.Counter(),
+        "detail_counts": collections.Counter(),
+        "property_counts": collections.Counter(),
+        "cpp_type_counts": collections.Counter(),
+        "class_counts": collections.Counter(),
+        "relation_counts": collections.Counter(),
+        "stream_counts": collections.Counter(),
+        "examples": collections.defaultdict(lambda: {"high": [], "other": []}),
+    }
+
+
+def build_focus_report(
+    output: Path,
+    rows,
+    *,
+    include_source: bool = True,
+    focuses: tuple[str, ...] | list[str] | None = None,
+    example_limit: int = 40,
+) -> dict:
+    """Classify existing rows into serialization-critical evidence families.
+
+    The corpus is streamed once. Rows need an exact family anchor; generic detail
+    terms only rank already-matching rows so authored property/reference evidence
+    is shown ahead of noisy package/file presence rows.
+    """
+    output = Path(output).expanduser().resolve()
+    selected = tuple(focuses or FOCUS_NAMES)
+    invalid = [name for name in selected if name not in FOCUS_DEFINITIONS]
+    if invalid:
+        raise ValueError(f"unknown focus: {', '.join(invalid)}")
+
+    streams = list(BASE_STREAMS)
+    if include_source:
+        streams.extend(SOURCE_STREAMS)
+
+    buckets = {name: _focus_bucket() for name in selected}
+    stream_totals = collections.Counter()
+
+    for filename in streams:
+        path = output / filename
+        if not path.is_file():
+            continue
+        for row in _iter_rows(rows, path):
+            stream_totals[filename] += 1
+            text = _row_text(row)
+            for name in selected:
+                anchors, details = _focus_hits(text, FOCUS_DEFINITIONS[name])
+                if not anchors:
+                    continue
+                bucket = buckets[name]
+                bucket["matched_rows"] += 1
+                bucket["stream_counts"][filename] += 1
+                bucket["anchor_counts"].update(anchors)
+                bucket["detail_counts"].update(details)
+                if details:
+                    bucket["high_signal_rows"] += 1
+
+                prop = _focus_counter_value(row, ("property_path", "property_name", "root_property"))
+                if prop:
+                    bucket["property_counts"][prop] += 1
+                cpp_type = _focus_counter_value(row, ("cpp_type", "property_type", "struct_type"))
+                if cpp_type:
+                    bucket["cpp_type_counts"][cpp_type] += 1
+                class_value = _focus_counter_value(
+                    row,
+                    (
+                        "class_path", "component_class", "owner_class", "target_class",
+                        "referenced_object_class", "baseline_class", "actor_class",
+                    ),
+                )
+                if class_value:
+                    bucket["class_counts"][class_value] += 1
+                relation = str(row.get("relation", "") or "")
+                if relation:
+                    bucket["relation_counts"][relation] += 1
+
+                target = "high" if details else "other"
+                examples = bucket["examples"][filename][target]
+                if len(examples) < example_limit:
+                    examples.append(
+                        {
+                            "anchors": list(anchors),
+                            "details": list(details),
+                            "row": row,
+                        }
+                    )
+
+    normalized = {}
+    for name, bucket in buckets.items():
+        examples = {}
+        for filename, groups in bucket["examples"].items():
+            high = groups["high"][:example_limit]
+            remaining = max(0, example_limit - len(high))
+            examples[filename] = high + groups["other"][:remaining]
+        normalized[name] = {
+            **{key: value for key, value in bucket.items() if key != "examples"},
+            "examples": examples,
+        }
+
+    return {
+        "output": str(output),
+        "include_source": bool(include_source),
+        "focuses": selected,
+        "stream_totals": stream_totals,
+        "buckets": normalized,
+    }
+
+
 def _short(value: object, limit: int = 1200) -> str:
     text = str(value or "").replace("\r", "\\r").replace("\n", "\\n")
     return text if len(text) <= limit else text[: max(0, limit - 1)] + "…"
@@ -293,11 +579,67 @@ def _print_report_impl(report: dict, *, row_limit: int = 30) -> None:
     print("========================================")
 
 
+def _print_focus_report_impl(report: dict, *, row_limit: int = 40) -> None:
+    print("=== ZONEGRAPH + MASS FOCUSED EVIDENCE REPORT ===")
+    print(report.get("output", ""))
+    print("diagnostic_only=True semantic_promotion=False")
+    print(f"include_source={bool(report.get('include_source', False))}")
+    print("focuses=" + ",".join(report.get("focuses", ())))
+
+    for name in report.get("focuses", ()):
+        definition = FOCUS_DEFINITIONS[name]
+        bucket = report.get("buckets", {}).get(name, {})
+        print(f"\n########################################################################")
+        print(f"FOCUS: {name}")
+        print(definition["description"])
+        print(
+            f"matched_rows={int(bucket.get('matched_rows', 0) or 0)} "
+            f"high_signal_rows={int(bucket.get('high_signal_rows', 0) or 0)}"
+        )
+        _print_counter("Anchor hits", bucket.get("anchor_counts", collections.Counter()), 80)
+        _print_counter("Serialization/detail signals", bucket.get("detail_counts", collections.Counter()), 100)
+        _print_counter("Property names/paths", bucket.get("property_counts", collections.Counter()), 160)
+        _print_counter("Reflected C++/property types", bucket.get("cpp_type_counts", collections.Counter()), 160)
+        _print_counter("Classes", bucket.get("class_counts", collections.Counter()), 160)
+        _print_counter("Project/reference relations", bucket.get("relation_counts", collections.Counter()), 100)
+        _print_counter("Matched streams", bucket.get("stream_counts", collections.Counter()), 40)
+
+        print("\n[High-signal row examples by stream]")
+        examples_by_stream = bucket.get("examples", {})
+        for filename in BASE_STREAMS + SOURCE_STREAMS:
+            examples = examples_by_stream.get(filename, []) or []
+            if not examples:
+                continue
+            print(f"\n--- {filename} ---")
+            for index, example in enumerate(examples[:row_limit]):
+                anchors = ", ".join(example.get("anchors", []) or [])
+                details = ", ".join(example.get("details", []) or []) or "<anchor-only>"
+                raw = json.dumps(
+                    example.get("row", {}),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                print(f"[{index}] anchors={anchors}")
+                print(f"  details={details}")
+                print("  " + _short(raw, 5000))
+
+    print("\n========================================================================")
+
+
 def render_report(report: dict, *, row_limit: int = 30) -> str:
-    """Render the report independently of the process console encoding."""
+    """Render the broad report independently of the process console encoding."""
     buffer = io.StringIO()
     with contextlib.redirect_stdout(buffer):
         _print_report_impl(report, row_limit=row_limit)
+    return buffer.getvalue()
+
+
+def render_focus_report(report: dict, *, row_limit: int = 40) -> str:
+    """Render the focused report independently of the process console encoding."""
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        _print_focus_report_impl(report, row_limit=row_limit)
     return buffer.getvalue()
 
 
@@ -319,6 +661,107 @@ def print_report(report: dict, *, row_limit: int = 30, stream=None) -> None:
     _write_console_safe(render_report(report, row_limit=row_limit), stream=stream)
 
 
+def print_focus_report(report: dict, *, row_limit: int = 40, stream=None) -> None:
+    _write_console_safe(render_focus_report(report, row_limit=row_limit), stream=stream)
+
+
+def _write_utf8_report(path: Path | None, rendered: str) -> None:
+    if path is None:
+        return
+    report_path = path.expanduser().resolve()
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(rendered, encoding="utf-8", newline="\n")
+
+
+def _broad_cli(runtime_module, argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="uatool zonegraph-mass-evidence",
+        description=(
+            "stream broad ZoneGraph/Mass evidence from an existing scan without "
+            "promoting any semantic relationships"
+        ),
+    )
+    parser.add_argument("output", help="source .uatool directory")
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=30,
+        help="maximum matching rows printed per stream",
+    )
+    parser.add_argument(
+        "--include-source",
+        action="store_true",
+        help="also scan source_chunks.jsonl for project/plugin evidence",
+    )
+    parser.add_argument(
+        "--report",
+        type=Path,
+        help="also write the complete report as UTF-8 text",
+    )
+    args = parser.parse_args(argv)
+    if args.limit < 1:
+        parser.error("--limit must be >= 1")
+    output = Path(args.output).expanduser().resolve()
+    report = build_report(
+        output,
+        runtime_module._rows,
+        include_source=args.include_source,
+        example_limit=args.limit,
+    )
+    rendered = render_report(report, row_limit=args.limit)
+    _write_utf8_report(args.report, rendered)
+    _write_console_safe(rendered)
+    return 0
+
+
+def _focus_cli(runtime_module, argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="uatool zonegraph-mass-focus",
+        description=(
+            "mine focused serialization evidence for Mass/ZoneGraph from an existing "
+            "scan without rescanning, deriving, or promoting semantics"
+        ),
+    )
+    parser.add_argument("output", help="source .uatool directory")
+    parser.add_argument(
+        "--focus",
+        action="append",
+        choices=FOCUS_NAMES,
+        help="one evidence family to include; repeatable; defaults to all families",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=40,
+        help="maximum matching rows printed per focus per stream",
+    )
+    parser.add_argument(
+        "--no-source",
+        action="store_true",
+        help="skip source_chunks.jsonl; source evidence is included by default",
+    )
+    parser.add_argument(
+        "--report",
+        type=Path,
+        help="also write the complete focused report as UTF-8 text",
+    )
+    args = parser.parse_args(argv)
+    if args.limit < 1:
+        parser.error("--limit must be >= 1")
+    output = Path(args.output).expanduser().resolve()
+    report = build_focus_report(
+        output,
+        runtime_module._rows,
+        include_source=not args.no_source,
+        focuses=tuple(args.focus) if args.focus else None,
+        example_limit=args.limit,
+    )
+    rendered = render_focus_report(report, row_limit=args.limit)
+    _write_utf8_report(args.report, rendered)
+    _write_console_safe(rendered)
+    return 0
+
+
 def install(runtime_module) -> None:
     input_validation.install(systems)
     if getattr(runtime_module, "_zonegraph_mass_evidence_installed", False):
@@ -327,47 +770,9 @@ def install(runtime_module) -> None:
 
     def main():
         if len(sys.argv) > 1 and sys.argv[1] == "zonegraph-mass-evidence":
-            parser = argparse.ArgumentParser(
-                prog="uatool zonegraph-mass-evidence",
-                description=(
-                    "stream broad ZoneGraph/Mass evidence from an existing scan without "
-                    "promoting any semantic relationships"
-                ),
-            )
-            parser.add_argument("output", help="source .uatool directory")
-            parser.add_argument(
-                "--limit",
-                type=int,
-                default=30,
-                help="maximum matching rows printed per stream",
-            )
-            parser.add_argument(
-                "--include-source",
-                action="store_true",
-                help="also scan source_chunks.jsonl for City Sample/custom plugin evidence",
-            )
-            parser.add_argument(
-                "--report",
-                type=Path,
-                help="also write the complete report as UTF-8 text",
-            )
-            args = parser.parse_args(sys.argv[2:])
-            if args.limit < 1:
-                parser.error("--limit must be >= 1")
-            output = Path(args.output).expanduser().resolve()
-            report = build_report(
-                output,
-                runtime_module._rows,
-                include_source=args.include_source,
-                example_limit=args.limit,
-            )
-            rendered = render_report(report, row_limit=args.limit)
-            if args.report is not None:
-                report_path = args.report.expanduser().resolve()
-                report_path.parent.mkdir(parents=True, exist_ok=True)
-                report_path.write_text(rendered, encoding="utf-8", newline="\n")
-            _write_console_safe(rendered)
-            return 0
+            return _broad_cli(runtime_module, sys.argv[2:])
+        if len(sys.argv) > 1 and sys.argv[1] == "zonegraph-mass-focus":
+            return _focus_cli(runtime_module, sys.argv[2:])
         return original_main()
 
     runtime_module.main = main
