@@ -226,6 +226,15 @@ class SystemsMassZoneGraphTests(unittest.TestCase):
         self.assertEqual(fake.RAW_FILES[0], "systems_manifest.json")
         self.assertTrue(fake._mass_zonegraph_schema_installed)
 
+    def test_public_composition_installs_schema5(self):
+        import uatool_build_perf  # noqa: F401
+        import uatool_systems
+
+        self.assertEqual(uatool_systems.SYSTEMS_SCHEMA_VERSION, 5)
+        for filename in mz.MASS_ZONEGRAPH_FILES:
+            self.assertIn(filename, uatool_systems.JSONL_FILES)
+            self.assertIn(filename, uatool_systems.RAW_FILES)
+
     def test_native_manifest_and_scanner_are_wired_for_schema5(self):
         driver = (ROOT / "Source/UnrealAssetTool/Private/UnrealAssetToolSystemsDriver.inl").read_text(
             encoding="utf-8"
