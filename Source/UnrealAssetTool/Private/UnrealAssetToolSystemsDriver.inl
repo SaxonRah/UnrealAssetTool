@@ -407,14 +407,26 @@ static void OnPostEngineInit()
 {
     FString RunCommandlet;
     FParse::Value(FCommandLine::Get(), TEXT("run="), RunCommandlet);
-    if (!RunCommandlet.Equals(TEXT("UnrealAssetToolWorld"), ESearchCase::IgnoreCase))
+    const bool bSystemsOnly = FParse::Param(FCommandLine::Get(), TEXT("UnrealAssetToolSystemsOnly"));
+    if (!bSystemsOnly && !RunCommandlet.Equals(TEXT("UnrealAssetToolWorld"), ESearchCase::IgnoreCase))
     {
         return;
     }
+
     FString Error;
-    if (!RunSystemsScan(Error))
+    const bool bSuccess = RunSystemsScan(Error);
+    if (!bSuccess)
     {
         UE_LOG(LogTemp, Error, TEXT("UnrealAssetToolSystems: %s"), *Error);
+    }
+
+    if (bSystemsOnly)
+    {
+        UE_LOG(
+            LogTemp,
+            Display,
+            TEXT("UnrealAssetToolSystems: isolated systems capture complete; requesting editor exit"));
+        FPlatformMisc::RequestExit(false);
     }
 }
 
