@@ -1,33 +1,32 @@
+static bool GSystemsOnlyWriterBuffersFinalized = false;
+
 static void FinalizeSystemsOnlyWriterBuffers()
 {
-    if (!FParse::Param(FCommandLine::Get(), TEXT("UnrealAssetToolSystemsOnly")))
+    if (!FParse::Param(FCommandLine::Get(), TEXT("UnrealAssetToolSystemsOnly")) ||
+        GSystemsOnlyWriterBuffersFinalized)
     {
         return;
     }
 
     // The schema-3/4/5 writer groups are static because their extraction
-    // helpers are spread across included implementation files. A normal full
-    // commandlet run keeps the process alive long enough for their archives to
-    // be finalized during module shutdown, but systems-only mode requests exit
-    // immediately after RunSystemsScan() returns. Explicitly replace the writer
-    // groups here, after the systems callback has completed, so every FArchive
-    // is destroyed/flushed before the editor observes the exit request.
+    // helpers are spread across included implementation files. Systems-only
+    // mode requests exit immediately after RunSystemsScan() returns. Do not
+    // depend on a later OnPostEngineInit callback continuing to run after that
+    // exit request: finalize during the engine's explicit pre-exit phase,
+    // before modules and their static storage begin shutting down.
     GMoverWriters = FMoverWriters();
     GGameplayCameraWriters = FGameplayCameraWriters();
     GMassZoneGraphWriters = FMassZoneGraphWriters();
+    GSystemsOnlyWriterBuffersFinalized = true;
 
-    UE_LOG(LogTemp, Display, TEXT("UnrealAssetToolSystems: finalized specialized JSONL writer buffers"));
+    UE_LOG(LogTemp, Display, TEXT("UnrealAssetToolSystems: finalized specialized JSONL writer buffers before engine exit"));
 }
 
 struct FSystemsFinalizeBootstrap
 {
     FSystemsFinalizeBootstrap()
     {
-        // This bootstrap is defined after the main systems driver bootstrap in
-        // this translation unit, so its callback is registered afterward. The
-        // main callback runs the scan and calls RequestExit(); Broadcast then
-        // continues here and closes the specialized writers before shutdown.
-        FCoreDelegates::GetOnPostEngineInit().AddStatic(&FinalizeSystemsOnlyWriterBuffers);
+        FCoreDelegates::OnEnginePreExit.AddStatic(&FinalizeSystemsOnlyWriterBuffers);
     }
 };
 
