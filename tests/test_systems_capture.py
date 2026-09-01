@@ -30,17 +30,29 @@ class SystemsCaptureTests(unittest.TestCase):
                 self.assertEqual(bundle.namelist(), list(capture.CAPTURE_FILES))
                 self.assertNotIn("world_actors.jsonl", bundle.namelist())
 
-    def test_native_isolated_gate_runs_systems_and_requests_exit(self):
+    def test_native_isolated_gate_runs_systems_requests_exit_then_finalizes_writers(self):
         driver = (ROOT / "Source/UnrealAssetTool/Private/UnrealAssetToolSystemsDriver.inl").read_text(
             encoding="utf-8"
         )
         scanner = (ROOT / "Source/UnrealAssetTool/Private/UnrealAssetToolSystemsScanner.cpp").read_text(
             encoding="utf-8"
         )
+        finalizer = (ROOT / "Source/UnrealAssetTool/Private/UnrealAssetToolSystemsFinalize.inl").read_text(
+            encoding="utf-8"
+        )
         self.assertIn('TEXT("UnrealAssetToolSystemsOnly")', driver)
         self.assertIn("if (!bSystemsOnly && !RunCommandlet.Equals", driver)
         self.assertIn("FPlatformMisc::RequestExit(false)", driver)
         self.assertIn('#include "HAL/PlatformMisc.h"', scanner)
+        self.assertIn('#include "UnrealAssetToolSystemsDriver.inl"', scanner)
+        self.assertIn('#include "UnrealAssetToolSystemsFinalize.inl"', scanner)
+        self.assertLess(
+            scanner.index('#include "UnrealAssetToolSystemsDriver.inl"'),
+            scanner.index('#include "UnrealAssetToolSystemsFinalize.inl"'),
+        )
+        self.assertIn("GMoverWriters = FMoverWriters();", finalizer)
+        self.assertIn("GGameplayCameraWriters = FGameplayCameraWriters();", finalizer)
+        self.assertIn("GMassZoneGraphWriters = FMassZoneGraphWriters();", finalizer)
 
     def test_canonical_composition_installs_systems_capture_command(self):
         import uatool  # noqa: F401
