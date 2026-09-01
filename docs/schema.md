@@ -9,8 +9,16 @@ structural scanner schema: 12
 world scanner schema:      12
 animation scanner schema:   1
 VFX scanner schema:         1
-systems scanner schema:     1
-derived schema:            14
+systems scanner schema:     4
+derived schema:            20
+```
+
+Additional independently versioned semantic/canonical companions currently include:
+
+```text
+Blueprint user-defined enum schema: 1
+Chooser decision schema:            1
+Gameplay Camera behavior schema:    2
 ```
 
 The version numbers intentionally describe different facts and lifecycles.
@@ -20,8 +28,11 @@ The version numbers intentionally describe different facts and lifecycles.
 - `animation_manifest.json` -> animation `schema_version`
 - `vfx_manifest.json` -> VFX `schema_version`
 - `systems_manifest.json` -> systems `schema_version`
+- `blueprint_enum_manifest.json` -> Blueprint enum companion `schema_version`
 
 A canonical scanner change normally requires Unreal to run again. A compatible derived-only change normally requires only `derive`, `pack` and `bundle`.
+
+Historical schema-specific documents record the contracts they introduced. The current systems contract is [systems-schema-4.md](systems-schema-4.md); [systems-schema-1.md](systems-schema-1.md) and [systems-schema-2.md](systems-schema-2.md) are retained as historical contracts.
 
 ## Storage rules
 
@@ -83,6 +94,18 @@ blueprint_widget_animation_bindings.jsonl
 ```
 
 These preserve Blueprint identity/inheritance/interfaces/state, every graph/node/pin, exact graph wiring, reflected node state/references, component/default state, Timelines and UMG authored structure.
+
+## Blueprint user-defined enums
+
+The world process also runs a small canonical companion scanner for project-owned user-defined enums:
+
+```text
+blueprint_enum_manifest.json
+blueprint_enums.jsonl
+blueprint_enum_entries.jsonl
+```
+
+It preserves enum identity plus raw, authored and display names. Readable enum decoration is derived conservatively from actual pin/enum typing; ambiguous values stay raw.
 
 ## Compact Control Rig / RigVM
 
@@ -300,9 +323,11 @@ See [vfx-schema-1.md](vfx-schema-1.md).
 
 ---
 
-# Systems scanner schema 1
+# Systems scanner schema 4
 
-Systems schema 1 groups optional systems that can be covered efficiently by reflection during the world Editor process.
+Systems schema 4 is the current canonical gameplay-systems contract. It retains the original reflection-first systems streams, adds schema-2 gameplay-data/Gameplay Tags normalization, then adds reflection-backed Mover and Gameplay Cameras topology.
+
+## Base systems streams
 
 ```text
 systems_manifest.json
@@ -326,27 +351,68 @@ gameplay_data_assets.jsonl
 gameplay_tags.jsonl
 ```
 
-## Sequencer
+### Sequencer
 
 `level_sequences.jsonl` summarizes sequence/MovieScene state. Binding, track, section and channel streams preserve normalized containment and channel/key counts while `systems_properties`/`systems_references` preserve reflected authored state and exact references.
 
-## Audio / MetaSound
+### Audio / MetaSound
 
 `audio_assets.jsonl` normalizes core audio identities/settings. SoundCue nodes are normalized separately. MetaSound frontend document nodes and edges are captured with stable frontend IDs and exact endpoints.
 
-## Enhanced Input
+### Enhanced Input
 
 `input_actions.jsonl` preserves action type/settings and declared processor counts. Mapping contexts/mappings normalize key/action relationships. `input_processors.jsonl` records action- and mapping-level trigger/modifier objects.
 
-## Gameplay data
+## Schema-2 gameplay data / Gameplay Tags streams
 
-Current normalized gameplay-data support includes Gameplay Tag DataTables, selected Common Input action tables/action-domain assets and PrimaryAssetLabel-style data. Generic reflected properties/references remain available for recognized systems assets.
+```text
+data_table_rows.jsonl
+data_table_fields.jsonl
+curve_tables.jsonl
+curve_table_rows.jsonl
+curve_table_keys.jsonl
+primary_data_assets.jsonl
+gameplay_tag_settings.jsonl
+gameplay_tag_sources.jsonl
+gameplay_tag_dictionary.jsonl
+gameplay_tag_redirects.jsonl
+```
 
-See [systems-schema-1.md](systems-schema-1.md).
+General DataTables preserve row struct/type, physical rows/fields and exact normalized object references without guessing project-specific field semantics. CurveTables preserve rows/keys. PrimaryDataAsset has first-class identity while arbitrary project-specific payload meaning remains reflected/raw.
+
+Gameplay Tags preserve project settings, configured sources, the merged dictionary and redirects. Native C++ registration provenance/restricted-tag special cases are not claimed to be exhaustive.
+
+## Mover streams
+
+```text
+mover_blueprints.jsonl
+mover_components.jsonl
+mover_modes.jsonl
+mover_settings.jsonl
+mover_transitions.jsonl
+```
+
+These preserve Mover Blueprint/component identity, authored defaults, movement modes and starting mode, shared settings/required setting classes, transitions and exact referenced backend classes. Extraction is reflection-backed and does not require a hard Mover module dependency.
+
+## Gameplay Cameras streams
+
+```text
+gameplay_camera_assets.jsonl
+gameplay_camera_rigs.jsonl
+gameplay_camera_nodes.jsonl
+gameplay_camera_node_edges.jsonl
+gameplay_camera_transitions.jsonl
+gameplay_camera_directors.jsonl
+gameplay_camera_rig_references.jsonl
+```
+
+These preserve CameraAsset/director identity, CameraRig root/node topology, exact reflected node-to-node edges, transitions and rig-to-rig/prefab references. A direct director-to-rig reference is not invented when authored behavior selects rigs through a Chooser table.
+
+See [systems-schema-4.md](systems-schema-4.md) for accepted GASP corpus counts and behavior boundaries.
 
 ---
 
-# Derived schema 14
+# Derived schema 20
 
 Everything in this section is deterministic Python output and may be regenerated from compatible canonical data.
 
@@ -375,6 +441,19 @@ blueprint_graph_context.jsonl
 blueprint_summaries.jsonl
 rigvm_editor_links.jsonl
 ```
+
+## Generic Blueprint semantic layer
+
+```text
+blueprint_semantic_nodes.jsonl
+blueprint_semantic_edges.jsonl
+blueprint_semantic_graphs.jsonl
+blueprint_semantic_statements.jsonl
+blueprint_semantic_blocks.jsonl
+blueprint_control_edges.jsonl
+```
+
+The semantic layer normalizes generic operations/control flow while preserving raw node/pin facts. User-defined enum names are decorated only when actual typing resolves them conservatively.
 
 ## AI
 
@@ -425,6 +504,34 @@ vfx_summaries.jsonl
 
 Generic Asset Registry dependencies are not treated as semantic VFX evidence.
 
+## Chooser decisions
+
+```text
+chooser_decisions.jsonl
+chooser_decision_predicates.jsonl
+```
+
+Supported Chooser enum-column predicates are normalized into row decisions while preserving raw exported structs and refusing ambiguous/cardinality-mismatched cases. Disabled result rows remain explicit.
+
+## Mover behavior
+
+```text
+mover_transition_behaviors.jsonl
+mover_transition_routes.jsonl
+```
+
+These reconstruct readable Evaluate() branch behavior and resolved concrete movement-mode routes from canonical Blueprint dependencies plus canonical Mover transition facts.
+
+## Gameplay Camera behavior
+
+```text
+gameplay_camera_property_providers.jsonl
+gameplay_camera_property_fields.jsonl
+gameplay_camera_director_inputs.jsonl
+```
+
+The model preserves dynamic Blueprint-interface polymorphism: provider implementations are candidates until runtime actor type disambiguates them. Provider return structs and final director Chooser context are split into queryable fields. Gameplay Camera behavior schema 2 decorates readable enum names while keeping raw enum literals/expression trees.
+
 ## Typed project graph
 
 ```text
@@ -454,7 +561,7 @@ generic_package_dependency
 
 `project_edges.jsonl` is authoritative for source/target kinds, paths, relation, coverage, quality and evidence. Asset Registry dependency evidence remains `generic_package_dependency` and is represented as package-to-package traversal.
 
-Schema 14 neighborhoods are compact references to selected authoritative edges. Each hop stores:
+Neighborhoods are compact references to selected authoritative edges. Each hop stores:
 
 ```text
 depth
