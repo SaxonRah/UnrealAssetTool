@@ -46,5 +46,6 @@ namespace UnrealAssetToolSystems
 #include "UnrealAssetToolSystemsGameplayData.inl"
 #include "UnrealAssetToolSystemsMover.inl"
 #include "UnrealAssetToolSystemsGameplayCameras.inl"
+#include "UnrealAssetToolSystemsMassZoneGraph.inl"
 #include "UnrealAssetToolSystemsDriver.inl"
 }
