@@ -208,10 +208,12 @@ def build_decisions(
     references: list[dict],
     enum_entries: list[dict],
 ) -> list[dict]:
+    chooser_columns = [
+        column for column in columns
+        if str(column.get("asset_path", "") or "") == chooser_path
+    ]
     parsed_columns: list[dict] = []
-    for column in sorted(columns, key=lambda row: int(row.get("index", 0) or 0)):
-        if str(column.get("asset_path", "") or "") != chooser_path:
-            continue
+    for column in sorted(chooser_columns, key=lambda row: int(row.get("index", 0) or 0)):
         parsed = parse_enum_column(
             str(column.get("raw_value", "") or ""),
             column_index=int(column.get("index", 0) or 0),
@@ -252,7 +254,7 @@ def build_decisions(
             "predicate_count": len(predicates),
             "effective_predicate_count": len(effective),
             "modeled_column_count": len(parsed_columns),
-            "fully_modeled": len(parsed_columns) == len(columns),
+            "fully_modeled": len(parsed_columns) == len(chooser_columns),
             "fully_decoded": all(bool(predicate.get("decoded", False)) and bool(predicate.get("known_comparison", False)) for predicate in predicates),
             "predicates": predicates,
             "result_struct_type": str(result.get("struct_type", "") or ""),
