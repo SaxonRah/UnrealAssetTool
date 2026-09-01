@@ -6,6 +6,13 @@ import json
 from pathlib import Path
 
 import uatool_gameplay_camera_behavior as camera_behavior
+import uatool_gameplay_camera_behavior_enums as camera_behavior_enums
+
+# Install the readable enum decorator as soon as this graph layer is imported.
+# uatool_build_perf already imports this module before derive composition, and
+# the decorator mutates camera_behavior.derive in place so both persisted rows
+# and graph evidence use the same schema-2 representation.
+camera_behavior_enums.install(camera_behavior)
 
 
 def _augment(output: Path, rows, nodes: list[dict], edges: list[dict], graph_module):
@@ -118,6 +125,7 @@ def _augment(output: Path, rows, nodes: list[dict], edges: list[dict], graph_mod
             "interface_blueprint_path": str(provider.get("interface_blueprint_path", "") or ""),
             "implementation_kind": str(provider.get("implementation_kind", "") or ""),
             "fully_modeled": bool(provider.get("fully_modeled", False)),
+            "fully_decoded": bool(provider.get("fully_decoded", False)),
         }
         if director_node:
             add(director, "has_camera_property_provider_candidate", virtual, str(director_node.get("node_kind", "blueprint")), "gameplay_camera_property_provider", evidence)
@@ -142,6 +150,8 @@ def _augment(output: Path, rows, nodes: list[dict], edges: list[dict], graph_mod
                 "field_name": str(field.get("field_name", "") or ""),
                 "expression_text": str(field.get("expression_text", "") or ""),
                 "function_calls": field.get("function_calls", []),
+                "enum_paths": field.get("enum_paths", []),
+                "enum_literals_fully_decoded": bool(field.get("enum_literals_fully_decoded", False)),
             },
         )
 
@@ -160,6 +170,8 @@ def _augment(output: Path, rows, nodes: list[dict], edges: list[dict], graph_mod
             "source_kind": str(row.get("source_kind", "") or ""),
             "source_name": str(row.get("source_name", "") or ""),
             "passthrough_field": str(row.get("passthrough_field", "") or ""),
+            "enum_paths": row.get("enum_paths", []),
+            "enum_literals_fully_decoded": bool(row.get("enum_literals_fully_decoded", False)),
         }
         if director_node:
             add(director, "builds_camera_context_field", input_virtual, str(director_node.get("node_kind", "blueprint")), "gameplay_camera_director_input", evidence)
