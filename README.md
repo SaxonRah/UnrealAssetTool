@@ -13,8 +13,8 @@
 - world scanner schema: **12**
 - animation scanner schema: **1**
 - VFX scanner schema: **1**
-- systems scanner schema: **2**
-- derived schema: **14**
+- systems scanner schema: **4**
+- derived schema: **20**
 
 The schemas are independently versioned because they represent different extraction lifecycles. A change to a Python-only derived view does not require renumbering canonical Unreal scanner output.
 
@@ -44,6 +44,8 @@ UnrealAssetTool currently has dedicated extraction for:
 - MetaSound, SoundCue and core audio assets;
 - Enhanced Input and selected Common Input assets;
 - general DataTable and CurveTable authored rows/values/references, PrimaryDataAsset identity and the project Gameplay Tags settings/source/dictionary/redirect model;
+- Mover component/mode/settings/transition composition plus derived concrete transition behavior/routes;
+- Gameplay Cameras CameraAsset/CameraRig/node/transition/director topology, generic Chooser decisions and Blueprint camera-provider/director behavior;
 - typed project-level graph edges and bounded neighborhoods with per-hop provenance/coverage quality.
 
 Unsupported asset families still appear through Asset Registry identity/tags/package dependencies. Their presence in `assets.jsonl` does **not** imply that UnrealAssetTool understands their internal authored structure.
@@ -64,19 +66,27 @@ The `.uatool` directory contains canonical JSONL, deterministic derived JSONL, m
 Important schema layers:
 
 ```text
-manifest.json             structural schema 12 + derived schema 14
+manifest.json             structural schema 12 + derived schema 20
 world_manifest.json       world schema 12
 animation_manifest.json   animation schema 1
 vfx_manifest.json         VFX schema 1
-systems_manifest.json     systems schema 2
+systems_manifest.json     systems schema 4
 ```
 
-Derived schema 14 includes:
+Derived schema 20 includes the typed project graph and later Blueprint/Chooser/Mover camera semantics while preserving the earlier derived streams:
 
 ```text
 project_nodes.jsonl
 project_edges.jsonl
 project_neighborhoods.jsonl
+blueprint_control_edges.jsonl
+chooser_decisions.jsonl
+chooser_decision_predicates.jsonl
+mover_transition_behaviors.jsonl
+mover_transition_routes.jsonl
+gameplay_camera_property_providers.jsonl
+gameplay_camera_property_fields.jsonl
+gameplay_camera_director_inputs.jsonl
 ```
 
 `project_edges.jsonl` is authoritative for typed project-graph relationships and provenance. Neighborhoods store compact references to those edges instead of duplicating full evidence payloads.
@@ -192,7 +202,7 @@ UnrealAssetTool/
     uatool_core.py
     uatool_animation*.py
     uatool_vfx*.py
-    uatool_systems.py
+    uatool_systems*.py
     uatool_project_*.py
   docs/
   tests/
@@ -204,8 +214,8 @@ Supporting modules isolate real concerns, but there is intentionally one canonic
 
 The main UE 5.8.2 validation corpora are:
 
-- **Game Animation Sample (GASP)** — large Blueprint/animation/Pose Search/Enhanced Input graph;
-- **Content Examples** — broad Sequencer, audio, MetaSound, VFX, materials and gameplay-data coverage;
+- **Game Animation Sample (GASP)** — large Blueprint/animation/Pose Search/Enhanced Input graph plus accepted Mover and Gameplay Cameras coverage;
+- **Content Examples** — broad Sequencer, audio, MetaSound, VFX, materials and gameplay-data/Gameplay Tags coverage;
 - **StackOBot + Niagara Examples** — World Partition/LevelInstance/PCG/VFX and cross-project build regression;
 - **Cropout Sample Project** — compact Blueprint/gameplay regression.
 
@@ -220,8 +230,9 @@ A scanner family is not considered stable merely because it compiles. Corpus val
 - [Build performance and bundle size](docs/build-performance-and-size.md)
 - [Animation schema 1](docs/animation-schema-1.md)
 - [VFX schema 1](docs/vfx-schema-1.md)
-- [Systems schema 1](docs/systems-schema-1.md) — historical stable contract
-- [Systems schema 2](docs/systems-schema-2.md) — current gameplay-data/tag extension
+- [Systems schema 1](docs/systems-schema-1.md) — historical initial contract
+- [Systems schema 2](docs/systems-schema-2.md) — historical gameplay-data/tag extension
+- [Systems schema 4](docs/systems-schema-4.md) — current Mover and Gameplay Cameras contract
 
 ## Coverage policy
 
