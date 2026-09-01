@@ -1,10 +1,14 @@
-# ZoneGraph + Mass systems schema 5
+# Systems schema 5: Mass + ZoneGraph
 
-This draft slice is evidence-driven from the UE 5.8 City Sample corpus. It does not infer Mass or ZoneGraph relationships from naming alone and does not claim generated ZoneGraph lane connectivity that the current scanner has not observed directly.
+Systems schema 5 is the first canonical Mass + ZoneGraph slice. It is intentionally evidence-first and reflection-backed.
 
-## Canonical scanner streams
+## Evidence boundary
 
-Systems schema 5 adds:
+The City Sample focused evidence establishes that authored Mass configuration/spawner/agent state and authored ZoneShape state are recoverable. It does **not** yet establish a trustworthy reflected representation of generated `FZoneGraphStorage` lane/lane-point/lane-link topology.
+
+Therefore schema 5 normalizes only proven serialized/authored facts and deliberately does not claim generated lane connectivity.
+
+## Canonical streams
 
 ```text
 mass_entity_configs.jsonl
@@ -18,44 +22,69 @@ zonegraph_shapes.jsonl
 zonegraph_shape_points.jsonl
 ```
 
-The scanner remains reflection-first and introduces no hard MassSpawner, MassActors, or ZoneGraph module dependency. Concrete classes are detected through loaded inheritance. Full non-transient reflected state for discovered config assets, Trait objects, spawner/generator CDOs, MassAgent component templates, and ZoneShape components is also retained in the existing `systems_properties.jsonl` and `systems_references.jsonl` streams.
+The existing loss-minimizing streams remain authoritative for reflected object detail:
 
-### Mass entity configuration
+```text
+systems_properties.jsonl
+systems_references.jsonl
+```
 
-`mass_entity_configs.jsonl` records `UMassEntityConfigAsset` identity plus the reflected `FMassEntityConfig` property, config GUID, parent config reference, and ordered Trait count.
+Trait instances, generator instances and component state are written there rather than reducing every optional Mass type to a hand-maintained property list.
 
-`mass_entity_traits.jsonl` preserves ordered Trait UObject identity/class. Trait object settings and UObject references remain loss-minimizing in the generic systems state streams rather than being reduced to a hand-picked set of Trait fields.
+## Mass model
 
-### Mass spawners and generators
+`mass_entity_configs.jsonl` records `UMassEntityConfigAsset` identity, reflected `FMassEntityConfig` metadata, config GUID, optional parent config and ordered Trait count.
 
-`mass_spawners.jsonl` records Blueprint-derived `AMassSpawner` defaults, including the reflected Count/auto-spawn values and declared entity/generator counts.
+`mass_entity_traits.jsonl` records exact ordered Trait object identity/class. Trait object properties and references remain in `systems_properties.jsonl` / `systems_references.jsonl`.
 
-`mass_spawner_entity_types.jsonl` preserves ordered `EntityTypes` entries, exact entity-config targets, proportions, and bounded raw reflected values.
+`mass_spawners.jsonl`, `mass_spawner_entity_types.jsonl` and `mass_spawner_generators.jsonl` preserve reflected spawner composition, including ordered entity types, exact config references, proportions, count/autospawn state and ordered generator instances.
 
-`mass_spawner_generators.jsonl` preserves ordered `SpawnDataGenerators` entries, exact generator instance/class/Blueprint targets, proportions, and bounded raw reflected values.
+`mass_spawn_generator_assets.jsonl` records generator Blueprint identity/inheritance and whether the generated class actually inherits `MassEntityZoneGraphSpawnPointsGenerator`; this is inheritance evidence, not an asset-name heuristic.
 
-`mass_spawn_generator_assets.jsonl` records Blueprint generator identity and parent class. `zonegraph_generator` is true only when the generated class actually inherits `MassEntityZoneGraphSpawnPointsGenerator`; it is not inferred from the asset name.
+`mass_agent_components.jsonl` records actor-side `MassAgentComponent` identity and its reflected `FMassEntityConfig` parent/config GUID state.
 
-### Mass agent components
+## ZoneGraph model
 
-`mass_agent_components.jsonl` records Blueprint component templates whose loaded class inherits `MassAgentComponent`, including the reflected `FMassEntityConfig` parent and config GUID. The complete component state is also written to the generic systems property/reference streams.
+`zonegraph_shapes.jsonl` records authored `ZoneShape` / `ZoneShapeComponent` state including shape type, lane profile, tags, reverse-profile state, polygon routing type and relative transform.
 
-### Authored ZoneGraph shapes
+`zonegraph_shape_points.jsonl` records ordered reflected `FZoneShapePoint` values including position, rotation, tangent length, point type, point lane profile and lane-connection restrictions.
 
-`zonegraph_shapes.jsonl` records authored `ZoneShape`/`ZoneShapeComponent` state observed through reflection: ordered point count, shape type, lane profile, tags, reverse-profile flag, polygon routing type, and component transform fields.
+Transient connector caches are not promoted as authored topology.
 
-`zonegraph_shape_points.jsonl` preserves ordered reflected `FZoneShapePoint` values including position, rotation, tangent length, point type, lane profile and lane-connection restrictions, plus bounded raw text.
+Generated `FZoneGraphStorage` lanes, lane points and lane links are explicitly out of scope for schema 5 until a real scanner capture proves the exact serializable/reflected representation.
 
-The slice intentionally does **not** normalize `FZoneGraphStorage`, generated lanes, lane points, or lane links yet. The City Sample evidence report found the types and source/API usage but did not demonstrate those generated arrays as accessible authored scanner state. Likewise transient ZoneShape connector caches are not promoted as authored facts.
+## Optional-system implementation
 
-## Validation boundary
+The extractor introduces no hard link dependency on MassSpawner, MassActors or ZoneGraph modules. Optional-system recognition is based on loaded class inheritance and reflected `FProperty` structure, consistent with the existing Mover and Gameplay Cameras approach.
 
-Python validation requires:
+## Isolated systems capture
 
-- unique config/spawner/generator/component/shape identities;
-- contiguous ordered Trait, entity-type, generator, and point indices;
-- parent row counts matching their ordered child rows;
-- referenced Blueprint generator assets resolving when a generator asset path is present;
-- expected Mass/ZoneShape class families for normalized rows.
+For real-corpus validation, the canonical launcher provides an isolated systems-only mode:
 
-This schema remains draft until the UE 5.8 native module compiles and a real City Sample systems capture confirms the reflected field shapes and counts. Python schema smoke coverage alone is not considered native acceptance.
+```powershell
+python scripts\uatool.py systems-capture `
+    "N:\EpicVault\Projects\CitySample\CitySample.uproject" `
+    --editor "E:\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Win64-DebugGame-Cmd.exe"
+```
+
+The command stages/reuses the normal cross-project plugin cache, builds UnrealAssetTool when needed, launches the editor with `-UnrealAssetToolSystemsOnly`, runs only the systems scanner, requests editor exit immediately after the systems pass, validates systems schema 5, and writes a focused archive at:
+
+```text
+N:\EpicVault\Projects\CitySample\.uatool\CitySample.systems-schema5-capture.zip
+```
+
+The archive contains the systems manifest, generic systems asset/property/reference evidence, and the nine Mass/ZoneGraph schema-5 streams. It intentionally excludes world, animation, VFX, database and derived outputs.
+
+After the isolated native gate has already been built, `--no-build` can be used for subsequent systems-only captures.
+
+## Acceptance boundary
+
+Schema 5 is not complete merely because synthetic Python validation passes. Acceptance requires:
+
+1. UE 5.8 native compilation.
+2. A real City Sample isolated systems capture.
+3. Real-corpus invariant validation of the nine new streams.
+4. Inspection of reflected Trait/config/generator/ZoneShape state for information loss.
+5. Only then, project-graph promotion of exact relationships that the capture proves.
+
+City Sample derive is intentionally not rerun until the raw systems facts are accepted.
