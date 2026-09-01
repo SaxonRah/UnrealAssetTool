@@ -28,6 +28,8 @@ import uatool_sqlite_perf as sqlite_perf
 import uatool_validation_perf as validation_perf
 import uatool_blueprint_enums as blueprint_enums
 import uatool_blueprint_enum_edges as blueprint_enum_edges
+import uatool_chooser_derived as chooser_derived
+import uatool_chooser_graph as chooser_graph
 import uatool_mover_report as mover_report
 import uatool_gameplay_camera_report as gameplay_camera_report
 import uatool_gameplay_camera_selection_report as gameplay_camera_selection_report
@@ -297,6 +299,8 @@ def install(core) -> None:
     gameplay_camera_graph.install(project_graph)
     blueprint_enums.install(core, runtime)
     blueprint_enum_edges.install(core)
+    chooser_derived.install(core, runtime)
+    chooser_graph.install(project_graph)
     mover_report.install(runtime)
     gameplay_camera_report.install(runtime)
     gameplay_camera_selection_report.install(runtime)
