@@ -61,7 +61,7 @@ class SystemsCaptureTests(unittest.TestCase):
             self.assertIn("malformed_tail=True", report)
             self.assertIn("jsonl_files_invalid: 1", report)
 
-    def test_native_isolated_gate_runs_systems_requests_exit_and_finalizes_on_pre_exit(self):
+    def test_native_isolated_gate_finalizes_all_writers_before_success_manifest(self):
         driver = (ROOT / "Source/UnrealAssetTool/Private/UnrealAssetToolSystemsDriver.inl").read_text(
             encoding="utf-8"
         )
@@ -75,14 +75,22 @@ class SystemsCaptureTests(unittest.TestCase):
         self.assertIn("if (!bSystemsOnly && !RunCommandlet.Equals", driver)
         self.assertIn("FPlatformMisc::RequestExit(false)", driver)
         self.assertIn('#include "HAL/PlatformMisc.h"', scanner)
-        self.assertIn('#include "UnrealAssetToolSystemsDriver.inl"', scanner)
+
+        direct_finalize = "Writers = FWriters();"
+        specialized_finalize = "GMassZoneGraphWriters = FMassZoneGraphWriters();"
+        success_manifest = "SaveSystemsManifest(OutputDir, Counts, true, FString())"
+        self.assertIn(direct_finalize, driver)
+        self.assertIn("GMoverWriters = FMoverWriters();", driver)
+        self.assertIn("GGameplayCameraWriters = FGameplayCameraWriters();", driver)
+        self.assertIn(specialized_finalize, driver)
+        self.assertLess(driver.index(direct_finalize), driver.index(success_manifest))
+        self.assertLess(driver.index(specialized_finalize), driver.index(success_manifest))
+
+        # Pre-exit remains only as a defensive fallback. Correctness no longer
+        # depends on shutdown delegate ordering.
         self.assertIn('#include "UnrealAssetToolSystemsFinalize.inl"', scanner)
         self.assertIn("FCoreDelegates::OnEnginePreExit.AddStatic", finalizer)
         self.assertNotIn("GetOnPostEngineInit().AddStatic", finalizer)
-        self.assertIn("GSystemsOnlyWriterBuffersFinalized", finalizer)
-        self.assertIn("GMoverWriters = FMoverWriters();", finalizer)
-        self.assertIn("GGameplayCameraWriters = FGameplayCameraWriters();", finalizer)
-        self.assertIn("GMassZoneGraphWriters = FMassZoneGraphWriters();", finalizer)
 
     def test_canonical_composition_installs_systems_capture_command(self):
         import uatool  # noqa: F401
