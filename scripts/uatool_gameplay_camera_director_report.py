@@ -129,8 +129,22 @@ def _implemented_interface_paths(blueprint: dict) -> set[str]:
 
 
 def _call_target_interface(call: dict) -> str:
-    owner = str(call.get("target_owner", "") or "")
-    return _class_to_blueprint(owner)
+    return _class_to_blueprint(str(call.get("target_owner", "") or ""))
+
+
+def _dedupe_functions(values: list[dict]) -> list[dict]:
+    result: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for row in values:
+        key = (
+            str(row.get("blueprint_path", "") or ""),
+            str(row.get("function_id", "") or row.get("graph_id", "") or ""),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(row)
+    return result
 
 
 def build_report(output: Path, rows) -> dict:
@@ -161,14 +175,12 @@ def build_report(output: Path, rows) -> dict:
         and str(row.get("target", "") or "") in chooser_paths
     ]
     selected_choosers = {
-        str(row.get("target", "") or "") for row in director_chooser_links
-        if row.get("target")
+        str(row.get("target", "") or "") for row in director_chooser_links if row.get("target")
     }
 
     nodes = [row for row in semantic_nodes if str(row.get("blueprint_path", "") or "") in director_paths]
     stmts = [row for row in statements if str(row.get("blueprint_path", "") or "") in director_paths]
     deps = [row for row in dependencies if str(row.get("blueprint_path", "") or "") in director_paths]
-    director_pins = [row for row in pins if str(row.get("blueprint_path", "") or "") in director_paths]
     director_blocks = [row for row in blocks if str(row.get("blueprint_path", "") or "") in director_paths]
 
     eval_nodes = [
@@ -184,7 +196,10 @@ def build_report(output: Path, rows) -> dict:
         if node_id:
             deps_by_sink.setdefault(node_id, []).append(row)
     for values in deps_by_sink.values():
-        values.sort(key=lambda row: (str(row.get("sink_pin_name", "") or ""), str(row.get("dependency_id", "") or "")))
+        values.sort(key=lambda row: (
+            str(row.get("sink_pin_name", "") or ""),
+            str(row.get("dependency_id", "") or ""),
+        ))
 
     pins_by_node: dict[str, list[dict]] = {}
     for row in pins:
@@ -194,8 +209,16 @@ def build_report(output: Path, rows) -> dict:
     for values in pins_by_node.values():
         values.sort(key=lambda row: int(row.get("pin_index", 0) or 0))
 
-    statement_by_node = {str(row.get("node_id", "") or ""): row for row in statements if row.get("node_id")}
-    block_by_id = {str(row.get("block_id", "") or ""): row for row in director_blocks if row.get("block_id")}
+    statement_by_node = {
+        str(row.get("node_id", "") or ""): row
+        for row in statements
+        if row.get("node_id")
+    }
+    block_by_id = {
+        str(row.get("block_id", "") or ""): row
+        for row in director_blocks
+        if row.get("block_id")
+    }
 
     relevant_node_ids: set[str] = set(eval_node_ids)
     for row in nodes:
@@ -248,9 +271,6 @@ def build_report(output: Path, rows) -> dict:
     }
     relevant_blocks = [block_by_id[value] for value in sorted(relevant_block_ids) if value in block_by_id]
 
-    # Follow the exact director-side function call to its statically known
-    # implementation candidates. Interface dispatch is intentionally not forced
-    # to one target when multiple Blueprint classes implement the interface.
     camera_property_calls = [
         row for row in call_edges
         if str(row.get("blueprint_path", "") or "") in director_paths
@@ -270,44 +290,78 @@ def build_report(output: Path, rows) -> dict:
     blueprints_by_path = {_bp_path(row): row for row in blueprints if _bp_path(row)}
     functions_by_bp_name: dict[tuple[str, str], list[dict]] = {}
     for row in functions:
-        key = (str(row.get("blueprint_path", "") or ""), str(row.get("name", "") or ""))
+        key = (
+            str(row.get("blueprint_path", "") or ""),
+            str(row.get("name", "") or ""),
+        )
         functions_by_bp_name.setdefault(key, []).append(row)
 
     implementation_candidates: list[dict] = []
     seen_candidates: set[tuple[str, str, str]] = set()
     for call in camera_property_calls:
         interface_bp = _call_target_interface(call)
-        candidate_ids = [str(value or "") for value in call.get("candidate_function_ids", [])] if isinstance(call.get("candidate_function_ids"), list) else []
-        candidates = [function_by_id[value] for value in candidate_ids if value in function_by_id]
+        is_interface_call = bool(call.get("interface_call", False)) and bool(interface_bp)
+        candidate_ids = (
+            [str(value or "") for value in call.get("candidate_function_ids", [])]
+            if isinstance(call.get("candidate_function_ids"), list)
+            else []
+        )
+        call_edge_candidates = [
+            function_by_id[value]
+            for value in candidate_ids
+            if value in function_by_id
+        ]
 
-        # If generic call-edge resolution has no candidates for dynamic interface
-        # dispatch, derive the statically valid implementation set from exact
-        # implemented_interfaces + function-name facts.
-        if not candidates and interface_bp:
+        if is_interface_call:
+            # A Blueprint Interface's graph is the declaration/contract, not an
+            # executable implementation. Generic call-edge resolution can quite
+            # correctly resolve the call node to that declaration, so never let
+            # a non-empty declaration candidate suppress implementation search.
+            candidates: list[dict] = []
+
+            # Preserve any call-edge candidates that are themselves proven real
+            # implementers (for projects where generic resolution already found
+            # a concrete class rather than the interface declaration).
+            for function in call_edge_candidates:
+                bp_path = str(function.get("blueprint_path", "") or "")
+                if not bp_path or bp_path == interface_bp:
+                    continue
+                bp = blueprints_by_path.get(bp_path, {})
+                if interface_bp in _implemented_interface_paths(bp):
+                    candidates.append(function)
+
+            # Always enumerate the exact static implementation set. This is what
+            # prevents the interface declaration from masquerading as runtime
+            # behavior when the call edge reports resolution=internal.
             for bp_path, bp in blueprints_by_path.items():
+                if bp_path == interface_bp:
+                    continue
                 if interface_bp not in _implemented_interface_paths(bp):
                     continue
                 candidates.extend(functions_by_bp_name.get((bp_path, CAMERA_PROPERTY_FUNCTION), []))
+            candidates = _dedupe_functions(candidates)
+        else:
+            candidates = _dedupe_functions(call_edge_candidates)
 
-        # Preserve a declaration row only when it is already a call-edge
-        # candidate; do not manufacture the interface Blueprint as an executable
-        # implementation.
         for function in candidates:
             bp_path = str(function.get("blueprint_path", "") or "")
             function_id = str(function.get("function_id", "") or "")
             bp = blueprints_by_path.get(bp_path, {})
             implemented = _implemented_interface_paths(bp)
-            kind = "implements_interface" if interface_bp and interface_bp in implemented else "candidate"
+            if is_interface_call and interface_bp not in implemented:
+                continue
+            kind = "implements_interface" if is_interface_call else "candidate"
             key = (str(call.get("call_id", "") or ""), bp_path, function_id)
             if key in seen_candidates:
                 continue
             seen_candidates.add(key)
 
             graph_id = str(function.get("graph_id", "") or function_id)
-            result_nodes = {
-                str(value or "") for value in function.get("result_node_ids", [])
-                if value
-            } if isinstance(function.get("result_node_ids"), list) else set()
+            result_nodes = (
+                {str(value or "") for value in function.get("result_node_ids", []) if value}
+                if isinstance(function.get("result_node_ids"), list)
+                else set()
+            )
             candidate_statements = [
                 row for row in statements
                 if str(row.get("blueprint_path", "") or "") == bp_path
@@ -382,7 +436,12 @@ def _print_pin(pin: dict, indent: str = "      ") -> None:
             direction=pin.get("direction", ""),
             category=pin_type.get("category", ""),
             linked=pin.get("linked_count", 0),
-            default=_short(pin.get("default_object", "") or pin.get("default_value", "") or pin.get("default_text", ""), 180),
+            default=_short(
+                pin.get("default_object", "")
+                or pin.get("default_value", "")
+                or pin.get("default_text", ""),
+                180,
+            ),
         )
     )
 
@@ -474,7 +533,10 @@ def print_report(report: dict, *, limit: int = 400) -> None:
 
     print("\n[Camera-property semantic nodes]")
     eval_ids = {str(row.get("node_id", "") or "") for row in report.get("evaluation_nodes", [])}
-    values = [row for row in report.get("relevant_nodes", []) if str(row.get("node_id", "") or "") not in eval_ids]
+    values = [
+        row for row in report.get("relevant_nodes", [])
+        if str(row.get("node_id", "") or "") not in eval_ids
+    ]
     if not values:
         print("<none beyond evaluation nodes>")
     for row in values[:limit]:
@@ -512,7 +574,7 @@ def print_report(report: dict, *, limit: int = 400) -> None:
         )
         candidate_ids = row.get("candidate_function_ids", [])
         if isinstance(candidate_ids, list) and candidate_ids:
-            print("      candidate_function_ids: " + ", ".join(str(value) for value in candidate_ids))
+            print("      declaration/call-edge candidate_function_ids: " + ", ".join(str(value) for value in candidate_ids))
 
     print("\n[Get_PropertiesForCamera implementation candidates]")
     values = report.get("implementation_candidates", [])
@@ -531,15 +593,15 @@ def print_report(report: dict, *, limit: int = 400) -> None:
         outputs = row.get("outputs", [])
         if isinstance(outputs, list) and outputs:
             print("      outputs: " + _short(outputs, 900))
-        dependencies = row.get("dependencies", [])
-        if dependencies:
+        candidate_dependencies = row.get("dependencies", [])
+        if candidate_dependencies:
             print("      return/relevant dependencies:")
-            for dep in dependencies[:limit]:
+            for dep in candidate_dependencies[:limit]:
                 _print_dependency(dep, indent="        ")
-        statements = row.get("statements", [])
-        if statements:
+        candidate_statements = row.get("statements", [])
+        if candidate_statements:
             print("      function statements:")
-            for statement in statements[:limit]:
+            for statement in candidate_statements[:limit]:
                 print(
                     "        {block}:{pos} | {op} | {text}".format(
                         block=statement.get("block_id", ""),
