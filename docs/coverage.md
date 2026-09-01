@@ -23,8 +23,8 @@ structural=12
 world=12
 animation=1
 vfx=1
-systems=4
-derived=20
+systems=5
+derived=21
 ```
 
 ---
@@ -71,6 +71,8 @@ derived=20
 | Gameplay Tags project model | `first_class` | Settings, configured sources, merged project dictionary and redirects plus tag-bearing gameplay data | Exhaustive native C++ registration provenance/restricted-tag special cases and all cross-system tag semantics are not yet normalized |
 | Mover | `first_class` | Mover Blueprint/component composition, movement modes, starting mode, shared settings, transitions and exact backend-class references; derived transition behaviors/routes | Runtime simulation/layered-move execution is not simulated |
 | Gameplay Cameras | `first_class` | CameraAsset -> director, CameraRig roots/nodes/edges/transitions/prefab refs, generic Chooser selection decisions and polymorphic Blueprint camera-property providers/director context | Runtime camera evaluation/blending is not executed; polymorphic providers remain candidates unless runtime actor type disambiguates them |
+| Mass Entity / Mass Gameplay | `first_class` | EntityConfig assets, parent configs, ordered Traits, MassSpawner entity-type composition/generator inheritance, MassAgent components and exact semantic graph relationships | Runtime Mass processor/archetype execution and ECS state are not simulated |
+| ZoneGraph authored shapes | `first_class` | Placed ZoneShape/ZoneShapeComponent identity, authored shape settings, ordered FZoneShapePoint geometry/settings and exact world/shape/component/point graph relationships | Generated `FZoneGraphStorage` lanes/lane points/lane links and transient connector caches are explicitly not claimed |
 | Typed project graph | `first_class` | Typed nodes/edges, provenance, coverage and quality classes | It reflects extractor depth; it must not imply unsupported subsystem semantics |
 
 ---
@@ -99,8 +101,6 @@ Repository scanning has no dedicated semantic model yet for these major UE 5.8 f
 | Family | Why it matters for gameplay understanding | Suggested priority |
 | --- | --- | --- |
 | Smart Objects | Designer-authored interaction slots/behaviors/tags used by AI and players | **High** |
-| ZoneGraph | Lane/zone topology used by Smart Objects/Mass/crowds/traffic | **High** when Mass/crowd projects are targeted |
-| Mass Entity / Mass Gameplay | Entity configs, traits, processors, representation/spawn/StateTree composition | **High** for City Sample / large-scale AI |
 | Gameplay Effects / GAS data | Core ability/effect/attribute relationships | **High** for Lyra/action/RPG projects |
 | Dataflow | General-purpose node graph used by Geometry Collection/Chaos Cloth/Flesh and other authoring | Medium-high |
 | Geometry Collection / Chaos destruction | Breakable geometry, clustering, materials and Dataflow links | Medium-high |
@@ -154,7 +154,7 @@ Frontend nodes/edges are exact, but dedicated streams do not yet expose vertex d
 
 ## 5. Gameplay Tags have a project model; remaining depth is provenance and joins
 
-Systems schema 2 added settings, sources, merged dictionary and redirects, and schema 4 retains that model. The remaining tag work is narrower than the old gap: native C++ registration provenance where recoverable, restricted-tag special cases, replication/config depth and richer cross-system tag joins.
+Systems schema 2 added settings, sources, merged dictionary and redirects, and schema 5 retains that model. The remaining tag work is narrower than the old gap: native C++ registration provenance where recoverable, restricted-tag special cases, replication/config depth and richer cross-system tag joins.
 
 ## 6. AI coverage omits perception/navigation semantics
 
@@ -162,20 +162,25 @@ Behavior Tree, Blackboard, EQS and StateTree are first-class, but AI Perception 
 
 **Recommended priority:** AI Perception first when a representative corpus is available, then authored navigation configuration/links/areas rather than serializing generated NavMesh data wholesale.
 
-## 7. Remaining modern gameplay-framework gaps
+## 7. Mass/ZoneGraph boundary is authored, not generated
 
-Mover and Gameplay Cameras now have dedicated first-class models. The remaining Issue #14 modern-framework work is:
+Systems schema 5 accepts City Sample Mass configuration/spawner/agent structure and authored placed ZoneShapes as first-class. The deliberate remaining boundary is generated ZoneGraph storage: `FZoneGraphStorage` lane/lane-point/lane-link topology is not promoted until a representative capture proves a stable serializable/reflected representation.
+
+This boundary also prevents a ZoneGraph-capable Mass spawn generator from being linked to a particular placed ZoneShape without canonical evidence for that binding.
+
+## 8. Remaining modern gameplay-framework gaps
+
+Mover, Gameplay Cameras, Mass and authored ZoneGraph now have dedicated first-class models. Remaining Issue #14 modern-framework work is:
 
 ```text
 Gameplay Ability System
 Smart Objects
 AI Perception
-ZoneGraph + Mass
 Dataflow / GeometryCollection
 AnimNext
 ```
 
-Corpus availability determines implementation order. City Sample is the intended evidence corpus for the next ZoneGraph/Mass slice; schema design should follow the observed UE 5.8 serialized/reflected shapes rather than API-name guesses.
+Corpus availability determines implementation order; schema design should follow observed UE 5.8 serialized/reflected shapes rather than API-name guesses.
 
 ---
 
@@ -188,6 +193,7 @@ Gameplay Tags project model
 General DataTable / CurveTable / PrimaryDataAsset coverage
 Mover
 Gameplay Cameras
+ZoneGraph + Mass (authored schema-5 boundary)
 ```
 
 Still open:
@@ -196,12 +202,11 @@ Still open:
 Gameplay Ability System
 Smart Objects
 AI Perception
-ZoneGraph + Mass
 Dataflow / GeometryCollection
 AnimNext
 ```
 
-Some accepted slices intentionally stop at a conservative boundary. For example, PrimaryDataAsset has first-class identity but project-specific payload semantics remain reflected/raw unless a broadly reusable family can be proven.
+Some accepted slices intentionally stop at a conservative boundary. For example, PrimaryDataAsset has first-class identity but project-specific payload semantics remain reflected/raw unless a broadly reusable family can be proven. ZoneGraph similarly stops at authored ZoneShape topology rather than generated lane storage.
 
 ---
 
@@ -210,11 +215,11 @@ Some accepted slices intentionally stop at a conservative boundary. For example,
 | Layer | Raw manifest/count validation | SQLite | Query surface | Project graph | Corpus validation |
 | --- | --- | --- | --- | --- | --- |
 | Structural / Blueprint / AI / PCG / material | Yes | Yes | Yes | Yes | GASP/Cropout/ContentExamples/StackOBot |
-| World | Yes | Yes | Yes | Yes | ContentExamples/StackOBot + others |
+| World | Yes | Yes | Yes | Yes | ContentExamples/StackOBot/CitySample + others |
 | Animation | Yes | Yes | Yes | Yes | GASP + ContentExamples |
 | VFX | Yes | Yes | Yes | Yes | ContentExamples + StackOBot/Niagara Examples |
-| Systems schema 4 | Yes | Yes | Yes | Yes | StackOBot + ContentExamples + GASP |
-| Project graph/neighborhoods | Yes | Yes | Yes | n/a | StackOBot + ContentExamples + GASP |
+| Systems schema 5 | Yes | Yes | Yes | Yes | StackOBot + ContentExamples + GASP + CitySample |
+| Project graph/neighborhoods | Yes | Yes | Yes | n/a | StackOBot + ContentExamples + GASP + CitySample |
 
 At the pipeline level, implemented families are wired end-to-end. The remaining gaps are primarily **domain depth and unmodeled subsystems**, not forgotten pack/query plumbing.
 
@@ -233,6 +238,7 @@ Focused Python regression coverage now includes:
 - Chooser decision interpretation/storage/graph promotion;
 - Mover extraction/behavior/graph semantics;
 - Gameplay Camera canonical topology, director/provider behavior, enum readability and graph promotion;
+- Mass/ZoneGraph systems validation, focused capture/promotion, exact schema-21 graph contract and rejection of unsupported generator-to-shape bindings;
 - systems validation/SQLite/project-graph integration;
 - derived freshness, neighborhood compaction and storage invariants.
 
@@ -242,8 +248,8 @@ Real UE corpora remain required because unit tests cannot substitute for actual 
 
 # What “complete” means now
 
-The original planned indexer roadmap plus the accepted Issue #14 gameplay-data, Gameplay Tags, Mover and Gameplay Cameras slices are implemented and corpus-validated.
+The original planned indexer roadmap plus the accepted Issue #14 gameplay-data, Gameplay Tags, Mover, Gameplay Cameras and Mass/authored-ZoneGraph slices are implemented and corpus-validated.
 
 The repository is **not complete with respect to the entire Unreal Engine 5.8 content ecosystem**, and it should not claim to be. Expansion remains evidence-driven: acquire a representative corpus, inspect exact reflected/serialized facts, then normalize only semantics the evidence supports.
 
-See [architecture.md](architecture.md), [schema.md](schema.md), [animation-schema-1.md](animation-schema-1.md), [vfx-schema-1.md](vfx-schema-1.md) and [systems-schema-4.md](systems-schema-4.md) for the maintained technical references. Historical systems contracts remain in [systems-schema-1.md](systems-schema-1.md) and [systems-schema-2.md](systems-schema-2.md).
+See [architecture.md](architecture.md), [schema.md](schema.md), [animation-schema-1.md](animation-schema-1.md), [vfx-schema-1.md](vfx-schema-1.md) and [zonegraph-mass-schema5.md](zonegraph-mass-schema5.md) for the maintained technical references. Historical systems contracts remain in [systems-schema-1.md](systems-schema-1.md), [systems-schema-2.md](systems-schema-2.md) and [systems-schema-4.md](systems-schema-4.md).
