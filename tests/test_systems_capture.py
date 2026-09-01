@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 import tempfile
 import unittest
@@ -29,6 +30,36 @@ class SystemsCaptureTests(unittest.TestCase):
             with zipfile.ZipFile(archive, "r") as bundle:
                 self.assertEqual(bundle.namelist(), list(capture.CAPTURE_FILES))
                 self.assertNotIn("world_actors.jsonl", bundle.namelist())
+
+    def test_capture_inspector_reports_exact_malformed_tail(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            archive = root / "capture.zip"
+            manifest = {
+                "schema_version": 5,
+                "success": True,
+                "error": "",
+                "counts": {name.removesuffix(".jsonl"): 0 for name in capture.CAPTURE_FILES if name.endswith(".jsonl")},
+            }
+            manifest["counts"]["mass_entity_configs"] = 2
+            with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
+                bundle.writestr("systems_manifest.json", json.dumps(manifest))
+                for name in capture.CAPTURE_FILES:
+                    if name == "systems_manifest.json":
+                        continue
+                    if name == "mass_entity_configs.jsonl":
+                        bundle.writestr(name, b'{"config_path":"/Game/A","trait_count":0}\n{"config_path":"/Game/B')
+                    else:
+                        bundle.writestr(name, b"")
+
+            report = capture.inspect_capture_archive(archive)
+            self.assertIn("zip_crc: OK", report)
+            self.assertIn("mass_entity_configs.jsonl: INVALID", report)
+            self.assertIn("rows_valid=1", report)
+            self.assertIn("declared=2", report)
+            self.assertIn("first_error: line=2", report)
+            self.assertIn("malformed_tail=True", report)
+            self.assertIn("jsonl_files_invalid: 1", report)
 
     def test_native_isolated_gate_runs_systems_requests_exit_and_finalizes_on_pre_exit(self):
         driver = (ROOT / "Source/UnrealAssetTool/Private/UnrealAssetToolSystemsDriver.inl").read_text(
