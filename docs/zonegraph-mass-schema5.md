@@ -63,19 +63,48 @@ The Mass portion of schema 5 is therefore real-corpus accepted.
 
 ## ZoneGraph model
 
-`zonegraph_shapes.jsonl` records authored `ZoneShape` / `ZoneShapeComponent` state including shape type, lane profile, tags, reverse-profile state, polygon routing type and relative transform.
+`zonegraph_shapes.jsonl` records authored placed `ZoneShape` / `ZoneShapeComponent` state including containing world, shape type, lane profile, tags, reverse-profile state, polygon routing type, relative transform and `PerPointLaneProfiles`.
 
-`zonegraph_shape_points.jsonl` records ordered reflected `FZoneShapePoint` values including position, rotation, tangent length, point type, point lane profile and lane-connection restrictions.
+`zonegraph_shape_points.jsonl` records ordered reflected `FZoneShapePoint` values including position, rotation, tangent length, point type, point lane-profile selector, per-point reverse-profile state, lane-connection restrictions and inner-turn radius.
+
+A point `lane_profile` value is preserved exactly as reflected. City Sample commonly emits numeric selectors such as `255`; schema 5 does not reinterpret those values as asset paths or invent a lane-profile resolution table.
 
 Transient connector caches are not promoted as authored topology.
 
 Generated `FZoneGraphStorage` lanes, lane points and lane links are explicitly out of scope for schema 5 until a real scanner capture proves the exact serializable/reflected representation.
 
-### City Sample placed-actor finding
+### City Sample placed-actor acceptance
 
-The isolated systems Asset Registry pass returns zero ZoneShape rows, but the existing canonical world layer proves that City Sample contains placed ZoneShape actors/components. Focused evidence contains 61 `/Script/ZoneGraph.ZoneShape` actors and 61 `/Script/ZoneGraph.ZoneShapeComponent` components, with authored world-instance state for `Points`, `LaneProfile`, `Tags`, `ShapeType`, `bReverseLaneProfile`, `PolygonRoutingType` and transforms.
+The isolated systems Asset Registry pass returns zero ZoneShape rows, but the canonical world layer proves that City Sample contains placed ZoneShape actors/components. The accepted focused world capture found exactly the same actor set:
 
-This means the ownership boundary is different from Mass assets: placed ZoneShapes must be normalized while their containing worlds are loaded. Zero Asset Registry rows must not be interpreted as zero ZoneShapes.
+```text
+worlds_requested                    1
+worlds_loaded                       1
+expected_shapes_from_world_corpus  61
+zonegraph_shapes                   61
+zonegraph_shape_points            144
+exact_shape_set_match            true
+truncated_point_rows                0
+shape_point_count_range          2..4
+generated_lane_topology          false
+```
+
+Field coverage in that real corpus is complete for all core normalized point values:
+
+```text
+position                       144/144
+rotation                       144/144
+tangent_length                 144/144
+point_type                     144/144
+lane_profile                   144/144
+reverse_lane_profile           144/144
+lane_connection_restrictions   144/144
+inner_turn_radius              144/144
+```
+
+Shape-level `PerPointLaneProfiles` is present on 3/61 shapes; this is sparse authored state, not information loss. Shape types are 36 `Spline` and 25 `Polygon`; point types are 72 `Sharp` and 72 `LaneProfile`.
+
+The ownership boundary is therefore explicit: placed ZoneShapes are world-owned canonical facts. Zero Asset Registry ZoneShape rows must not be interpreted as zero ZoneShapes.
 
 ## Optional-system implementation
 
@@ -99,8 +128,6 @@ N:\EpicVault\Projects\CitySample\.uatool\CitySample.systems-schema5-capture.zip
 
 The archive contains the systems manifest, generic systems asset/property/reference evidence, and the nine Mass/ZoneGraph schema-5 streams. It intentionally excludes world, animation, VFX, database and derived outputs.
 
-After the isolated native gate has already been built, `--no-build` can be used for subsequent systems-only captures.
-
 ## Focused authored ZoneGraph world capture
 
 ZoneShape validation uses a second narrow command on the same canonical launcher:
@@ -121,15 +148,51 @@ zonegraph_shapes.jsonl
 zonegraph_shape_points.jsonl
 ```
 
-The capture cross-checks the emitted shape set against the pre-existing canonical world evidence. Point rows additionally retain reflected `bReverseLaneProfile` and `InnerTurnRadius` alongside the existing point fields for real-corpus inspection. These fields are not evidence of generated lane connectivity.
-
-The manifest explicitly records:
+The capture cross-checks the emitted shape set against the pre-existing canonical world evidence. Its manifest explicitly records:
 
 ```text
 canonical_authored_zonegraph_capture = true
 generated_lane_topology = false
 provenance = loaded_world_placed_actor_reflection
 ```
+
+## Canonical schema-5 acceptance / promotion
+
+The accepted Mass and authored-ZoneGraph captures are intentionally separate during evidence gathering. Once both validate, a Python-only acceptance command composes them into the canonical corpus without rerunning Unreal and without running derive:
+
+```powershell
+python scripts\uatool.py systems-schema5-accept `
+    "N:\EpicVault\Projects\CitySample\CitySample.uproject"
+```
+
+The command:
+
+1. validates the isolated systems schema-5 capture;
+2. validates the focused ZoneGraph capture against the existing world actor/component set;
+3. copies the complete isolated systems raw tree into a staging directory;
+4. overlays only `zonegraph_shapes.jsonl` and `zonegraph_shape_points.jsonl` from the accepted world capture;
+5. updates the systems manifest ZoneGraph counts/provenance while keeping `generated_lane_topology=false`;
+6. runs the ordinary composed systems-schema-5 validator over the staging tree;
+7. promotes JSONL files first and `systems_manifest.json` last as the commit marker;
+8. writes `systems_schema5_acceptance.json` and preserves `zonegraph_world_manifest.json` beside the canonical systems manifest.
+
+No structural/world/animation/VFX streams are replaced and no derived output is touched.
+
+## Exact-semantic project graph boundary
+
+Schema-5 graph promotion is limited to relationships directly established by canonical rows:
+
+- Mass config -> parent Mass config;
+- Mass config -> ordered Trait object;
+- MassSpawner Blueprint -> referenced entity config;
+- MassSpawner Blueprint -> referenced generator asset/instance when present;
+- MassAgent component -> embedded config parent;
+- generator Blueprint -> reflected parent class and proven ZoneGraph generator base inheritance;
+- world -> placed ZoneShape;
+- ZoneShape -> ZoneShapeComponent;
+- ZoneShape -> ordered synthetic point node.
+
+Every promoted relationship is `exact_semantic` with the originating stream/index/value retained as evidence. A ZoneGraph-based Mass spawn generator is **not** linked to a particular placed ZoneShape because the accepted corpus contains no canonical evidence for that specific binding.
 
 ## Acceptance boundary
 
@@ -139,8 +202,9 @@ Current status:
 2. Real City Sample isolated systems capture: accepted.
 3. Mass real-corpus invariants and row-count integrity: accepted.
 4. Authored ZoneShape Asset Registry path: rejected as incomplete for placed world actors.
-5. Focused authored ZoneGraph world capture: pending real City Sample execution/inspection.
+5. Focused authored ZoneGraph world capture: accepted (61 shapes / 144 points, exact actor-set match, zero truncation).
 6. Generated `FZoneGraphStorage` lane topology: explicitly not promoted.
-7. Project-graph promotion: deferred until the authored ZoneShape capture is accepted.
+7. Canonical systems-schema-5 promotion: implemented; pending execution against the accepted local captures.
+8. Exact-semantic project-graph promotion: implemented with synthetic invariants; pending the next real derive.
 
-City Sample derive remains intentionally deferred until the raw ZoneShape facts are accepted.
+City Sample derive is intentionally deferred until canonical schema-5 promotion succeeds. That promotion is Python-only and reuses the already accepted captures.
