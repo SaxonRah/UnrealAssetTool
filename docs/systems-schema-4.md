@@ -270,3 +270,11 @@ SandboxCharacter_Mover gameplay state
 ```
 
 This is sufficient to consider the Gameplay Cameras slice of Issue #14 first-class for the validated GASP corpus.
+
+## Boundaries
+
+- Runtime camera evaluation is not simulated.
+- Dynamic interface dispatch remains candidate-based when the evaluation-context actor type is not statically unique.
+- Unsupported Chooser column/value families remain lossless raw structs.
+- Reflection-derived topology is promoted only when object identity/property endpoints make the relationship exact.
+- A Python-only derived/readability change does not justify rescanning Unreal.
