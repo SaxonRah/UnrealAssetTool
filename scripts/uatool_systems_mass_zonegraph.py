@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 import uatool_systems_capture as systems_capture
+import uatool_zonegraph_world_capture as zonegraph_world_capture
 
 MASS_ZONEGRAPH_FILES = (
     "mass_entity_configs.jsonl",
@@ -388,3 +389,4 @@ def install(systems_module) -> None:
     import uatool_runtime as runtime_module
 
     systems_capture.install(runtime_module, core_module, systems_module)
+    zonegraph_world_capture.install(runtime_module, core_module, systems_module)
