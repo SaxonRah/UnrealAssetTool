@@ -1,10 +1,10 @@
 # Systems schema 5: Mass + ZoneGraph
 
-Systems schema 5 is the first canonical Mass + ZoneGraph slice. It is evidence-first and reflection-backed.
+Systems schema 5 is the first canonical Mass + ZoneGraph slice. It is intentionally evidence-first and reflection-backed.
 
 ## Evidence boundary
 
-City Sample proves authored Mass configuration/spawner/agent state and authored placed `ZoneShape` state. It does **not** prove generated `FZoneGraphStorage` lane/lane-point/lane-link topology.
+The City Sample evidence proves authored Mass configuration/spawner/agent state and authored placed `ZoneShape` state. It does **not** prove generated `FZoneGraphStorage` lane/lane-point/lane-link topology.
 
 Schema 5 therefore normalizes only proven serialized/authored facts. Generated lane connectivity and transient ZoneShape connector caches are deliberately not promoted.
 
@@ -100,13 +100,13 @@ inner_turn_radius              144/144
 
 Shape-level `PerPointLaneProfiles` is authored on 3/61 shapes. Shape types are 36 `Spline` / 25 `Polygon`; point types are 72 `Sharp` / 72 `LaneProfile`.
 
-The ownership boundary is explicit: placed ZoneShapes are world-owned canonical facts. Zero Asset Registry ZoneShape rows must not be interpreted as zero ZoneShapes.
+The ownership boundary is therefore explicit: placed ZoneShapes are world-owned canonical facts. Zero Asset Registry ZoneShape rows must not be interpreted as zero ZoneShapes.
 
 ## Optional-system implementation
 
 The extractor introduces no hard link dependency on MassSpawner, MassActors or ZoneGraph modules. Optional-system recognition uses loaded class inheritance and reflected `FProperty` structure, consistent with the Mover and Gameplay Cameras slices.
 
-## Evidence capture and canonical promotion
+## Evidence capture commands
 
 Isolated Mass/systems capture:
 
@@ -124,13 +124,15 @@ python scripts\uatool.py zonegraph-world-capture `
     --editor "E:\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Win64-DebugGame-Cmd.exe"
 ```
 
-The ZoneGraph command reads existing canonical world actor/component streams, discovers only worlds already proven to contain exact `/Script/ZoneGraph.ZoneShape` evidence, and loads only those worlds. Its manifest records:
+The ZoneGraph command reads the existing canonical world actor/component streams, discovers only worlds already proven to contain exact `/Script/ZoneGraph.ZoneShape` evidence, and loads only those worlds. Its manifest records:
 
 ```text
 canonical_authored_zonegraph_capture = true
 generated_lane_topology = false
 provenance = loaded_world_placed_actor_reflection
 ```
+
+## Canonical schema-5 promotion
 
 The accepted Mass and ZoneGraph captures are composed with the Python-only command:
 
@@ -139,9 +141,9 @@ python scripts\uatool.py systems-schema5-accept `
     "N:\EpicVault\Projects\CitySample\CitySample.uproject"
 ```
 
-It validates both captures, overlays only the two world-owned ZoneGraph streams onto the complete isolated systems tree, reruns the ordinary composed schema-5 validator, promotes JSONLs first, and replaces `systems_manifest.json` last as the commit marker. Promotion never launches Unreal and never runs derive.
+It validates both accepted captures, overlays only the two world-owned ZoneGraph streams onto the complete isolated systems tree, reruns the ordinary composed schema-5 validator, promotes JSONLs first, and replaces `systems_manifest.json` last as the commit marker.
 
-The accepted corpus records provenance/contracts in:
+The accepted City Sample corpus contains:
 
 ```text
 systems_schema5_acceptance.json
@@ -150,13 +152,25 @@ mass_zonegraph_graph_expectations.json
 mass_zonegraph_graph_verification.json
 ```
 
+Canonical promotion completed with:
+
+```text
+zonegraph_worlds:             1
+zonegraph_shapes:            61
+zonegraph_shape_points:     144
+exact_shape_set_match:     true
+generated_lane_topology:   false
+```
+
+Promotion never launches Unreal and never runs derive.
+
 ## Final derived schema 21 graph contract
 
-Mass/ZoneGraph exact-semantic graph integration advances the composed final derived schema from 20 to **21**. No alternate public launcher is introduced.
+Mass/ZoneGraph exact-semantic graph integration advances the composed final derived schema from 20 to **21**. The schema-5 installer promotes the already-loaded one-launcher composition's schema value during startup; no alternate public launcher is introduced.
 
-`mass_zonegraph_graph_expectations.json` is computed directly from canonical raw rows before derive and contains the exact path-level edge keys and relation counts expected from schema 5.
+Acceptance computes `mass_zonegraph_graph_expectations.json` directly from canonical raw rows before derive. It contains the exact path-level edge keys and relation counts expected from schema 5.
 
-Only proven relationships are promoted:
+Only these proven relationships are promoted:
 
 - Mass config -> parent Mass config;
 - Mass config -> ordered Trait object;
@@ -174,56 +188,44 @@ Every domain edge must be `exact_semantic` and retain evidence from its canonica
 
 A ZoneGraph-based spawn generator is **not** linked to any particular placed ZoneShape because the accepted corpus contains no canonical evidence for that binding. The post-derive verifier rejects such an invented edge even if it uses a new relation name.
 
-### Real City Sample schema-21 expectation
-
-The accepted raw corpus requires exactly **484** Mass/ZoneGraph domain edges:
+The accepted City Sample raw expectation set contains exactly 484 Mass/ZoneGraph domain edges:
 
 ```text
-contains_zonegraph_shape                 61
-has_mass_entity_trait                   125
-has_zonegraph_shape_point               144
-inherits_mass_entity_config              21
-inherits_mass_spawn_generator_class       7
-inherits_zonegraph_spawn_generator_base   4
-owns_mass_agent_component                36
-owns_zonegraph_shape_component            61
-spawns_mass_entity_config                23
-uses_mass_entity_config                   2
-------------------------------------------------
-total                                    484
+contains_zonegraph_shape              61
+has_mass_entity_trait                125
+has_zonegraph_shape_point            144
+inherits_mass_entity_config           21
+inherits_mass_spawn_generator_class    7
+inherits_zonegraph_spawn_generator_base 4
+owns_mass_agent_component             36
+owns_zonegraph_shape_component        61
+spawns_mass_entity_config             23
+uses_mass_entity_config                2
+                                      ---
+total                                 484
 ```
 
-No `uses_mass_spawn_generator_*` edges are expected in this City Sample capture because `mass_spawner_generators.jsonl` contains zero rows.
-
-### Real City Sample schema-21 derive
-
-The accepted derive completed with the existing Blueprint/world/animation/VFX semantic counts stable and the project graph at:
-
-```text
-project_nodes            834529
-project_edges           3668565
-project_neighborhoods     11861
-```
-
-The dedicated verifier then succeeded exactly:
-
-```text
-exact_semantic_edges:                       484
-mass_entity_config_roots:                    28
-zonegraph_shapes:                            61
-zonegraph_shape_points:                     144
-unsupported_generator_to_placed_shape_edges: 0
-generated_lane_topology:                  false
-```
-
-Verification command:
+After the schema-21 derive, verification is performed with:
 
 ```powershell
 python scripts\uatool.py mass-zonegraph-graph-verify `
     "N:\EpicVault\Projects\CitySample\CitySample.uproject"
 ```
 
-The verifier requires derived schema 21, compares the actual domain edge set exactly against the raw expectation set, checks canonical evidence streams and `exact_semantic` quality, verifies Mass config roots and ZoneGraph point targets, and writes `mass_zonegraph_graph_verification.json`.
+The accepted real City Sample verification result is:
+
+```text
+exact_semantic_edges:                     484
+mass_entity_config_roots:                  28
+zonegraph_shapes:                          61
+zonegraph_shape_points:                   144
+unsupported_generator_to_placed_shape_edges: 0
+generated_lane_topology:                false
+```
+
+The final derived corpus contains 834,529 project nodes, 3,668,565 project edges and 11,861 bounded project neighborhoods. Normal query output exposes first-class `zonegraph_shape`, `zonegraph_shape_component` and `zonegraph_shape_point` nodes plus exact `contains_zonegraph_shape` graph edges and the surrounding City Sample MassTraffic Blueprint behavior.
+
+A final City Sample smoke run also exposed a performance defect unrelated to Mass/ZoneGraph semantics: `derive_output()` performed canonical cleanup before checking `.derived_freshness.json`, while animation storage normalization rewrites `animation_manifest.json`. Because that manifest is part of the canonical freshness signature, a later `pack`/`bundle` could invalidate its own otherwise-valid stamp and repeat the multi-hour City Sample derive. The freshness guard now runs before any canonical mutation, and CI has a regression requiring that ordering.
 
 The acceptance, ZoneGraph-world, graph-expectation and graph-verification manifests are included in upload bundles when present.
 
@@ -238,5 +240,7 @@ The acceptance, ZoneGraph-world, graph-expectation and graph-verification manife
 7. Canonical systems-schema-5 promotion: **accepted and executed**.
 8. Schema-21 exact-semantic graph implementation: **accepted and CI-covered**.
 9. Real City Sample schema-21 derive: **accepted**.
-10. Post-derive Mass/ZoneGraph graph verification: **accepted** (484/484 exact edges).
-11. Query/SQLite/bundle plumbing: implemented; final corpus pack/query/bundle smoke remains the final release gate for this PR.
+10. Post-derive Mass/ZoneGraph graph verification: **accepted, 484/484 exact-semantic edges**.
+11. Normal SQLite/query surface: **accepted**.
+12. Upload bundle creation: **accepted**.
+13. Repeated pack/bundle derive regression: **fixed and CI-covered**.
