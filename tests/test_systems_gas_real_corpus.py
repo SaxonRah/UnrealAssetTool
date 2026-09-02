@@ -48,6 +48,9 @@ class SystemsGASRealCorpusRegressionTest(unittest.TestCase):
         policy = (
             ROOT / "Source/UnrealAssetTool/Private/UnrealAssetToolSystemsGASPolicy.inl"
         ).read_text(encoding="utf-8")
+        smart_policy = (
+            ROOT / "Source/UnrealAssetTool/Private/UnrealAssetToolSystemsSmartObjectsPolicy.inl"
+        ).read_text(encoding="utf-8")
         scanner = (
             ROOT / "Source/UnrealAssetTool/Private/UnrealAssetToolSystemsScanner.cpp"
         ).read_text(encoding="utf-8")
@@ -72,7 +75,9 @@ class SystemsGASRealCorpusRegressionTest(unittest.TestCase):
         self.assertIn("GASClassInSystemsScope(", policy)
 
         self.assertIn('#include "UnrealAssetToolSystemsGASPolicy.inl"', scanner)
-        self.assertIn("#define ScanGASProjectModel ScanGASProjectModelPolicy", scanner)
+        self.assertIn('#include "UnrealAssetToolSystemsSmartObjectsPolicy.inl"', scanner)
+        self.assertIn("#define ScanGASProjectModel ScanGASAndSmartObjectProjectModels", scanner)
+        self.assertIn("return ScanGASProjectModelPolicy(", smart_policy)
         self.assertIn("#undef ScanGASProjectModel", scanner)
 
     def test_final_lyra_schema6_acceptance_is_documented(self) -> None:

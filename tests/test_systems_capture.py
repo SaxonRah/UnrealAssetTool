@@ -89,8 +89,9 @@ class SystemsCaptureTests(unittest.TestCase):
         self.assertLess(driver.index(specialized_finalize), driver.index(success_manifest))
         self.assertLess(driver.index(gas_finalize), driver.index(success_manifest))
 
-        # Pre-exit remains only as a defensive fallback. Correctness no longer
-        # depends on shutdown delegate ordering.
+        # Pre-exit remains only as a defensive writer-buffer fallback. Schema-7
+        # manifest publication is tested separately and must not use this
+        # delegate path or move writer flushing out of RunSystemsScan().
         self.assertIn('#include "UnrealAssetToolSystemsFinalize.inl"', scanner)
         self.assertIn("FCoreDelegates::OnEnginePreExit.AddStatic", finalizer)
         self.assertNotIn("GetOnPostEngineInit().AddStatic", finalizer)

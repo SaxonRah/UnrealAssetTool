@@ -167,7 +167,7 @@ _SYSTEM_FAMILIES = (
 )
 
 _GENERIC_GAPS = (
-    ("smart_objects", "Designer-authored Smart Object definitions/slots/behaviors/tags do not yet have a dedicated extractor."),
+    ("smart_objects", "Dedicated schema 7 extraction and derived schema 23 semantics are implemented and raw-accepted on City Sample; maintained first-class capability promotion is pending final derived graph verification."),
     ("ai_perception", "Sense configs, dominant sense and stimuli-source relationships do not yet have a dedicated extractor."),
     ("authored_navigation", "Nav areas/links/agent/project settings do not yet have a dedicated authored-navigation model."),
     ("dataflow_chaos", "Dataflow/Geometry Collection/Chaos authoring graphs do not yet have a dedicated semantic model."),

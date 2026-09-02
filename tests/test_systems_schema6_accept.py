@@ -112,14 +112,14 @@ class SystemsSchema6AcceptanceTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "edge set mismatch"):
                 accept._verify_graph(corpus, self._rows)
 
-    def test_public_composition_resolves_schema6_and_derived22(self) -> None:
+    def test_public_composition_retains_schema6_and_derived22(self) -> None:
         import uatool
         import uatool_project_graph
         import uatool_systems
 
-        self.assertEqual(uatool_systems.SYSTEMS_SCHEMA_VERSION, 6)
-        self.assertEqual(uatool.FINAL_DERIVED_SCHEMA_VERSION, 22)
-        self.assertEqual(uatool_project_graph.DERIVED_SCHEMA_VERSION, 22)
+        self.assertGreaterEqual(uatool_systems.SYSTEMS_SCHEMA_VERSION, 6)
+        self.assertGreaterEqual(uatool.FINAL_DERIVED_SCHEMA_VERSION, 22)
+        self.assertGreaterEqual(uatool_project_graph.DERIVED_SCHEMA_VERSION, 22)
         self.assertTrue(getattr(uatool_project_graph, "_gas_graph_installed", False))
 
 
