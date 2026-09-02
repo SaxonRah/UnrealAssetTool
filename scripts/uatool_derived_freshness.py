@@ -24,12 +24,14 @@ STAMP_FILE = ".derived_freshness.json"
 STAMP_VERSION = 1
 
 # These modules only read existing canonical/derived output. Changes to their
-# presentation or validation UI must not force deterministic data regeneration.
+# presentation or diagnostic matching must not force deterministic regeneration.
 NON_DERIVED_SCRIPTS = frozenset({
     "uatool_blueprint_program_report.py",
+    "uatool_gas_evidence.py",
     "uatool_mover_report.py",
     "uatool_semantic_report.py",
     "uatool_verify_bundle.py",
+    "uatool_zonegraph_mass_evidence.py",
 })
 
 
