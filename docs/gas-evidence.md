@@ -1,6 +1,6 @@
 # Gameplay Ability System evidence and schema 6
 
-Gameplay Ability System coverage began as an evidence-first investigation. UE 5.8.2 Lyra now defines and **real-corpus accepts systems schema 6**. Derived GAS project-graph schema 22 is implemented and synthetic-contract tested; its remaining acceptance work is Python-only canonical promotion, derive, and exact post-derive verification.
+Gameplay Ability System coverage began as an evidence-first investigation. UE 5.8.2 Lyra now defines and **real-corpus accepts systems schema 6**. The raw/native and canonical-promotion gates are closed. Derived GAS project-graph schema 22 is implemented and synthetic-contract tested; the remaining acceptance work is one derive plus exact post-derive verification.
 
 ## Diagnostic evidence commands
 
@@ -159,20 +159,59 @@ Independent archive inspection confirms:
 
 **Systems schema 6 is therefore real-corpus accepted on UE 5.8.2 Lyra.**
 
+### Canonical schema-6 promotion
+
+`systems-schema6-accept` promoted the accepted focused capture into `LyraStarterGame/.uatool` without launching Unreal and without running derive. It wrote:
+
+- `systems_schema6_acceptance.json`
+- `gas_graph_expectations.json`
+
+The graph expectation contract recomputed **560 exact semantic GAS edges** from the promoted raw rows. Non-zero relation counts are:
+
+- `captures_gameplay_attribute`: 20
+- `defines_gameplay_ability_class`: 43
+- `defines_gameplay_cue_class`: 24
+- `defines_gameplay_effect_class`: 42
+- `grants_attribute_set_class`: 1
+- `grants_gameplay_ability_class`: 33
+- `grants_gameplay_effect_class`: 3
+- `handles_gameplay_cue_tag`: 23
+- `has_additional_gameplay_ability_cost`: 5
+- `has_gameplay_ability_trigger`: 20
+- `has_gameplay_attribute`: 10
+- `has_gameplay_effect_component`: 31
+- `has_gameplay_effect_cue`: 30
+- `has_gameplay_effect_execution`: 20
+- `has_gameplay_effect_execution_modifier`: 20
+- `has_gameplay_effect_modifier`: 10
+- `inherits_attribute_set_class`: 4
+- `inherits_gameplay_ability_class`: 43
+- `inherits_gameplay_cue_class`: 24
+- `inherits_gameplay_effect_class`: 42
+- `instance_of_gameplay_ability_cost_class`: 5
+- `instance_of_gameplay_ability_set_class`: 12
+- `instance_of_gameplay_effect_component_class`: 31
+- `modifies_gameplay_attribute`: 10
+- `triggered_by_gameplay_tag`: 20
+- `uses_cooldown_gameplay_effect_class`: 2
+- `uses_cost_gameplay_effect_class`: 1
+- `uses_cue_magnitude_attribute`: 11
+- `uses_gameplay_effect_execution_calculation`: 20
+
+`runtime_state_captured` remains false. The promotion result exactly matches the precomputed 560-edge expectation, so the canonical raw promotion gate is accepted.
+
 ## Derived schema 22 GAS graph
 
 The GAS graph layer is implemented from normalized exact fields only. It promotes relationships such as ability/class inheritance, cost/cooldown classes, ordered trigger/tag links, additional-cost objects/classes, Ability Set grants, GameplayEffect components/modifiers/executions/cues, exact attributes, GameplayCue scalar tags, and AttributeSet declarations.
 
 Broad exported tag-container strings are not parsed into guessed graph relations. Runtime specs, active effects, live granted ability specs, prediction state, replicated ASC runtime state, and live attributes remain outside the claim.
 
-The second 37-ability ZIP implied 548 exact GAS-domain graph edges. The six specialized phase abilities add exactly two class-topology edges each, so the accepted 43-ability raw corpus is expected to imply **560 exact semantic GAS edges**. `systems-schema6-accept` computes that expectation from the accepted raw rows rather than hardcoding the Lyra number.
-
-`systems-schema6-accept` promotes an accepted focused schema-6 capture into the canonical corpus without running Unreal or derive and writes `gas_graph_expectations.json`. `gas-graph-verify` later requires exact source/relation/target equality, `exact_semantic` edge quality, canonical stream evidence, and specialist GAS roots against derived schema 22.
+The accepted 43-ability raw corpus implies **560 exact semantic GAS edges**. `gas-graph-verify` requires exact source/relation/target equality, `exact_semantic` edge quality, canonical stream evidence, and specialist GAS roots against derived schema 22.
 
 ## Semantic boundary
 
 Schema 6 is authored/default-state coverage only. It does not claim active GameplayEffect specs, current granted ability specs, prediction keys/state, replicated AbilitySystemComponent runtime state, live attribute values, or runtime activation/cooldown state. The focused corpus also did not establish exact authored GameFeatureAction_AddAbilities or tag-relationship-mapping instances strongly enough for first-class promotion.
 
-The remaining acceptance path is Python-only: canonical schema-6 promotion, one derived-schema-22 derive, then exact GAS graph verification. No additional Unreal GAS capture is required.
+The remaining acceptance path is one derived-schema-22 derive followed by exact GAS graph verification. No additional Unreal GAS capture is required.
 
-Python/schema composition, schema-6 validation, specialized Blueprint membership regressions, exact GAS graph expectations/verifier, retained schema-21 Mass/ZoneGraph compatibility, and derived-schema-22 composition are green in CI through **Python schema smoke #341**.
+Python/schema composition, schema-6 validation, specialized Blueprint membership regressions, exact GAS graph expectations/verifier, retained schema-21 Mass/ZoneGraph compatibility, and derived-schema-22 composition are green in CI through **Python schema smoke #343**.
