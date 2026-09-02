@@ -22,12 +22,12 @@ CREATE TABLE ai_perception_components(
 CREATE INDEX ai_perception_components_blueprint_idx ON ai_perception_components(blueprint_path,component_path);
 CREATE TABLE ai_perception_sense_configs(
  blueprint_path TEXT NOT NULL,component_path TEXT NOT NULL,config_index INTEGER NOT NULL,
- config_path TEXT PRIMARY KEY,config_class TEXT NOT NULL,implementation_class TEXT NOT NULL,
+ config_path TEXT NOT NULL,config_class TEXT NOT NULL,implementation_class TEXT NOT NULL,is_null INTEGER NOT NULL,
  max_age REAL,detection_by_affiliation TEXT NOT NULL,detect_enemies INTEGER,detect_neutrals INTEGER,detect_friendlies INTEGER,
  hearing_range REAL,sight_radius REAL,lose_sight_radius REAL,peripheral_vision_angle_degrees REAL,
- property_count INTEGER NOT NULL,json TEXT NOT NULL);
-CREATE UNIQUE INDEX ai_perception_sense_configs_owner_idx ON ai_perception_sense_configs(component_path,config_index);
-CREATE INDEX ai_perception_sense_configs_class_idx ON ai_perception_sense_configs(config_class,implementation_class);
+ property_count INTEGER NOT NULL,json TEXT NOT NULL,
+ PRIMARY KEY(component_path,config_index));
+CREATE INDEX ai_perception_sense_configs_path_idx ON ai_perception_sense_configs(config_path,config_class,implementation_class);
 CREATE TABLE ai_perception_stimuli_sources(
  blueprint_path TEXT NOT NULL,generated_class TEXT NOT NULL,component_path TEXT PRIMARY KEY,
  component_name TEXT NOT NULL,component_class TEXT NOT NULL,auto_register_as_source INTEGER NOT NULL,
@@ -116,9 +116,6 @@ def validation_error(output: Path, rows=None) -> str | None:
     error, component_paths = _unique_nonblank(components, "component_path", "AI Perception component")
     if error:
         return error
-    error, config_paths = _unique_nonblank(configs, "config_path", "AI Perception sense config")
-    if error:
-        return error
     error, source_paths = _unique_nonblank(sources, "component_path", "AI Perception stimuli source")
     if error:
         return error
@@ -143,23 +140,33 @@ def validation_error(output: Path, rows=None) -> str | None:
     if error:
         return error
     config_counts = collections.Counter()
+    seen_config_paths: set[str] = set()
     for row in configs:
         component = str(row.get("component_path", "") or "")
         path = str(row.get("config_path", "") or "")
         blueprint = str(row.get("blueprint_path", "") or "")
         config_class = str(row.get("config_class", "") or "")
+        implementation = str(row.get("implementation_class", "") or "")
+        is_null = bool(row.get("is_null", False))
         if component not in component_paths:
             return f"AI Perception sense config owner does not resolve: {component}"
         if blueprint != owner_blueprints.get(component):
-            return f"AI Perception sense config blueprint mismatch: {path}"
-        if "AISenseConfig" not in config_class:
-            return f"AI Perception sense config has unexpected class: {path} -> {config_class}"
-        if int(row.get("property_count", -1)) < 0:
-            return f"AI Perception sense config has negative property_count: {path}"
+            return f"AI Perception sense config blueprint mismatch: {component}[{row.get('config_index')}]"
+        if is_null:
+            if path or config_class or implementation or int(row.get("property_count", 0) or 0) != 0:
+                return f"AI Perception null sense config carries object state: {component}[{row.get('config_index')}]"
+        else:
+            if not path or path in seen_config_paths:
+                return f"AI Perception sense config has blank/duplicate config_path: {path or '<blank>'}"
+            seen_config_paths.add(path)
+            if "AISenseConfig" not in config_class:
+                return f"AI Perception sense config has unexpected class: {path} -> {config_class}"
+            if int(row.get("property_count", -1)) < 0:
+                return f"AI Perception sense config has negative property_count: {path}"
+            owner_blueprints[path] = blueprint
+            owner_kinds[path] = "sense_config"
+            declared_property_counts[path] = int(row.get("property_count", 0) or 0)
         config_counts[component] += 1
-        owner_blueprints[path] = blueprint
-        owner_kinds[path] = "sense_config"
-        declared_property_counts[path] = int(row.get("property_count", 0) or 0)
     for row in components:
         component = str(row.get("component_path", "") or "")
         actual = int(config_counts.get(component, 0))
@@ -234,9 +241,9 @@ def load_database(conn, output: Path, rows=None) -> None:
             r.get("component_name", ""), r.get("component_class", ""), r.get("dominant_sense_class", ""),
             int(r.get("sense_config_count", 0) or 0), int(r.get("property_count", 0) or 0), _j(r)))
     for r in rows(output / "ai_perception_sense_configs.jsonl"):
-        conn.execute("INSERT OR REPLACE INTO ai_perception_sense_configs VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
+        conn.execute("INSERT OR REPLACE INTO ai_perception_sense_configs VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
             r.get("blueprint_path", ""), r.get("component_path", ""), int(r.get("config_index", 0) or 0),
-            r.get("config_path", ""), r.get("config_class", ""), r.get("implementation_class", ""),
+            r.get("config_path", ""), r.get("config_class", ""), r.get("implementation_class", ""), int(bool(r.get("is_null", False))),
             _nonnull_float(r.get("max_age")), r.get("detection_by_affiliation", ""),
             _nonnull_bool(r.get("detect_enemies")), _nonnull_bool(r.get("detect_neutrals")), _nonnull_bool(r.get("detect_friendlies")),
             _nonnull_float(r.get("hearing_range")), _nonnull_float(r.get("sight_radius")), _nonnull_float(r.get("lose_sight_radius")),
@@ -269,10 +276,10 @@ def query(conn, print_rows, pattern: str, limit: int) -> None:
         ("blueprint", "component", "dominant_sense", "configs", "properties"))
     print("\n[AI Perception sense configs]")
     print_rows(conn.execute(
-        """SELECT component_path,config_index,config_path,config_class,implementation_class,max_age,hearing_range,sight_radius,lose_sight_radius,peripheral_vision_angle_degrees
+        """SELECT component_path,config_index,config_path,config_class,implementation_class,is_null,max_age,hearing_range,sight_radius,lose_sight_radius,peripheral_vision_angle_degrees
            FROM ai_perception_sense_configs WHERE component_path LIKE ? OR config_path LIKE ? OR config_class LIKE ? OR implementation_class LIKE ? LIMIT ?""",
         (pattern, pattern, pattern, pattern, limit)),
-        ("component", "index", "config", "config_class", "implementation", "max_age", "hearing_range", "sight_radius", "lose_sight_radius", "peripheral_angle"))
+        ("component", "index", "config", "config_class", "implementation", "is_null", "max_age", "hearing_range", "sight_radius", "lose_sight_radius", "peripheral_angle"))
     print("\n[AI Perception stimuli sources]")
     print_rows(conn.execute(
         """SELECT blueprint_path,component_path,auto_register_as_source,registered_sense_count,property_count
