@@ -9,6 +9,7 @@ from pathlib import Path
 import sys
 
 import uatool_gas_capture as gas_capture
+import uatool_systems_gas as systems_gas
 
 MARKERS = (
     "/script/gameplayabilities", "gameplayability", "abilitysystemcomponent",
@@ -336,6 +337,13 @@ def _focus_cli(runtime_module, argv: list[str]) -> int:
 def install(runtime_module) -> None:
     if getattr(runtime_module, "_gas_evidence_installed", False):
         return
+
+    # This installer is reached from the canonical build/runtime composition
+    # after schema-5 Mass/ZoneGraph has been installed. Promote the same systems
+    # module additively to schema 6 before any user-facing CLI captures globals.
+    import uatool_systems as systems_module
+    systems_gas.install(systems_module)
+
     original_main = runtime_module.main
 
     def main():
