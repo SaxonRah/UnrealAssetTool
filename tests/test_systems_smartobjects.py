@@ -166,6 +166,9 @@ class SystemsSmartObjectsTest(unittest.TestCase):
         self.assertIn('FName(TEXT("DefaultBehaviorDefinitions"))', native)
         self.assertIn('FName(TEXT("BehaviorDefinitions"))', native)
         self.assertIn('Root->SetNumberField(TEXT("schema_version"), 7)', policy)
+        self.assertIn('const TSharedPtr<FJsonObject>* CountsField = nullptr;', policy)
+        self.assertIn('TryGetObjectField(TEXT("counts"), CountsField)', policy)
+        self.assertNotIn('TryGetObjectField(TEXT("counts"), &Counts)', policy)
         self.assertNotIn('#include "SmartObject', scanner)
         self.assertNotIn('"SmartObjectsModule"', build_cs)
 
