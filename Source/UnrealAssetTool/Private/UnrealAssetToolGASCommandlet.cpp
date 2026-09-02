@@ -507,7 +507,9 @@ static bool WriteAsset(
 {
     const FString AssetPath = Asset.GetSoftObjectPath().ToString();
     UBlueprint* Blueprint = Cast<UBlueprint>(Object);
-    UClass* SubjectClass = Blueprint ? Blueprint->GeneratedClass : (Object ? Object->GetClass() : nullptr);
+    UClass* SubjectClass = Blueprint && Blueprint->GeneratedClass
+        ? Blueprint->GeneratedClass.Get()
+        : (Object ? Object->GetClass() : nullptr);
     FString Kind = ClassifyClass(SubjectClass);
     if (Kind.IsEmpty()) Kind = ClassifyMetadata(Metadata);
 
