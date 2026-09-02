@@ -42,6 +42,52 @@ UseTime: 5.0
 
 That distinction is preserved exactly. Schema 7 does **not** rewrite the default behavior as though it were authored independently on each slot.
 
+### First canonical systems-schema-7 City Sample capture
+
+The first run of the canonical `systems-capture` scanner on UE 5.8.2 successfully built and emitted the new normalized streams:
+
+```text
+smartobject_definitions:          1
+smartobject_slots:                2
+smartobject_behaviors:            1
+smartobject_behavior_properties:  1
+```
+
+The exact normalized authored values matched the focused capture:
+
+```text
+slot 0 id: 573FF06A43CF8E90E0C1A6A26469B851
+slot 0 offset: -85, 0, 0
+slot 0 yaw: 90
+slot 0 slot-local behaviors: 0
+
+slot 1 id: E321BAA54EA72F347C192C9A0530BCB5
+slot 1 offset: 85, 0, 0
+slot 1 yaw: 90
+slot 1 slot-local behaviors: 0
+
+default behavior count: 1
+default behavior class: /Script/MassSmartObjects.SmartObjectMassBehaviorDefinition
+UseTime: 5.000000
+```
+
+This run exposed one integration defect rather than an extraction defect: the native systems manifest remained at schema 6 and therefore omitted the four Smart Object count/file declarations. `systems-capture` correctly refused `6 != 7` before creating its ZIP, so the capture directory was archived manually for inspection.
+
+The schema-7 finalizer has since been changed to register its shutdown callbacks from the active Smart Object scan path, after engine initialization, rather than from translation-unit static initialization. The canonical extraction values above are accepted evidence; automatic schema-7 manifest/ZIP publication still requires one rerun of the fixed branch before merge.
+
+The captured normalized rows imply exactly **7** Smart Object `exact_semantic` graph edges:
+
+```text
+has_smart_object_slot:                       2
+has_default_smart_object_behavior:           1
+has_smart_object_behavior:                   0
+instance_of_smart_object_behavior_class:     1
+uses_smart_object_world_condition_schema:    1
+uses_smart_object_selection_schema:          2
+```
+
+These counts are now the schema-7/derived-schema-23 acceptance contract.
+
 ## Canonical streams
 
 Schema 7 adds:
@@ -195,6 +241,8 @@ The Smart Object definition is a `first_class` root. Slot and behavior nodes are
 
 Placed-world `SmartObjectComponent -> SmartObjectDefinition` references already come from the world/reference layer as `exact_reference`; schema 23 does not invent duplicate placement semantics.
 
+The acceptance tooling writes deterministic `smartobject_graph_expectations.json` directly from the canonical schema-7 rows and verifies that derived schema 23 contains exactly the expected Smart Object domain edge set with canonical stream evidence.
+
 ## Explicit non-claims
 
 Schema 7 is authored/default-state coverage only. It does not capture or infer:
@@ -211,9 +259,9 @@ live Mass entities using a Smart Object
 transient/generated runtime tags
 ```
 
-## Real-corpus acceptance gate
+## Final real-corpus acceptance gate
 
-Before schema 7 is declared accepted, run the isolated canonical systems scanner on UE 5.8.2 City Sample:
+Run the fixed isolated canonical systems scanner on UE 5.8.2 City Sample:
 
 ```powershell
 python scripts\uatool.py systems-capture `
@@ -222,14 +270,14 @@ python scripts\uatool.py systems-capture `
     --archive "N:\EpicVault\Projects\CitySample\.uatool\CitySample.systems-schema7-capture.zip"
 ```
 
-The capture must:
+The final rerun must:
 
-1. build the schema-7 branch successfully;
+1. build the current schema-7 branch successfully;
 2. publish `systems_manifest.json` with `schema_version=7` and `success=true`;
-3. include all schema-5 Mass/ZoneGraph and schema-6 GAS focused streams plus all four Smart Object streams;
-4. reproduce the observed Smart Object definition/slot/default-behavior structure;
+3. create the requested ZIP automatically;
+4. reproduce `1 / 2 / 1 / 1` Smart Object definition/slot/behavior/property counts and the exact normalized values above;
 5. pass schema-7 Python validation;
-6. preserve `runtime_state_captured=false` boundaries through later capability/acceptance metadata;
-7. pass exact derived-schema-23 graph verification before merge.
+6. preserve runtime-state exclusion boundaries;
+7. pass `systems-schema7-accept`, derive schema 23, and `smartobject-graph-verify` before merge.
 
-Until that gate passes, maintained capability coverage should not claim Smart Objects as accepted first-class coverage.
+Until that final publication gate passes, maintained capability coverage should not claim Smart Objects as accepted first-class coverage.
