@@ -2,18 +2,19 @@
 
 ## Current versions
 
-UnrealAssetTool 0.7.0 uses independently versioned canonical layers plus one final derived layer:
+UnrealAssetTool 0.8.0 uses independently versioned canonical layers plus one final derived layer and a machine-readable capability contract:
 
 ```text
 structural scanner schema: 12
 world scanner schema:      12
 animation scanner schema:   1
 VFX scanner schema:         1
-systems scanner schema:     5
-derived schema:            21
+systems scanner schema:     6
+derived schema:            22
+capability schema:          1
 ```
 
-Additional independently versioned semantic/canonical companions currently include:
+Additional independently versioned semantic/canonical companions include:
 
 ```text
 Blueprint user-defined enum schema: 1
@@ -21,6 +22,8 @@ Chooser decision schema:            1
 Gameplay Camera behavior schema:    2
 Mass/ZoneGraph graph expectation:   1
 Mass/ZoneGraph graph verification:  1
+GAS graph expectation:              1
+GAS graph verification:             1
 ```
 
 The version numbers intentionally describe different facts and lifecycles.
@@ -31,10 +34,11 @@ The version numbers intentionally describe different facts and lifecycles.
 - `vfx_manifest.json` -> VFX `schema_version`
 - `systems_manifest.json` -> systems `schema_version`
 - `blueprint_enum_manifest.json` -> Blueprint enum companion `schema_version`
+- `capabilities.json` -> capability-contract `capability_schema_version` plus the schema versions observed in this corpus
 
-A canonical scanner change normally requires Unreal to run again. A compatible derived-only change normally requires only `derive`, `pack` and `bundle`.
+A canonical scanner change normally requires Unreal to run again. A compatible derived-only or capability/report change normally requires only `derive`, `pack` and `bundle`.
 
-The current systems extension is documented in [zonegraph-mass-schema5.md](zonegraph-mass-schema5.md). Historical systems contracts remain in [systems-schema-1.md](systems-schema-1.md), [systems-schema-2.md](systems-schema-2.md) and [systems-schema-4.md](systems-schema-4.md).
+The current systems extension is documented in [systems-schema-6.md](systems-schema-6.md). The retained Mass/ZoneGraph foundation is documented in [zonegraph-mass-schema5.md](zonegraph-mass-schema5.md). Historical systems contracts remain in [systems-schema-1.md](systems-schema-1.md), [systems-schema-2.md](systems-schema-2.md) and [systems-schema-4.md](systems-schema-4.md).
 
 ## Storage rules
 
@@ -165,13 +169,13 @@ See [vfx-schema-1.md](vfx-schema-1.md).
 
 ---
 
-# Systems scanner schema 5
+# Systems scanner schema 6
 
-Systems schema 5 is the current canonical gameplay-systems contract. It retains schemas 1-4 and adds the accepted Mass + authored ZoneGraph slice.
+Systems schema 6 is the current canonical gameplay-systems contract. It retains schemas 1–5 and adds the accepted Gameplay Ability System slice.
 
-## Base systems families
+## Retained systems families
 
-Schema 5 retains normalized support for:
+Schema 6 retains normalized support for:
 
 - LevelSequence / MovieScene bindings, tracks, sections and channels;
 - core audio assets, SoundCue nodes and MetaSound frontend nodes/edges;
@@ -180,7 +184,9 @@ Schema 5 retains normalized support for:
 - PrimaryDataAsset identity;
 - Gameplay Tags settings, sources, merged dictionary and redirects;
 - Mover Blueprint/component/mode/settings/transition composition;
-- Gameplay Cameras CameraAsset/CameraRig/node/transition/director/rig-reference topology.
+- Gameplay Cameras CameraAsset/CameraRig/node/transition/director/rig-reference topology;
+- Mass EntityConfig/Trait/spawner/generator/agent composition;
+- authored placed ZoneShape/ZoneShapePoint topology.
 
 The generic loss-minimizing streams remain:
 
@@ -190,7 +196,7 @@ systems_properties.jsonl
 systems_references.jsonl
 ```
 
-## Mass streams
+## Retained Mass / authored ZoneGraph streams
 
 ```text
 mass_entity_configs.jsonl
@@ -200,57 +206,52 @@ mass_spawner_entity_types.jsonl
 mass_spawner_generators.jsonl
 mass_spawn_generator_assets.jsonl
 mass_agent_components.jsonl
-```
-
-These preserve MassEntityConfigAsset identity/parentage/config GUIDs, ordered Trait objects, MassSpawner entity-type/generator composition, generator Blueprint inheritance and MassAgent component config state.
-
-Optional Trait/generator/component internals remain available through `systems_properties.jsonl` and `systems_references.jsonl` rather than forcing every Mass subclass into a hand-maintained schema.
-
-## Authored ZoneGraph streams
-
-```text
 zonegraph_shapes.jsonl
 zonegraph_shape_points.jsonl
 ```
 
-`zonegraph_shapes.jsonl` preserves the containing world, placed ZoneShape identity, ZoneShapeComponent, point count, ShapeType, LaneProfile, Tags, reverse profile flag, PolygonRoutingType, relative transform and `PerPointLaneProfiles`.
+Generated `FZoneGraphStorage` lanes/lane points/lane links and transient connector caches remain explicitly outside the canonical contract.
 
-`zonegraph_shape_points.jsonl` preserves ordered `FZoneShapePoint` Position, Rotation, TangentLength, PointType, LaneProfile selector, reverse-profile flag, LaneConnectionRestrictions and InnerTurnRadius.
+See [zonegraph-mass-schema5.md](zonegraph-mass-schema5.md) for the accepted City Sample evidence and schema-5 boundary.
 
-Generated `FZoneGraphStorage` lanes/lane points/lane links and transient connector caches are **not** part of schema 5.
-
-## City Sample schema-5 acceptance
-
-Accepted raw counts:
+## GAS streams added by schema 6
 
 ```text
-mass_entity_configs             28
-mass_entity_traits             125
-mass_spawners                    5
-mass_spawner_entity_types       23
-mass_spawner_generators          0
-mass_spawn_generator_assets      7
-mass_agent_components            36
-zonegraph_shapes                61
-zonegraph_shape_points         144
+gas_abilities.jsonl
+gas_ability_triggers.jsonl
+gas_ability_costs.jsonl
+gas_ability_sets.jsonl
+gas_ability_set_abilities.jsonl
+gas_ability_set_effects.jsonl
+gas_ability_set_attributes.jsonl
+gas_gameplay_effects.jsonl
+gas_gameplay_effect_components.jsonl
+gas_gameplay_effect_modifiers.jsonl
+gas_gameplay_effect_executions.jsonl
+gas_gameplay_effect_execution_modifiers.jsonl
+gas_gameplay_effect_cues.jsonl
+gas_gameplay_cues.jsonl
+gas_attribute_sets.jsonl
+gas_attributes.jsonl
 ```
 
-The focused ZoneGraph capture exactly matched the 61 placed ZoneShape actors already proven by the canonical world corpus, with zero truncated point rows.
+These preserve authored/default GameplayAbility, Ability Set, GameplayEffect, Gameplay Cue, AttributeSet and attribute facts required for exact deterministic graph promotion.
 
-Schema-5 acceptance/provenance files may include:
+The accepted UE 5.8.2 Lyra raw contract contains 43 GameplayAbilities, 12 Ability Sets, 42 GameplayEffects, 24 Gameplay Cues, 4 project-owned AttributeSets and their normalized child rows. See [systems-schema-6.md](systems-schema-6.md) for complete counts and boundaries.
+
+Schema-6 acceptance/provenance files may include:
 
 ```text
-systems_schema5_acceptance.json
-zonegraph_world_manifest.json
-mass_zonegraph_graph_expectations.json
-mass_zonegraph_graph_verification.json
+systems_schema6_acceptance.json
+gas_graph_expectations.json
+gas_graph_verification.json
 ```
 
-See [zonegraph-mass-schema5.md](zonegraph-mass-schema5.md) for the evidence workflow and exact boundary.
+Focused systems-only accepted corpora are marked `partial_corpus=true` with `canonical_passes=["systems"]`. They must not imply unrelated structural/world/animation/VFX coverage.
 
 ---
 
-# Derived schema 21
+# Derived schema 22
 
 Everything in this section is deterministic Python output and may be regenerated from compatible canonical data:
 
@@ -262,7 +263,7 @@ A validated `.derived_freshness.json` allows subsequent `derive`, `pack` and `bu
 
 ## Existing derived domains
 
-Schema 21 retains the established derived layers for:
+Schema 22 retains the established derived layers for:
 
 - Blueprint functions/events/calls/data dependencies/execution blocks;
 - generic Blueprint semantic nodes/edges/graphs/statements/blocks/control flow;
@@ -273,7 +274,9 @@ Schema 21 retains the established derived layers for:
 - VFX relationships/contexts;
 - Chooser decisions/predicates;
 - Mover transition behaviors/routes;
-- Gameplay Camera provider/property/director-input behavior.
+- Gameplay Camera provider/property/director-input behavior;
+- Mass / authored ZoneGraph exact semantic graph relationships;
+- Gameplay Ability System exact semantic graph relationships.
 
 ## Typed project graph
 
@@ -306,9 +309,9 @@ generic_package_dependency
 
 Neighborhoods are compact references to selected authoritative edges and are bounded/prioritized toward stronger semantic/reference evidence before package plumbing.
 
-## Schema-21 Mass / ZoneGraph graph extension
+## Retained schema-21 Mass / ZoneGraph extension
 
-Schema 21 promotes only relationships proven by schema-5 canonical rows:
+Derived schema 22 retains the schema-21 relationships proven by systems schema 5:
 
 ```text
 inherits_mass_entity_config
@@ -325,34 +328,104 @@ owns_zonegraph_shape_component
 has_zonegraph_shape_point
 ```
 
-Every such edge is `exact_semantic` and retains its canonical source stream as evidence.
+Every accepted Mass/ZoneGraph domain edge is `exact_semantic` and retains its canonical source stream as evidence. City Sample's accepted contract verifies exactly 484 such domain edges.
 
-A ZoneGraph-capable spawn generator is not linked to a particular placed ZoneShape without direct canonical evidence.
+## Schema-22 GAS graph extension
 
-City Sample's accepted raw contract expects exactly 484 domain edges:
-
-```text
-contains_zonegraph_shape                 61
-has_mass_entity_trait                   125
-has_zonegraph_shape_point               144
-inherits_mass_entity_config              21
-inherits_mass_spawn_generator_class       7
-inherits_zonegraph_spawn_generator_base   4
-owns_mass_agent_component                36
-owns_zonegraph_shape_component            61
-spawns_mass_entity_config                23
-uses_mass_entity_config                   2
-```
-
-The accepted real schema-21 derive produced:
+Schema 22 adds exact GAS relationships including:
 
 ```text
-project_nodes            834529
-project_edges           3668565
-project_neighborhoods     11861
+defines_gameplay_ability_class
+inherits_gameplay_ability_class
+uses_cost_gameplay_effect_class
+uses_cooldown_gameplay_effect_class
+has_gameplay_ability_trigger
+triggered_by_gameplay_tag
+has_additional_gameplay_ability_cost
+instance_of_gameplay_ability_cost_class
+instance_of_gameplay_ability_set_class
+grants_gameplay_ability_class
+grants_gameplay_effect_class
+grants_attribute_set_class
+defines_gameplay_effect_class
+inherits_gameplay_effect_class
+has_gameplay_effect_component
+instance_of_gameplay_effect_component_class
+has_gameplay_effect_modifier
+modifies_gameplay_attribute
+has_gameplay_effect_execution
+uses_gameplay_effect_execution_calculation
+has_gameplay_effect_execution_modifier
+captures_gameplay_attribute
+has_gameplay_effect_cue
+uses_cue_magnitude_attribute
+defines_gameplay_cue_class
+inherits_gameplay_cue_class
+handles_gameplay_cue_tag
+inherits_attribute_set_class
+has_gameplay_attribute
 ```
 
-`mass-zonegraph-graph-verify` then confirmed all 484 expected edges, all 28 Mass config roots, all 61 ZoneShapes and all 144 synthetic point targets, with zero unsupported generator-to-placed-shape edges.
+Every promoted GAS edge is `exact_semantic` and retains its normalized canonical source stream as evidence.
+
+The accepted Lyra focused derive produced:
+
+```text
+project_nodes            8366
+project_edges           12522
+project_neighborhoods    1089
+```
+
+`gas-graph-verify` confirmed exactly **560 expected GAS semantic edges** with 43 Gameplay Ability roots, 12 Ability Set roots, 42 Gameplay Effect roots, 24 Gameplay Cue roots and 4 Attribute Set roots.
+
+Runtime/live AbilitySystemComponent state remains explicitly outside schema 22.
+
+---
+
+# Capability contract schema 1
+
+`capabilities.json` is emitted after a successful current derive and is included in portable bundles. It is deterministic metadata over existing manifests and the maintained tool contract, not a second semantic truth model.
+
+The top-level shape includes:
+
+```text
+capability_schema_version
+tool
+coverage_levels
+corpus
+schemas
+families
+```
+
+`schemas` reports the structural/world/animation/VFX/systems/derived versions actually observed in this corpus.
+
+Each `families` row includes:
+
+```text
+family
+contract_coverage
+corpus_coverage
+available_in_corpus
+canonical_pass
+canonical_streams
+derived_streams
+derived_relations
+runtime_state_captured
+boundary
+acceptance
+```
+
+`contract_coverage` describes the current tool's supported semantic depth. `corpus_coverage` describes what can safely be claimed from this corpus. For example, a focused accepted schema-6 systems corpus can report GAS as `first_class` while structural/world/animation/VFX families are `external_or_excluded` because those passes were deliberately not run.
+
+The command:
+
+```powershell
+python scripts\uatool.py capabilities <Project>\.uatool --check
+```
+
+regenerates, validates and prints the capability contract without running Unreal.
+
+The contract deliberately records `runtime_state_captured=false` for the current authored-project indexing model.
 
 ---
 
@@ -360,9 +433,9 @@ project_neighborhoods     11861
 
 `uat.db` is rebuilt by `pack` from authoritative JSONL and contains specialist systems tables plus the typed project graph.
 
-The query surface searches canonical/derived specialist tables and project nodes/edges. Systems schema 5 exposes Mass configs/Traits/spawners/agents/generators and authored ZoneShape/point rows through SQLite/query plumbing.
+The query surface searches canonical/derived specialist tables and project nodes/edges. Systems schema 6 exposes retained systems data plus the normalized GAS streams through SQLite/query plumbing.
 
-Upload bundles include the canonical/derived JSON/manifests selected by the composed launcher and omit the regenerable SQLite cache. Schema-5 acceptance/verification manifests are included when present.
+Upload bundles include the canonical/derived JSON/manifests selected by the composed launcher plus `capabilities.json`, and omit the regenerable SQLite cache. Schema-5/schema-6 acceptance/verification manifests are included when present.
 
 ---
 
@@ -374,6 +447,8 @@ Do not infer a stronger fact from a weaker layer. In particular:
 - package dependencies are not exact object references;
 - reflected presence of a runtime system is not proof of runtime behavior;
 - a ZoneGraph-capable generator is not proof that it targets a particular placed ZoneShape;
-- authored ZoneShape points are not generated ZoneGraph lane storage.
+- authored ZoneShape points are not generated ZoneGraph lane storage;
+- GameplayAbility/GameEffect class existence is not a snapshot of live AbilitySystemComponent state;
+- a focused systems-only acceptance corpus is not a full-project scan.
 
-The schema is intentionally conservative: retain exact authored facts first, derive only relationships that are reproducible from those facts, and leave unsupported runtime/generated semantics unclaimed.
+The schema is intentionally conservative: retain exact authored facts first, derive only relationships that are reproducible from those facts, expose corpus capabilities explicitly, and leave unsupported runtime/generated semantics unclaimed.
