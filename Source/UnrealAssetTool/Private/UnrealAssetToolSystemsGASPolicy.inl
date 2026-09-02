@@ -61,6 +61,22 @@ static bool GASClassInSystemsScope(
     return bIncludeEngine || IsInsideDirectory(OwnerFilename, ProjectDir);
 }
 
+static bool GASIsBlueprintAsset(const FAssetData& Asset)
+{
+    if (Asset.AssetClassPath == UBlueprint::StaticClass()->GetClassPathName())
+    {
+        return true;
+    }
+
+    // Gameplay Ability blueprints are registered by GameplayAbilities as the
+    // specialized GameplayAbilityBlueprint asset class, not Engine.Blueprint.
+    // Keep this as an exact reflected asset-class identity check: no asset name,
+    // package name, or parent-name substring participates in semantic selection.
+    return Asset.AssetClassPath.ToString().Equals(
+        TEXT("/Script/GameplayAbilities.GameplayAbilityBlueprint"),
+        ESearchCase::CaseSensitive);
+}
+
 static bool ScanGASProjectModelPolicy(
     const TArray<FAssetData>& Assets,
     const FString& ProjectDir,
@@ -84,7 +100,7 @@ static bool ScanGASProjectModelPolicy(
             continue;
         }
 
-        if (Asset.AssetClassPath == UBlueprint::StaticClass()->GetClassPathName())
+        if (GASIsBlueprintAsset(Asset))
         {
             // Do not infer GAS membership from Blueprint/asset naming. Loading
             // project-scoped Blueprints and checking GeneratedClass inheritance
