@@ -3,10 +3,12 @@
 from uatool_vfx_defs import VFX_SCHEMA_VERSION, RAW_FILES, create_schema, read_manifest
 from uatool_vfx_validate import validation_error
 from uatool_vfx_storage import load_database, query
+import uatool_runtime as _runtime
 import uatool_systems_only_derive_deferred as _systems_only_derive_deferred
 import uatool_capabilities as _capabilities
 import uatool_inspect as _inspect
 import uatool_project_intelligence as _project_intelligence
+import uatool_smartobject_evidence as _smartobject_evidence
 
 # uatool.py imports this facade before its final derive/VFX gates are defined.
 # Install only deferred runtime dispatch hooks here; each hook waits until the
@@ -15,6 +17,7 @@ _systems_only_derive_deferred.install()
 _capabilities.install()
 _inspect.install()
 _project_intelligence.install()
+_smartobject_evidence.install(_runtime)
 
 __all__ = (
     "VFX_SCHEMA_VERSION", "RAW_FILES", "create_schema", "read_manifest",
