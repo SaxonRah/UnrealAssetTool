@@ -104,14 +104,17 @@ def _write_valid_derived_contract(root: Path) -> tuple[str, str]:
 
 
 class MassZoneGraphSchema21ContractTests(unittest.TestCase):
-    def test_public_composition_promotes_final_schema21(self) -> None:
+    def test_public_composition_retains_schema21_contract_inside_final_schema(self) -> None:
         import uatool
         import uatool_core
         import uatool_project_graph
 
-        self.assertEqual(uatool.FINAL_DERIVED_SCHEMA_VERSION, accept.TARGET_DERIVED_SCHEMA_VERSION)
-        self.assertEqual(uatool_core.DERIVED_SCHEMA_VERSION, accept.TARGET_DERIVED_SCHEMA_VERSION)
-        self.assertEqual(uatool_project_graph.DERIVED_SCHEMA_VERSION, accept.TARGET_DERIVED_SCHEMA_VERSION)
+        # Later accepted domain slices may advance the public derived schema.
+        # Mass/ZoneGraph only requires that its schema-21 contract remains part
+        # of that final composition rather than forcing the whole tool to stay 21.
+        self.assertGreaterEqual(uatool.FINAL_DERIVED_SCHEMA_VERSION, accept.TARGET_DERIVED_SCHEMA_VERSION)
+        self.assertGreaterEqual(uatool_core.DERIVED_SCHEMA_VERSION, accept.TARGET_DERIVED_SCHEMA_VERSION)
+        self.assertGreaterEqual(uatool_project_graph.DERIVED_SCHEMA_VERSION, accept.TARGET_DERIVED_SCHEMA_VERSION)
         for filename in (
             accept.ACCEPTANCE_MANIFEST,
             "zonegraph_world_manifest.json",
