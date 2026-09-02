@@ -30,11 +30,17 @@ class AIPerceptionSchema8NativeTest(unittest.TestCase):
         self.assertIn("RegisterAsSourceForSenses", native)
         self.assertIn("SenseRow->SetBoolField(TEXT(\"is_null\"), Sense == nullptr)", native)
 
-        # The real ContentExamples schema-8 gate proved that FAssetData::GetAsset()
-        # in the broad systems pass did not rediscover the two already-proven
-        # Blueprint templates. The full pass now uses the exact-path loading
-        # primitive that succeeded in the focused commandlet and publishes
-        # discovery-stage counters for future diagnosis.
+        # Real ContentExamples gates proved two independent broad-pass failure
+        # modes: FAssetData::GetAsset() was not sufficient, and the commandlet's
+        # startup registry population exposed only two Blueprint candidates total.
+        # Canonical extraction now synchronously rescans /Game while ignoring
+        # deny-list scan filters, queries the Blueprint class hierarchy, then uses
+        # the exact-path load primitive already proven by the focused commandlet.
+        self.assertIn("GatherAIPerceptionBlueprintCandidates", policy)
+        self.assertIn("WaitForPremadeAssetRegistry", policy)
+        self.assertIn("ScanPathsSynchronous(ProjectPaths, true, true)", policy)
+        self.assertIn("Registry.WaitForCompletion()", policy)
+        self.assertIn("Registry.GetAssetsByClass(", policy)
         self.assertIn("ScanAIPerceptionProjectModelExactLoad", policy)
         self.assertIn("StaticLoadObject(UObject::StaticClass(), nullptr, *BlueprintPath)", policy)
         self.assertIn("UBlueprint::StaticClass()->GetClassPathName()", policy)
