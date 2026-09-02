@@ -3,6 +3,10 @@
 #include "Components/ActorComponent.h"
 #include "Curves/RichCurve.h"
 #include "Curves/SimpleCurve.h"
+#include "Dataflow/DataflowGraph.h"
+#include "Dataflow/DataflowInputOutput.h"
+#include "Dataflow/DataflowNode.h"
+#include "Dataflow/DataflowObject.h"
 #include "Dom/JsonObject.h"
 #include "Dom/JsonValue.h"
 #include "Engine/Blueprint.h"
@@ -56,8 +60,10 @@ namespace UnrealAssetToolSystems
 #include "UnrealAssetToolSystemsSmartObjectsPolicy.inl"
 #include "UnrealAssetToolSystemsAIPerception.inl"
 #include "UnrealAssetToolSystemsAIPerceptionPolicy.inl"
-#define ScanGASProjectModel ScanGASSmartObjectsAndAIPerceptionProjectModels
-#define FFileHelper FAIPerceptionSystemsFileHelperProxy
+#include "UnrealAssetToolSystemsDataflowChaos.inl"
+#include "UnrealAssetToolSystemsDataflowChaosPolicy.inl"
+#define ScanGASProjectModel ScanGASSmartObjectsAIPerceptionAndDataflowChaosProjectModels
+#define FFileHelper FDataflowChaosSystemsFileHelperProxy
 #include "UnrealAssetToolSystemsDriver.inl"
 #undef FFileHelper
 #undef ScanGASProjectModel
