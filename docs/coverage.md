@@ -23,8 +23,8 @@ structural=12
 world=12
 animation=1
 vfx=1
-systems=6
-derived=22
+systems=8
+derived=24
 capabilities=1
 ```
 
@@ -75,6 +75,8 @@ capabilities=1
 | Mass Entity / Mass Gameplay | `first_class` | EntityConfig assets, parent configs, ordered Traits, MassSpawner entity-type composition/generator inheritance, MassAgent components and exact semantic graph relationships | Runtime Mass processor/archetype execution and ECS state are not simulated |
 | ZoneGraph authored shapes | `first_class` | Placed ZoneShape/ZoneShapeComponent identity, authored shape settings, ordered FZoneShapePoint geometry/settings and exact world/shape/component/point graph relationships | Generated `FZoneGraphStorage` lanes/lane points/lane links and transient connector caches are explicitly not claimed |
 | Gameplay Ability System | `first_class` | GameplayAbility identity/defaults/triggers/cost/cooldown; Ability Sets/grants; GameplayEffects/components/modifiers/executions/cues; Gameplay Cues; AttributeSets/attributes; exact schema-22 graph promotion | Active specs, live grants/effects, prediction, replicated ASC state, runtime cue history and live attribute values are not captured |
+| Smart Objects | `first_class` | Definition identity, ordered slots, default/slot behaviors, world-condition/selection schemas, reflected behavior properties and exact schema-23 graph semantics | Runtime occupancy, claims, reservations, subsystem handles and execution history are not captured |
+| AI Perception | `first_class` | Authored perception-component templates, ordered sense configs, dominant sense, sense implementations/settings, stimuli-source templates, ordered registered senses and exact schema-24 graph semantics | Live listener state, perceived actors, stimulus history, runtime registration state and sense-query results are not captured |
 | Typed project graph | `first_class` | Typed nodes/edges, provenance, coverage and quality classes | It reflects extractor depth; it must not imply unsupported subsystem semantics |
 | Capability contract | `first_class` | Corpus schema versions, tool/corpus coverage, canonical streams, derived relations, runtime boundaries, partial-corpus state and acceptance provenance | It describes evidence available to the corpus; it does not manufacture new semantic facts |
 
@@ -87,7 +89,6 @@ These systems are visible through existing generic layers, Blueprint/component s
 | Family | Current useful facts | Missing semantic model |
 | --- | --- | --- |
 | Gameplay Framework native classes | Blueprint subclasses/defaults plus placed Actor/component state | Native GameMode/GameState/PlayerState/Controller/Pawn relationship summary across project settings/maps |
-| AI Perception | Component templates/placed components can be seen through Blueprint/world state | Sense configs, dominant sense, stimuli sources and sense relationships |
 | Navigation | Nav actors/volumes/components can appear as world objects | Nav areas/costs, NavLink topology, agent settings and authored navigation project settings; generated NavMesh tile serialization is not a goal |
 | Landscape/Foliage/HLOD | World actors/components/assets are discoverable | Landscape layer/material/component topology, foliage type/instance semantics, HLOD composition |
 | SkeletalMesh / PhysicsAsset | Asset identity/references and use by animation assets can be seen | Skeleton/LOD/material/morph/cloth data and physics bodies/constraints |
@@ -102,9 +103,8 @@ Repository scanning has no dedicated semantic model yet for these major UE 5.8 f
 
 | Family | Why it matters for gameplay understanding | Suggested priority |
 | --- | --- | --- |
-| Smart Objects | Designer-authored interaction slots/behaviors/tags used by AI and players | **High — next evidence slice** |
-| Dataflow | General-purpose node graph used by Geometry Collection/Chaos Cloth/Flesh and other authoring | Medium-high |
-| Geometry Collection / Chaos destruction | Breakable geometry, clustering, materials and Dataflow links | Medium-high |
+| Dataflow | General-purpose node graph used by Geometry Collection/Chaos Cloth/Flesh and other authoring | **High — next evidence slice** |
+| Geometry Collection / Chaos destruction | Breakable geometry, clustering, materials and Dataflow links | High alongside Dataflow |
 | AnimNext | New animation graph/data ecosystem not represented by animation schema 1 | Medium-high for forward-looking animation projects |
 | Groom / Hair | Groom assets/bindings/physics relationships | Medium for character-heavy projects |
 | Texture/RenderTarget/VirtualTexture internals | Rendering resource relationships beyond material refs | Medium-low for gameplay-focused indexing |
@@ -157,11 +157,11 @@ Frontend nodes/edges are exact, but dedicated streams do not yet expose vertex d
 
 The project tag model is first-class. Remaining tag work is narrower: native C++ registration provenance where recoverable, restricted-tag special cases, replication/config depth and richer cross-system tag joins.
 
-## 6. AI coverage omits perception/navigation semantics
+## 6. Authored Navigation is the remaining core AI semantic gap
 
-Behavior Tree, Blackboard, EQS and StateTree are first-class, but AI Perception and authored Navigation settings/links/areas have no dedicated extractor.
+Behavior Tree, Blackboard, EQS, StateTree, Smart Objects and AI Perception now have maintained subsystem semantics. Authored Navigation settings/links/areas remain visible only through generic world/project facts.
 
-**Recommended priority:** AI Perception after Smart Objects, then authored navigation configuration/links/areas rather than generated NavMesh tile serialization.
+**Recommended priority:** normalize authored navigation configuration/links/areas rather than generated NavMesh tile serialization.
 
 ## 7. Mass/ZoneGraph boundary is authored, not generated
 
@@ -174,6 +174,12 @@ This also prevents a ZoneGraph-capable Mass spawn generator from being linked to
 Systems schema 6 and derived schema 22 are accepted on Lyra. The remaining GAS boundary is intentional rather than an open coverage defect: no active GameplayEffect specs, live granted ability specs, prediction state, replicated runtime AbilitySystemComponent state, live attribute mutation history or runtime cue execution is claimed.
 
 See [systems-schema-6.md](systems-schema-6.md) and [gas-evidence.md](gas-evidence.md).
+
+## 9. AI Perception boundary is authored, not runtime perception state
+
+Systems schema 8 and derived schema 24 are accepted on ContentExamples. The normalized model covers authored listener templates, sense configs/settings, dominant sense and stimuli-source registrations while deliberately excluding live listeners, perceived actors, stimulus history and runtime registration/query state.
+
+See [ai-perception-schema8.md](ai-perception-schema8.md).
 
 ---
 
@@ -188,13 +194,13 @@ Mover
 Gameplay Cameras
 ZoneGraph + Mass (authored schema-5 boundary)
 Gameplay Ability System (systems schema 6 / derived schema 22)
+Smart Objects (systems schema 7 / derived schema 23)
+AI Perception (systems schema 8 / derived schema 24)
 ```
 
 Remaining evidence-driven expansion:
 
 ```text
-Smart Objects
-AI Perception
 Dataflow / GeometryCollection
 AnimNext
 ```
@@ -211,8 +217,10 @@ Gameplay Framework summary and authored Navigation are also useful follow-up nor
 | World | Yes | Yes | Yes | Yes | ContentExamples/StackOBot/City Sample + others |
 | Animation | Yes | Yes | Yes | Yes | GASP + ContentExamples |
 | VFX | Yes | Yes | Yes | Yes | ContentExamples + StackOBot/Niagara Examples |
-| Systems schema 6 | Yes | Yes | Yes | Yes | StackOBot + ContentExamples + GASP + City Sample + Lyra |
+| Systems schema 8 | Yes | Yes | Yes | Yes | StackOBot + ContentExamples + GASP + City Sample + Lyra, with specialist corpus gates by family |
 | GAS schema-6 slice | Yes | Yes | Yes | Yes, exact schema-22 contract | Lyra UE 5.8.2 |
+| Smart Objects schema-7 slice | Yes | Yes | Yes | Yes, exact schema-23 contract | City Sample UE 5.8.2 |
+| AI Perception schema-8 slice | Yes | Yes | Yes | Yes, exact schema-24 contract | ContentExamples UE 5.8.2 |
 | Project graph/neighborhoods | Yes | Yes | Yes | n/a | StackOBot + ContentExamples + GASP + City Sample + Lyra |
 | Capability contract | Yes | n/a | `uatool capabilities` | Describes graph/canonical coverage | Synthetic regression + emitted per corpus |
 
@@ -235,6 +243,8 @@ Focused Python regression coverage includes:
 - Gameplay Camera canonical topology, director/provider behavior, enum readability and graph promotion;
 - Mass/ZoneGraph systems validation, focused capture/promotion, exact schema-21 graph contract and rejection of unsupported generator-to-shape bindings;
 - GAS systems schema-6 validation, focused capture/promotion, candidate selection, exact schema-22 graph construction and real-corpus acceptance verification;
+- Smart Objects systems schema-7 validation, focused capture/promotion and exact schema-23 graph verification;
+- AI Perception systems schema-8 normalization, discovery/capture regression gates, null-array preservation, capability promotion and exact schema-24 graph verification;
 - systems validation/SQLite/project-graph integration;
 - derived freshness, neighborhood compaction and storage invariants;
 - capability-contract full-corpus/partial-corpus/determinism/deferred-composition behavior.
@@ -245,10 +255,10 @@ Real UE corpora remain required because unit tests cannot substitute for actual 
 
 # What “complete” means now
 
-The original planned indexer roadmap plus the accepted Gameplay Tags, gameplay-data, Mover, Gameplay Cameras, Mass/authored-ZoneGraph and GAS slices are implemented and corpus-validated.
+The original planned indexer roadmap plus the accepted Gameplay Tags, gameplay-data, Mover, Gameplay Cameras, Mass/authored-ZoneGraph, GAS, Smart Objects and AI Perception slices are implemented and corpus-validated.
 
 The repository is **not complete with respect to the entire Unreal Engine 5.8 content ecosystem**, and it should not claim to be. The 1.0 target is trustworthy semantic infrastructure with explicit coverage, deterministic/provenance-aware graph output, stable lifecycle commands and bounded performance—not “100% of Unreal classes.”
 
 Expansion remains evidence-driven: acquire a representative corpus, inspect exact reflected/serialized facts, then normalize only semantics the evidence supports.
 
-See [architecture.md](architecture.md), [schema.md](schema.md), [animation-schema-1.md](animation-schema-1.md), [vfx-schema-1.md](vfx-schema-1.md), [zonegraph-mass-schema5.md](zonegraph-mass-schema5.md) and [systems-schema-6.md](systems-schema-6.md) for maintained technical references. Historical systems contracts remain in [systems-schema-1.md](systems-schema-1.md), [systems-schema-2.md](systems-schema-2.md) and [systems-schema-4.md](systems-schema-4.md).
+See [architecture.md](architecture.md), [schema.md](schema.md), [animation-schema-1.md](animation-schema-1.md), [vfx-schema-1.md](vfx-schema-1.md), [zonegraph-mass-schema5.md](zonegraph-mass-schema5.md), [systems-schema-6.md](systems-schema-6.md) and [ai-perception-schema8.md](ai-perception-schema8.md) for maintained technical references. Historical systems contracts remain in [systems-schema-1.md](systems-schema-1.md), [systems-schema-2.md](systems-schema-2.md) and [systems-schema-4.md](systems-schema-4.md).

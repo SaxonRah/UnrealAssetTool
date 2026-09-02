@@ -32,6 +32,7 @@
 #include "Serialization/JsonWriter.h"
 #include "UObject/FindObjectFlags.h"
 #include "UObject/SoftObjectPtr.h"
+#include "UObject/UObjectGlobals.h"
 #include "UObject/UObjectHash.h"
 #include "UObject/UObjectIterator.h"
 #include "UObject/UnrealType.h"
@@ -53,8 +54,10 @@ namespace UnrealAssetToolSystems
 #include "UnrealAssetToolSystemsGASPolicy.inl"
 #include "UnrealAssetToolSystemsSmartObjects.inl"
 #include "UnrealAssetToolSystemsSmartObjectsPolicy.inl"
-#define ScanGASProjectModel ScanGASAndSmartObjectProjectModels
-#define FFileHelper FSmartObjectSystemsFileHelperProxy
+#include "UnrealAssetToolSystemsAIPerception.inl"
+#include "UnrealAssetToolSystemsAIPerceptionPolicy.inl"
+#define ScanGASProjectModel ScanGASSmartObjectsAndAIPerceptionProjectModels
+#define FFileHelper FAIPerceptionSystemsFileHelperProxy
 #include "UnrealAssetToolSystemsDriver.inl"
 #undef FFileHelper
 #undef ScanGASProjectModel
