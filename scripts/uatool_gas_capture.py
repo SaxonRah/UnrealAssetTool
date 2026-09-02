@@ -107,8 +107,8 @@ def _validate_capture(output: Path) -> dict:
         raise RuntimeError("focused GAS classes contain blank or duplicate class_path rows")
 
     source_paths = set(asset_paths) | set(class_paths)
-    for label, rows in (("property", properties), ("reference", references)):
-        for row in rows:
+    for label, row_values in (("property", properties), ("reference", references)):
+        for row in row_values:
             source = str(row.get("source_path", "") or "")
             owner = str(row.get("owner_path", "") or "")
             kind = str(row.get("gas_kind", "") or "")
@@ -357,3 +357,14 @@ def install(runtime_module, core_module) -> None:
 
     runtime_module.main = main
     runtime_module._gas_capture_installed = True
+
+    # GAS capture is installed after systems schema 6 has been composed by
+    # uatool_gas_evidence. Complete that same one-launcher composition here with
+    # raw schema-6 acceptance, derived-schema-22 verification and graph topology.
+    import uatool_systems as systems_module
+    import uatool_project_graph as project_graph_module
+    import uatool_systems_schema6_accept as systems_schema6_accept
+    import uatool_gas_graph as gas_graph
+
+    systems_schema6_accept.install(runtime_module, systems_module)
+    gas_graph.install(project_graph_module)
