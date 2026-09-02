@@ -17,6 +17,7 @@ import uatool_smartobject_capture as _smartobject_capture
 import uatool_ai_perception_evidence as _ai_perception_evidence
 import uatool_ai_perception_capture as _ai_perception_capture
 import uatool_dataflow_chaos_evidence as _dataflow_chaos_evidence
+import uatool_dataflow_chaos_capture as _dataflow_chaos_capture
 
 # Smart Objects schema 7 and AI Perception schema 8 are composed after the
 # existing Mass -> GAS systems installers. uatool.py imports this facade before
@@ -127,6 +128,7 @@ _smartobject_capture.install(_runtime)
 _ai_perception_evidence.install(_runtime)
 _ai_perception_capture.install(_runtime)
 _dataflow_chaos_evidence.install(_runtime)
+_dataflow_chaos_capture.install(_runtime)
 
 __all__ = (
     "VFX_SCHEMA_VERSION", "RAW_FILES", "create_schema", "read_manifest",
