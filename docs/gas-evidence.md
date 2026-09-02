@@ -214,4 +214,4 @@ Schema 6 is authored/default-state coverage only. It does not claim active Gamep
 
 The remaining acceptance path is one derived-schema-22 derive followed by exact GAS graph verification. No additional Unreal GAS capture is required.
 
-Python/schema composition, schema-6 validation, specialized Blueprint membership regressions, exact GAS graph expectations/verifier, retained schema-21 Mass/ZoneGraph compatibility, and derived-schema-22 composition are green in CI through **Python schema smoke #343**.
+Python/schema composition, schema-6 validation, specialized Blueprint membership regressions, exact GAS graph expectations/verifier, retained schema-21 Mass/ZoneGraph compatibility, canonical schema-6 promotion, and derived-schema-22 composition are green in CI through **Python schema smoke #345**.
