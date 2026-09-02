@@ -85,8 +85,8 @@ class SystemsGASRealCorpusRegressionTest(unittest.TestCase):
             "`gas_attribute_sets`: **4**",
             "`gas_attributes`: **10**",
             "/Script/GameplayAbilities.GameplayAbilityBlueprint",
-            "548 exact GAS-domain graph edges",
             "560 exact semantic GAS edges",
+            "canonical raw promotion gate is accepted",
             "No additional Unreal GAS capture is required",
         ):
             self.assertIn(text, docs)
