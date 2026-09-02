@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only Gameplay Ability System evidence reports over an existing corpus.
-
-These commands are diagnostic only. They do not promote GAS semantics, change
-canonical JSONL, launch Unreal, or require a derive. Canonical authored streams
-are scanned by default; expensive derived/source streams are opt-in.
-"""
+"""Read-only Gameplay Ability System evidence reports over an existing corpus."""
 from __future__ import annotations
 
 import argparse
@@ -13,58 +8,33 @@ import json
 from pathlib import Path
 import sys
 
+import uatool_gas_capture as gas_capture
+
 MARKERS = (
-    "/script/gameplayabilities",
-    "gameplayability",
-    "abilitysystemcomponent",
-    "attributeset",
-    "fgameplayattribute",
-    "gameplayeffect",
-    "gameplaycue",
-    "abilitytask",
-    "gameplaymodmagnitudecalculation",
-    "gameplayeffectexecutioncalculation",
-    "gameplayeffectcustomapplicationrequirement",
-    "gameplaytagresponsetable",
-    "lyragameplayability",
-    "lyraabilitysystemcomponent",
-    "lyraabilityset",
-    "lyraattributeset",
-    "lyrahealthset",
-    "lyracombatset",
-    "lyragameplaytagrelationshipmapping",
-    "gamefeatureaction_addabilities",
+    "/script/gameplayabilities", "gameplayability", "abilitysystemcomponent",
+    "attributeset", "fgameplayattribute", "gameplayeffect", "gameplaycue",
+    "abilitytask", "gameplaymodmagnitudecalculation",
+    "gameplayeffectexecutioncalculation", "gameplayeffectcustomapplicationrequirement",
+    "gameplaytagresponsetable", "lyragameplayability", "lyraabilitysystemcomponent",
+    "lyraabilityset", "lyraattributeset", "lyrahealthset", "lyracombatset",
+    "lyragameplaytagrelationshipmapping", "gamefeatureaction_addabilities",
 )
 
-# Default scan intentionally excludes the potentially huge derived graph and
-# semantic statement streams. Those can be requested explicitly once canonical
-# evidence tells us where the useful GAS facts live.
+# Potentially huge derived graph/semantic streams are opt-in. The default pass
+# is deliberately limited to authored/canonical data and does not run derive.
 CANONICAL_STREAMS = (
-    "assets.jsonl",
-    "blueprints.jsonl",
-    "blueprint_defaults.jsonl",
-    "blueprint_component_properties.jsonl",
-    "blueprint_state_values.jsonl",
-    "blueprint_node_properties.jsonl",
-    "blueprint_node_references.jsonl",
-    "data_tables.jsonl",
-    "data_table_rows.jsonl",
-    "data_table_fields.jsonl",
-    "primary_data_assets.jsonl",
-    "gameplay_tag_dictionary.jsonl",
-    "world_actors.jsonl",
-    "world_components.jsonl",
-    "world_instance_properties.jsonl",
-    "world_references.jsonl",
-    "systems_assets.jsonl",
-    "systems_properties.jsonl",
+    "assets.jsonl", "blueprints.jsonl", "blueprint_defaults.jsonl",
+    "blueprint_component_properties.jsonl", "blueprint_state_values.jsonl",
+    "blueprint_node_properties.jsonl", "blueprint_node_references.jsonl",
+    "data_tables.jsonl", "data_table_rows.jsonl", "data_table_fields.jsonl",
+    "primary_data_assets.jsonl", "gameplay_tag_dictionary.jsonl",
+    "world_actors.jsonl", "world_components.jsonl", "world_instance_properties.jsonl",
+    "world_references.jsonl", "systems_assets.jsonl", "systems_properties.jsonl",
     "systems_references.jsonl",
 )
 DERIVED_STREAMS = (
-    "blueprint_semantic_nodes.jsonl",
-    "blueprint_semantic_statements.jsonl",
-    "project_nodes.jsonl",
-    "project_edges.jsonl",
+    "blueprint_semantic_nodes.jsonl", "blueprint_semantic_statements.jsonl",
+    "project_nodes.jsonl", "project_edges.jsonl",
 )
 SOURCE_STREAMS = ("source_chunks.jsonl",)
 
@@ -74,8 +44,7 @@ FOCUS_DEFINITIONS = {
         "anchors": (
             "/script/gameplayabilities.gameplayability",
             "/script/gameplayabilitieseditor.gameplayabilityblueprint",
-            "gameplayabilityblueprint",
-            "lyragameplayability",
+            "gameplayabilityblueprint", "lyragameplayability",
         ),
         "details": (
             "abilitytags", "activationownedtags", "activationrequiredtags", "activationblockedtags",
@@ -87,31 +56,24 @@ FOCUS_DEFINITIONS = {
     "effect": {
         "description": "GameplayEffect definitions, GEComponents, modifiers, executions, duration/period, cues and stacking",
         "anchors": (
-            "/script/gameplayabilities.gameplayeffect",
-            "gameplayeffectcomponent",
-            "abilitiesgameplayeffectcomponent",
-            "additionaleffectsgameplayeffectcomponent",
-            "assettagsgameplayeffectcomponent",
-            "blockabilitytagsgameplayeffectcomponent",
-            "cancelabilitytagsgameplayeffectcomponent",
-            "chancetoapplygameplayeffectcomponent",
-            "customcanapplygameplayeffectcomponent",
-            "immunitygameplayeffectcomponent",
-            "removeothergameplayeffectcomponent",
-            "targettagrequirementsgameplayeffectcomponent",
+            "/script/gameplayabilities.gameplayeffect", "gameplayeffectcomponent",
+            "abilitiesgameplayeffectcomponent", "additionaleffectsgameplayeffectcomponent",
+            "assettagsgameplayeffectcomponent", "blockabilitytagsgameplayeffectcomponent",
+            "cancelabilitytagsgameplayeffectcomponent", "chancetoapplygameplayeffectcomponent",
+            "customcanapplygameplayeffectcomponent", "immunitygameplayeffectcomponent",
+            "removeothergameplayeffectcomponent", "targettagrequirementsgameplayeffectcomponent",
             "targettagsgameplayeffectcomponent",
         ),
         "details": (
-            "durationpolicy", "durationmagnitude", "period", "modifiers", "modifierop", "magnitude",
-            "executions", "calculationclass", "gameplaycues", "stacking", "stacklimitcount",
-            "components", "inheritable", "tags",
+            "durationpolicy", "durationmagnitude", "period", "modifiers", "modifierop",
+            "magnitude", "executions", "calculationclass", "gameplaycues", "stacking",
+            "stacklimitcount", "components", "inheritable", "tags",
         ),
     },
     "ability-system": {
         "description": "AbilitySystemComponent templates/instances and authored component policy/state",
         "anchors": (
-            "/script/gameplayabilities.abilitysystemcomponent",
-            "abilitysystemcomponent",
+            "/script/gameplayabilities.abilitysystemcomponent", "abilitysystemcomponent",
             "lyraabilitysystemcomponent",
         ),
         "details": ("replicationmode", "defaultstartingdata", "spawnedattributes", "attribute", "effect", "tag"),
@@ -119,9 +81,8 @@ FOCUS_DEFINITIONS = {
     "attribute": {
         "description": "AttributeSet classes/data plus FGameplayAttribute/FGameplayAttributeData references",
         "anchors": (
-            "/script/gameplayabilities.attributeset",
-            "attributeset", "fgameplayattribute", "fgameplayattributedata",
-            "lyraattributeset", "lyrahealthset", "lyracombatset",
+            "/script/gameplayabilities.attributeset", "attributeset", "fgameplayattribute",
+            "fgameplayattributedata", "lyraattributeset", "lyrahealthset", "lyracombatset",
         ),
         "details": ("basevalue", "currentvalue", "attribute", "health", "damage", "healing", "clamp"),
     },
@@ -182,14 +143,8 @@ def _counter_value(row: dict, keys: tuple[str, ...]) -> str:
     return ""
 
 
-def build_report(
-    output: Path,
-    rows,
-    *,
-    include_derived: bool = False,
-    include_source: bool = False,
-    example_limit: int = 12,
-) -> dict:
+def build_report(output: Path, rows, *, include_derived: bool = False,
+                 include_source: bool = False, example_limit: int = 12) -> dict:
     output = Path(output).expanduser().resolve()
     stream_stats: dict[str, dict] = {}
     marker_counts = collections.Counter()
@@ -217,15 +172,9 @@ def build_report(
     }
 
 
-def build_focus_report(
-    output: Path,
-    rows,
-    *,
-    include_derived: bool = False,
-    include_source: bool = False,
-    focuses: tuple[str, ...] | list[str] | None = None,
-    example_limit: int = 10,
-) -> dict:
+def build_focus_report(output: Path, rows, *, include_derived: bool = False,
+                       include_source: bool = False, focuses=None,
+                       example_limit: int = 10) -> dict:
     output = Path(output).expanduser().resolve()
     selected = tuple(focuses or FOCUS_NAMES)
     invalid = [name for name in selected if name not in FOCUS_DEFINITIONS]
@@ -406,3 +355,8 @@ def install(runtime_module) -> None:
 
     runtime_module.main = main
     runtime_module._gas_evidence_installed = True
+
+    # Compose the native focused capture after this wrapper so gas-capture falls
+    # back through gas-evidence/gas-focus and ultimately the canonical runtime.
+    import uatool_core as core_module
+    gas_capture.install(runtime_module, core_module)
