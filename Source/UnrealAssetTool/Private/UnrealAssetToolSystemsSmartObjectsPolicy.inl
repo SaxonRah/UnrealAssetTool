@@ -1,4 +1,7 @@
 static bool GSmartObjectSchema7ScanAttempted = false;
+static bool GSmartObjectSchema7ExitHookRegistered = false;
+
+static void FinalizeSmartObjectSchema7Manifest();
 
 static FString SmartObjectSystemsOutputDir()
 {
@@ -29,6 +32,17 @@ static bool ScanGASAndSmartObjectProjectModels(
 {
     GSmartObjectSchema7ScanAttempted = true;
     GSmartObjectCounts = FSmartObjectCounts();
+
+    // Register shutdown work only after the engine is initialized. UE 5.8
+    // tightened delegate initialization ordering, and translation-unit static
+    // registration can be lost before the engine loop owns these delegates.
+    if (!GSmartObjectSchema7ExitHookRegistered)
+    {
+        FCoreDelegates::OnEnginePreExit.AddStatic(&FinalizeSmartObjectSchema7Manifest);
+        FCoreDelegates::OnPreExit.AddStatic(&FinalizeSmartObjectSchema7Manifest);
+        FCoreDelegates::OnExit.AddStatic(&FinalizeSmartObjectSchema7Manifest);
+        GSmartObjectSchema7ExitHookRegistered = true;
+    }
 
     const FString OutputDir = SmartObjectSystemsOutputDir();
     if (!GSmartObjectWriters.Open(OutputDir))
@@ -94,12 +108,7 @@ static bool UpgradeSystemsManifestToSchema7()
     Root->SetNumberField(TEXT("schema_version"), 7);
 
     TSharedPtr<FJsonObject> Counts;
-    const TSharedPtr<FJsonObject>* ExistingCounts = nullptr;
-    if (Root->TryGetObjectField(TEXT("counts"), ExistingCounts) && ExistingCounts && ExistingCounts->IsValid())
-    {
-        Counts = *ExistingCounts;
-    }
-    else
+    if (!Root->TryGetObjectField(TEXT("counts"), &Counts) || !Counts.IsValid())
     {
         Counts = MakeShared<FJsonObject>();
         Root->SetObjectField(TEXT("counts"), Counts.ToSharedRef());
@@ -167,18 +176,15 @@ static bool UpgradeSystemsManifestToSchema7()
 
 static void FinalizeSmartObjectSchema7Manifest()
 {
-    if (!UpgradeSystemsManifestToSchema7())
+    static bool bFinalized = false;
+    if (bFinalized)
     {
-        UE_LOG(LogTemp, Error, TEXT("UnrealAssetToolSystems: failed promoting systems_manifest.json to schema 7"));
+        return;
     }
+    if (UpgradeSystemsManifestToSchema7())
+    {
+        bFinalized = true;
+        return;
+    }
+    UE_LOG(LogTemp, Error, TEXT("UnrealAssetToolSystems: failed promoting systems_manifest.json to schema 7"));
 }
-
-struct FSmartObjectSchema7FinalizeBootstrap
-{
-    FSmartObjectSchema7FinalizeBootstrap()
-    {
-        FCoreDelegates::OnEnginePreExit.AddStatic(&FinalizeSmartObjectSchema7Manifest);
-    }
-};
-
-static FSmartObjectSchema7FinalizeBootstrap GSmartObjectSchema7FinalizeBootstrap;
