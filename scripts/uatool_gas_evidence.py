@@ -2,9 +2,8 @@
 """Read-only Gameplay Ability System evidence reports over an existing corpus.
 
 These commands are diagnostic only. They do not promote GAS semantics, change
-canonical JSONL, or require a derive. The purpose is to learn the actual UE 5.8
-serialized/reflected shapes from a representative project (preferably Lyra)
-before a first-class schema is designed.
+canonical JSONL, launch Unreal, or require a derive. Canonical authored streams
+are scanned by default; expensive derived/source streams are opt-in.
 """
 from __future__ import annotations
 
@@ -37,7 +36,10 @@ MARKERS = (
     "gamefeatureaction_addabilities",
 )
 
-BASE_STREAMS = (
+# Default scan intentionally excludes the potentially huge derived graph and
+# semantic statement streams. Those can be requested explicitly once canonical
+# evidence tells us where the useful GAS facts live.
+CANONICAL_STREAMS = (
     "assets.jsonl",
     "blueprints.jsonl",
     "blueprint_defaults.jsonl",
@@ -45,8 +47,6 @@ BASE_STREAMS = (
     "blueprint_state_values.jsonl",
     "blueprint_node_properties.jsonl",
     "blueprint_node_references.jsonl",
-    "blueprint_semantic_nodes.jsonl",
-    "blueprint_semantic_statements.jsonl",
     "data_tables.jsonl",
     "data_table_rows.jsonl",
     "data_table_fields.jsonl",
@@ -59,6 +59,10 @@ BASE_STREAMS = (
     "systems_assets.jsonl",
     "systems_properties.jsonl",
     "systems_references.jsonl",
+)
+DERIVED_STREAMS = (
+    "blueprint_semantic_nodes.jsonl",
+    "blueprint_semantic_statements.jsonl",
     "project_nodes.jsonl",
     "project_edges.jsonl",
 )
@@ -74,24 +78,10 @@ FOCUS_DEFINITIONS = {
             "lyragameplayability",
         ),
         "details": (
-            "abilitytags",
-            "activationownedtags",
-            "activationrequiredtags",
-            "activationblockedtags",
-            "source required tags",
-            "source blocked tags",
-            "target required tags",
-            "target blocked tags",
-            "cancelabilitieswithtag",
-            "blockabilitieswithtag",
-            "replicationpolicy",
-            "instancingpolicy",
-            "netexecutionpolicy",
-            "netsecuritypolicy",
-            "costgameplayeffectclass",
-            "cooldowngameplayeffectclass",
-            "abilitytriggers",
-            "triggers",
+            "abilitytags", "activationownedtags", "activationrequiredtags", "activationblockedtags",
+            "cancelabilitieswithtag", "blockabilitieswithtag", "replicationpolicy", "instancingpolicy",
+            "netexecutionpolicy", "netsecuritypolicy", "costgameplayeffectclass",
+            "cooldowngameplayeffectclass", "abilitytriggers", "triggers",
         ),
     },
     "effect": {
@@ -112,20 +102,9 @@ FOCUS_DEFINITIONS = {
             "targettagsgameplayeffectcomponent",
         ),
         "details": (
-            "durationpolicy",
-            "durationmagnitude",
-            "period",
-            "modifiers",
-            "modifierop",
-            "magnitude",
-            "executions",
-            "calculationclass",
-            "gameplaycues",
-            "stacking",
-            "stacklimitcount",
-            "components",
-            "inheritable",
-            "tags",
+            "durationpolicy", "durationmagnitude", "period", "modifiers", "modifierop", "magnitude",
+            "executions", "calculationclass", "gameplaycues", "stacking", "stacklimitcount",
+            "components", "inheritable", "tags",
         ),
     },
     "ability-system": {
@@ -135,75 +114,34 @@ FOCUS_DEFINITIONS = {
             "abilitysystemcomponent",
             "lyraabilitysystemcomponent",
         ),
-        "details": (
-            "replicationmode",
-            "defaultstartingdata",
-            "spawnedattributes",
-            "attribute",
-            "ability",
-            "effect",
-            "tag",
-        ),
+        "details": ("replicationmode", "defaultstartingdata", "spawnedattributes", "attribute", "effect", "tag"),
     },
     "attribute": {
         "description": "AttributeSet classes/data plus FGameplayAttribute/FGameplayAttributeData references",
         "anchors": (
             "/script/gameplayabilities.attributeset",
-            "attributeset",
-            "fgameplayattribute",
-            "fgameplayattributedata",
-            "lyraattributeset",
-            "lyrahealthset",
-            "lyracombatset",
+            "attributeset", "fgameplayattribute", "fgameplayattributedata",
+            "lyraattributeset", "lyrahealthset", "lyracombatset",
         ),
-        "details": (
-            "basevalue",
-            "currentvalue",
-            "attribute",
-            "health",
-            "damage",
-            "healing",
-            "clamp",
-        ),
+        "details": ("basevalue", "currentvalue", "attribute", "health", "damage", "healing", "clamp"),
     },
     "cue-task": {
         "description": "Gameplay Cue handlers/tags and AbilityTask execution helpers",
         "anchors": (
-            "gameplaycuenotify",
-            "gameplaycueset",
-            "gameplaycuefunctionlibrary",
-            "gameplaycue.",
-            "/script/gameplayabilities.abilitytask",
-            "abilitytask_",
+            "gameplaycuenotify", "gameplaycueset", "gameplaycuefunctionlibrary", "gameplaycue.",
+            "/script/gameplayabilities.abilitytask", "abilitytask_",
         ),
-        "details": (
-            "gameplaycuetag",
-            "cue",
-            "montage",
-            "event",
-            "delegate",
-            "wait",
-            "targetdata",
-        ),
+        "details": ("gameplaycuetag", "cue", "montage", "event", "delegate", "wait", "targetdata"),
     },
     "granting": {
         "description": "Lyra/GameFeature ability grants, ability sets and tag-relationship assets",
         "anchors": (
-            "lyraabilityset",
-            "gamefeatureaction_addabilities",
-            "lyragameplaytagrelationshipmapping",
-            "abilitiesgameplayeffectcomponent",
+            "lyraabilityset", "gamefeatureaction_addabilities",
+            "lyragameplaytagrelationshipmapping", "abilitiesgameplayeffectcomponent",
         ),
         "details": (
-            "grantedgameplayabilities",
-            "grantedgameplayeffects",
-            "grantedattributesets",
-            "abilityset",
-            "ability",
-            "effect",
-            "attributeset",
-            "inputtag",
-            "tagrelationship",
+            "grantedgameplayabilities", "grantedgameplayeffects", "grantedattributesets",
+            "abilityset", "effect", "attributeset", "inputtag", "tagrelationship",
         ),
     },
 }
@@ -227,6 +165,15 @@ def _hits(text: str, values: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(value for value in values if value in lowered)
 
 
+def _streams(*, include_derived: bool, include_source: bool) -> list[str]:
+    result = list(CANONICAL_STREAMS)
+    if include_derived:
+        result.extend(DERIVED_STREAMS)
+    if include_source:
+        result.extend(SOURCE_STREAMS)
+    return result
+
+
 def _counter_value(row: dict, keys: tuple[str, ...]) -> str:
     for key in keys:
         value = row.get(key)
@@ -235,14 +182,19 @@ def _counter_value(row: dict, keys: tuple[str, ...]) -> str:
     return ""
 
 
-def build_report(output: Path, rows, *, include_source: bool = False, example_limit: int = 12) -> dict:
+def build_report(
+    output: Path,
+    rows,
+    *,
+    include_derived: bool = False,
+    include_source: bool = False,
+    example_limit: int = 12,
+) -> dict:
     output = Path(output).expanduser().resolve()
-    streams = list(BASE_STREAMS) + (list(SOURCE_STREAMS) if include_source else [])
     stream_stats: dict[str, dict] = {}
     marker_counts = collections.Counter()
     examples: dict[str, list[dict]] = {}
-
-    for filename in streams:
+    for filename in _streams(include_derived=include_derived, include_source=include_source):
         path = output / filename
         total = matched = 0
         sample: list[dict] = []
@@ -258,15 +210,10 @@ def build_report(output: Path, rows, *, include_source: bool = False, example_li
         stream_stats[filename] = {"exists": path.is_file(), "total_rows": total, "matched_rows": matched}
         if sample:
             examples[filename] = sample
-
     return {
-        "output": str(output),
-        "diagnostic_only": True,
-        "semantic_promotion": False,
-        "include_source": include_source,
-        "stream_stats": stream_stats,
-        "marker_counts": marker_counts,
-        "examples": examples,
+        "output": str(output), "diagnostic_only": True, "semantic_promotion": False,
+        "include_derived": include_derived, "include_source": include_source,
+        "stream_stats": stream_stats, "marker_counts": marker_counts, "examples": examples,
     }
 
 
@@ -274,6 +221,7 @@ def build_focus_report(
     output: Path,
     rows,
     *,
+    include_derived: bool = False,
     include_source: bool = False,
     focuses: tuple[str, ...] | list[str] | None = None,
     example_limit: int = 10,
@@ -283,23 +231,17 @@ def build_focus_report(
     invalid = [name for name in selected if name not in FOCUS_DEFINITIONS]
     if invalid:
         raise ValueError(f"unknown focus: {', '.join(invalid)}")
-
-    streams = list(BASE_STREAMS) + (list(SOURCE_STREAMS) if include_source else [])
-    buckets = {}
-    for name in selected:
-        buckets[name] = {
-            "matched_rows": 0,
-            "high_signal_rows": 0,
-            "stream_counts": collections.Counter(),
-            "anchor_counts": collections.Counter(),
-            "detail_counts": collections.Counter(),
-            "property_counts": collections.Counter(),
-            "class_counts": collections.Counter(),
-            "cpp_type_counts": collections.Counter(),
+    buckets = {
+        name: {
+            "matched_rows": 0, "high_signal_rows": 0,
+            "stream_counts": collections.Counter(), "anchor_counts": collections.Counter(),
+            "detail_counts": collections.Counter(), "property_counts": collections.Counter(),
+            "class_counts": collections.Counter(), "cpp_type_counts": collections.Counter(),
             "examples": collections.defaultdict(list),
         }
-
-    for filename in streams:
+        for name in selected
+    }
+    for filename in _streams(include_derived=include_derived, include_source=include_source):
         path = output / filename
         for row in _iter_rows(rows, path) or ():
             text = _row_text(row)
@@ -315,7 +257,6 @@ def build_focus_report(
                 bucket["stream_counts"][filename] += 1
                 bucket["anchor_counts"].update(anchors)
                 bucket["detail_counts"].update(details)
-
                 prop = _counter_value(row, ("property_path", "property_name", "root_property"))
                 if prop:
                     bucket["property_counts"][prop] += 1
@@ -328,18 +269,13 @@ def build_focus_report(
                 cpp_type = _counter_value(row, ("cpp_type", "property_type", "struct_type"))
                 if cpp_type:
                     bucket["cpp_type_counts"][cpp_type] += 1
-
                 sample = bucket["examples"][filename]
                 if len(sample) < example_limit:
                     sample.append({"anchors": list(anchors), "details": list(details), "row": row})
-
     return {
-        "output": str(output),
-        "diagnostic_only": True,
-        "semantic_promotion": False,
-        "include_source": include_source,
-        "focuses": selected,
-        "buckets": buckets,
+        "output": str(output), "diagnostic_only": True, "semantic_promotion": False,
+        "include_derived": include_derived, "include_source": include_source,
+        "focuses": selected, "buckets": buckets,
     }
 
 
@@ -354,62 +290,47 @@ def _sample_text(value: dict, max_chars: int = 1000) -> str:
 
 def render_report(report: dict, *, example_limit: int = 12) -> str:
     lines = [
-        "=== UATOOL GAS EVIDENCE ===",
-        f"output: {report['output']}",
-        "diagnostic_only: True",
-        "semantic_promotion: False",
-        f"include_source: {report['include_source']}",
-        "",
-        "[streams]",
+        "=== UATOOL GAS EVIDENCE ===", f"output: {report['output']}",
+        "diagnostic_only: True", "semantic_promotion: False",
+        f"include_derived: {report['include_derived']}", f"include_source: {report['include_source']}",
+        "", "[streams]",
     ]
     for filename, stats in report["stream_stats"].items():
         if stats["exists"]:
             lines.append(f"{filename}: matched={stats['matched_rows']} total={stats['total_rows']}")
     lines.extend(("", "[markers]"))
-    for value, count in _top(report["marker_counts"], 30):
-        lines.append(f"{count:8d}  {value}")
+    lines.extend(f"{count:8d}  {value}" for value, count in _top(report["marker_counts"], 30))
     for filename, samples in report["examples"].items():
         lines.extend(("", f"[{filename} examples]"))
-        for item in samples[:example_limit]:
-            lines.append(_sample_text(item))
+        lines.extend(_sample_text(item) for item in samples[:example_limit])
     lines.append("===========================")
     return "\n".join(lines) + "\n"
 
 
 def render_focus_report(report: dict, *, example_limit: int = 10) -> str:
     lines = [
-        "=== UATOOL GAS FOCUS ===",
-        f"output: {report['output']}",
-        "diagnostic_only: True",
-        "semantic_promotion: False",
-        f"include_source: {report['include_source']}",
+        "=== UATOOL GAS FOCUS ===", f"output: {report['output']}",
+        "diagnostic_only: True", "semantic_promotion: False",
+        f"include_derived: {report['include_derived']}", f"include_source: {report['include_source']}",
     ]
     for name in report["focuses"]:
         definition = FOCUS_DEFINITIONS[name]
         bucket = report["buckets"][name]
-        lines.extend((
-            "",
-            f"[{name}] {definition['description']}",
-            f"matched_rows={bucket['matched_rows']} high_signal_rows={bucket['high_signal_rows']}",
-        ))
+        lines.extend(("", f"[{name}] {definition['description']}",
+                      f"matched_rows={bucket['matched_rows']} high_signal_rows={bucket['high_signal_rows']}"))
         for label, counter in (
-            ("streams", bucket["stream_counts"]),
-            ("anchors", bucket["anchor_counts"]),
-            ("details", bucket["detail_counts"]),
-            ("classes", bucket["class_counts"]),
-            ("properties", bucket["property_counts"]),
-            ("cpp_types", bucket["cpp_type_counts"]),
+            ("streams", bucket["stream_counts"]), ("anchors", bucket["anchor_counts"]),
+            ("details", bucket["detail_counts"]), ("classes", bucket["class_counts"]),
+            ("properties", bucket["property_counts"]), ("cpp_types", bucket["cpp_type_counts"]),
         ):
             values = _top(counter)
             if values:
                 lines.append(label + ":")
                 lines.extend(f"  {count:8d}  {value}" for value, count in values)
         for filename, samples in bucket["examples"].items():
-            if not samples:
-                continue
-            lines.append(f"examples {filename}:")
-            for item in samples[:example_limit]:
-                lines.append("  " + _sample_text(item))
+            if samples:
+                lines.append(f"examples {filename}:")
+                lines.extend("  " + _sample_text(item) for item in samples[:example_limit])
     lines.append("========================")
     return "\n".join(lines) + "\n"
 
@@ -423,17 +344,23 @@ def _write_report(path_value: str | None, text: str) -> None:
     print(f"report: {path}")
 
 
+def _add_common(parser: argparse.ArgumentParser, *, default_limit: int) -> None:
+    parser.add_argument("output", help="existing .uatool corpus")
+    parser.add_argument("--include-derived", action="store_true", help="also scan derived semantic/project graph streams")
+    parser.add_argument("--include-source", action="store_true", help="also scan source_chunks.jsonl")
+    parser.add_argument("--limit", type=int, default=default_limit)
+    parser.add_argument("--report")
+
+
 def _evidence_cli(runtime_module, argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="uatool gas-evidence")
-    parser.add_argument("output", help="existing .uatool corpus")
-    parser.add_argument("--include-source", action="store_true")
-    parser.add_argument("--limit", type=int, default=12)
-    parser.add_argument("--report")
+    _add_common(parser, default_limit=12)
     args = parser.parse_args(argv)
     if args.limit < 1:
         parser.error("--limit must be >= 1")
-    output = Path(args.output).expanduser().resolve()
-    report = build_report(output, runtime_module._rows, include_source=args.include_source, example_limit=args.limit)
+    report = build_report(Path(args.output), runtime_module._rows,
+                          include_derived=args.include_derived, include_source=args.include_source,
+                          example_limit=args.limit)
     text = render_report(report, example_limit=args.limit)
     _write_report(args.report, text)
     print(text, end="")
@@ -442,22 +369,15 @@ def _evidence_cli(runtime_module, argv: list[str]) -> int:
 
 def _focus_cli(runtime_module, argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="uatool gas-focus")
-    parser.add_argument("output", help="existing .uatool corpus")
+    _add_common(parser, default_limit=10)
     parser.add_argument("--focus", action="append", choices=FOCUS_NAMES)
-    parser.add_argument("--include-source", action="store_true")
-    parser.add_argument("--limit", type=int, default=10)
-    parser.add_argument("--report")
     args = parser.parse_args(argv)
     if args.limit < 1:
         parser.error("--limit must be >= 1")
-    output = Path(args.output).expanduser().resolve()
-    report = build_focus_report(
-        output,
-        runtime_module._rows,
-        include_source=args.include_source,
-        focuses=tuple(args.focus) if args.focus else None,
-        example_limit=args.limit,
-    )
+    report = build_focus_report(Path(args.output), runtime_module._rows,
+                                include_derived=args.include_derived, include_source=args.include_source,
+                                focuses=tuple(args.focus) if args.focus else None,
+                                example_limit=args.limit)
     text = render_focus_report(report, example_limit=args.limit)
     _write_report(args.report, text)
     print(text, end="")
