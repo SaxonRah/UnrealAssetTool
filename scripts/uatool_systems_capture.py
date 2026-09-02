@@ -11,11 +11,13 @@ import time
 import zipfile
 from pathlib import Path
 
-CAPTURE_FILES = (
+_BASE_CAPTURE_FILES = (
     "systems_manifest.json",
     "systems_assets.jsonl",
     "systems_properties.jsonl",
     "systems_references.jsonl",
+)
+_SCHEMA5_FILES = (
     "mass_entity_configs.jsonl",
     "mass_entity_traits.jsonl",
     "mass_spawners.jsonl",
@@ -27,7 +29,29 @@ CAPTURE_FILES = (
     "zonegraph_shape_points.jsonl",
 )
 
-SCHEMA5_FILES = CAPTURE_FILES[4:]
+CAPTURE_SCHEMA_VERSION = 5
+CAPTURE_FILES = (*_BASE_CAPTURE_FILES, *_SCHEMA5_FILES)
+SCHEMA_FILES = CAPTURE_FILES[len(_BASE_CAPTURE_FILES):]
+# Compatibility alias retained for tests/tools that inspect the historical
+# schema-5 family directly.
+SCHEMA5_FILES = _SCHEMA5_FILES
+
+
+def configure_for_systems(systems_module) -> None:
+    """Align focused capture membership/version with the composed systems schema.
+
+    The isolated capture intentionally does not ship every older cinematic/audio
+    systems stream. It carries the generic reflection rows plus the specialist
+    families whose real-corpus acceptance is being exercised. Schema 6 adds the
+    GAS specialist streams while retaining the complete schema-5 Mass/ZoneGraph
+    slice.
+    """
+    global CAPTURE_SCHEMA_VERSION, CAPTURE_FILES, SCHEMA_FILES
+    CAPTURE_SCHEMA_VERSION = int(getattr(systems_module, "SYSTEMS_SCHEMA_VERSION", 5) or 5)
+    jsonl_files = tuple(getattr(systems_module, "JSONL_FILES", ()))
+    gas_files = tuple(name for name in jsonl_files if name.startswith("gas_") and name.endswith(".jsonl"))
+    CAPTURE_FILES = tuple(dict.fromkeys((*_BASE_CAPTURE_FILES, *_SCHEMA5_FILES, *gas_files)))
+    SCHEMA_FILES = CAPTURE_FILES[len(_BASE_CAPTURE_FILES):]
 
 
 def _resolve_project(value: str) -> Path:
@@ -40,13 +64,13 @@ def _resolve_project(value: str) -> Path:
 def _resolve_output(project: Path, value: str | None) -> Path:
     if value:
         return Path(value).expanduser().resolve()
-    return project.parent / ".uatool" / "systems-schema5-capture"
+    return project.parent / ".uatool" / f"systems-schema{CAPTURE_SCHEMA_VERSION}-capture"
 
 
 def _resolve_archive(project: Path, value: str | None) -> Path:
     if value:
         return Path(value).expanduser().resolve()
-    return project.parent / ".uatool" / f"{project.stem}.systems-schema5-capture.zip"
+    return project.parent / ".uatool" / f"{project.stem}.systems-schema{CAPTURE_SCHEMA_VERSION}-capture.zip"
 
 
 def _write_capture_archive(output: Path, archive: Path) -> None:
@@ -61,17 +85,18 @@ def _write_capture_archive(output: Path, archive: Path) -> None:
             bundle.write(path, arcname=filename)
 
 
-def _print_schema5_counts(output: Path) -> None:
+def _print_schema_counts(output: Path) -> None:
     manifest_path = output / "systems_manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     counts = manifest.get("counts", {}) if isinstance(manifest, dict) else {}
-    keys = tuple(name.removesuffix(".jsonl") for name in SCHEMA5_FILES)
-    print("systems schema 5 capture counts:")
+    keys = tuple(name.removesuffix(".jsonl") for name in SCHEMA_FILES)
+    print(f"systems schema {CAPTURE_SCHEMA_VERSION} focused capture counts:")
     for key in keys:
         print(f"  {key}: {int(counts.get(key, 0) or 0)}")
 
 
 def _capture_cli(runtime_module, core_module, systems_module, argv: list[str]) -> int:
+    configure_for_systems(systems_module)
     parser = argparse.ArgumentParser(
         prog="uatool systems-capture",
         description=(
@@ -89,11 +114,11 @@ def _capture_cli(runtime_module, core_module, systems_module, argv: list[str]) -
     )
     parser.add_argument(
         "--output",
-        help="capture directory; defaults to <Project>/.uatool/systems-schema5-capture",
+        help="capture directory; defaults to <Project>/.uatool/systems-schema<N>-capture",
     )
     parser.add_argument(
         "--archive",
-        help="output ZIP; defaults to <Project>/.uatool/<Project>.systems-schema5-capture.zip",
+        help="output ZIP; defaults to <Project>/.uatool/<Project>.systems-schema<N>-capture.zip",
     )
     args = parser.parse_args(argv)
 
@@ -146,17 +171,17 @@ def _capture_cli(runtime_module, core_module, systems_module, argv: list[str]) -
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise RuntimeError(f"invalid systems_manifest.json: {exc}") from exc
-    if int(manifest.get("schema_version", 0) or 0) != 5:
+    actual_schema = int(manifest.get("schema_version", 0) or 0)
+    if actual_schema != CAPTURE_SCHEMA_VERSION:
         raise RuntimeError(
-            f"isolated systems capture expected schema 5, got {manifest.get('schema_version')}"
+            f"isolated systems capture expected schema {CAPTURE_SCHEMA_VERSION}, got {actual_schema}"
         )
     if not bool(manifest.get("success", False)):
         raise RuntimeError(f"isolated systems capture failed: {manifest.get('error', '')}")
 
-    # Preserve the raw native evidence before semantic/schema validation. If a
-    # validator catches a malformed or unexpected real-corpus row, this archive
-    # is still useful for diagnosis and avoids forcing another expensive capture
-    # merely to share the failing files.
+    # Preserve raw evidence before semantic/schema validation. If the validator
+    # catches an unexpected real-corpus row, the ZIP is still useful for fixing
+    # the extractor without forcing a second Unreal run.
     _write_capture_archive(output, archive)
     print(f"raw systems capture archive: {archive}")
 
@@ -167,9 +192,11 @@ def _capture_cli(runtime_module, core_module, systems_module, argv: list[str]) -
             f"{error}; raw archive preserved at {archive}"
         )
 
-    _print_schema5_counts(output)
+    _print_schema_counts(output)
     print(f"systems capture archive: {archive}")
     print(f"systems capture total elapsed: {time.perf_counter() - overall_started:.2f}s")
+    print("normal project scan was not run")
+    print("derive was not run")
     if result != 0:
         print(
             f"note: editor returned {result} after writing a valid systems capture; "
@@ -233,6 +260,22 @@ def _compact_row_identity(filename: str, row: dict | None) -> str:
         "mass_agent_components.jsonl": ("blueprint_path", "component_name", "entity_config_parent_path"),
         "zonegraph_shapes.jsonl": ("shape_path", "point_count", "shape_type"),
         "zonegraph_shape_points.jsonl": ("shape_path", "point_index", "point_type"),
+        "gas_abilities.jsonl": ("ability_path", "activation_policy", "trigger_count"),
+        "gas_ability_triggers.jsonl": ("ability_path", "trigger_index", "trigger_tag"),
+        "gas_ability_costs.jsonl": ("ability_path", "cost_index", "cost_class"),
+        "gas_ability_sets.jsonl": ("ability_set_path", "ability_count", "gameplay_effect_count"),
+        "gas_ability_set_abilities.jsonl": ("ability_set_path", "grant_index", "ability_class"),
+        "gas_ability_set_effects.jsonl": ("ability_set_path", "grant_index", "gameplay_effect_class"),
+        "gas_ability_set_attributes.jsonl": ("ability_set_path", "grant_index", "attribute_set_class"),
+        "gas_gameplay_effects.jsonl": ("gameplay_effect_path", "duration_policy", "modifier_count"),
+        "gas_gameplay_effect_components.jsonl": ("gameplay_effect_path", "component_index", "component_class"),
+        "gas_gameplay_effect_modifiers.jsonl": ("gameplay_effect_path", "modifier_index", "attribute_name"),
+        "gas_gameplay_effect_executions.jsonl": ("gameplay_effect_path", "execution_index", "calculation_class"),
+        "gas_gameplay_effect_execution_modifiers.jsonl": ("gameplay_effect_path", "execution_index", "modifier_index"),
+        "gas_gameplay_effect_cues.jsonl": ("gameplay_effect_path", "cue_index", "gameplay_cue_tags"),
+        "gas_gameplay_cues.jsonl": ("gameplay_cue_path", "gameplay_cue_tag", "parent_class"),
+        "gas_attribute_sets.jsonl": ("attribute_set_class", "attribute_count", "native"),
+        "gas_attributes.jsonl": ("attribute_set_class", "attribute_index", "attribute_name"),
     }.get(filename, ())
     if not preferred:
         preferred = tuple(list(row)[:3])
@@ -277,8 +320,9 @@ def inspect_capture_archive(archive: Path) -> str:
             except (UnicodeDecodeError, json.JSONDecodeError) as exc:
                 lines.append(f"manifest_error: {exc}")
         counts = manifest.get("counts", {}) if isinstance(manifest, dict) else {}
+        manifest_schema = manifest.get("schema_version", "<missing>") if isinstance(manifest, dict) else "<invalid>"
         lines.extend([
-            f"manifest_schema_version: {manifest.get('schema_version', '<missing>') if isinstance(manifest, dict) else '<invalid>'}",
+            f"manifest_schema_version: {manifest_schema}",
             f"manifest_success: {manifest.get('success', '<missing>') if isinstance(manifest, dict) else '<invalid>'}",
             f"manifest_error: {manifest.get('error', '') if isinstance(manifest, dict) else ''}",
             "",
@@ -309,8 +353,8 @@ def inspect_capture_archive(archive: Path) -> str:
                 )
                 lines.append(f"  tail_preview: {diag['tail_preview']}")
 
-        lines.extend(["", "[Schema 5 manifest counts]"])
-        for filename in SCHEMA5_FILES:
+        lines.extend(["", f"[Schema {manifest_schema} focused manifest counts]"])
+        for filename in SCHEMA_FILES:
             key = filename.removesuffix(".jsonl")
             declared = counts.get(key, "<undeclared>") if isinstance(counts, dict) else "<undeclared>"
             diag = diagnostics.get(filename)
@@ -320,8 +364,8 @@ def inspect_capture_archive(archive: Path) -> str:
                 f"{key}: declared={declared} valid_physical={physical} malformed_tail={invalid}"
             )
 
-        lines.extend(["", "[Schema 5 surviving row identities]"])
-        for filename in SCHEMA5_FILES:
+        lines.extend(["", f"[Schema {manifest_schema} surviving row identities]"])
+        for filename in SCHEMA_FILES:
             diag = diagnostics.get(filename)
             if not diag:
                 lines.append(f"{filename}: <missing>")
@@ -380,6 +424,7 @@ def install(runtime_module, core_module, systems_module) -> None:
     # patch the real public systems module into the canonical runtime CLI.
     if getattr(systems_module, "__name__", "") != "uatool_systems":
         return
+    configure_for_systems(systems_module)
     if getattr(runtime_module, "_systems_capture_installed", False):
         return
     original_main = runtime_module.main
