@@ -1,6 +1,6 @@
 # Gameplay Ability System evidence and schema 6
 
-Gameplay Ability System coverage began as an evidence-first investigation. UE 5.8.2 Lyra evidence now defines the first-class **systems schema 6** raw boundary. One final focused Lyra recount remains to prove the specialized `GameplayAbilityBlueprint` asset-class fix in native output. Derived GAS project-graph schema 22 is implemented and synthetic-contract tested, but is not yet claimed as real-corpus accepted.
+Gameplay Ability System coverage began as an evidence-first investigation. UE 5.8.2 Lyra now defines and **real-corpus accepts systems schema 6**. Derived GAS project-graph schema 22 is implemented and synthetic-contract tested; its remaining acceptance work is Python-only canonical promotion, derive, and exact post-derive verification.
 
 ## Diagnostic evidence commands
 
@@ -71,6 +71,8 @@ Schema 6 additively retains the prior systems families and introduces 16 GAS str
 
 Native extraction remains reflection-first and does not add hard GameplayAbilities headers/module dependencies. Python schema 6 adds SQLite/query support and validates unique roots, exact Blueprint object/package/generated-class/CDO identity, child-parent resolution, contiguous ordered child indices, declared child-count agreement, execution/modifier ownership, AttributeSet attribute counts, and absence of truncated structured rows.
 
+## Real-corpus acceptance history
+
 ### First Lyra schema-6 pass
 
 The first real schema-6 capture built and ran successfully but exposed two policy bugs:
@@ -82,18 +84,7 @@ The validator now trusts native inheritance and validates structural Blueprint i
 
 ### Second Lyra schema-6 pass
 
-The preserved second ZIP is internally healthy:
-
-- ZIP CRC OK;
-- schema 6 / success true;
-- all 28 focused JSONL streams parse cleanly;
-- all manifest counts equal physical row counts;
-- all ordered GAS child indices are contiguous;
-- all child-parent joins resolve;
-- every declared child count agrees;
-- zero truncated structured GAS rows.
-
-Observed second-pass counts:
+The second preserved ZIP was internally healthy and proved the AttributeSet scope exactly:
 
 - 37 GameplayAbility roots;
 - 20 triggers;
@@ -110,16 +101,63 @@ Observed second-pass counts:
 - 4 project-owned AttributeSets;
 - 10 project-owned attributes.
 
-The AttributeSet scope is accepted exactly:
+The four accepted project-owned AttributeSets are:
 
 - `/Script/LyraGame.LyraAttributeSet`
 - `/Script/LyraGame.LyraCombatSet`
 - `/Script/LyraGame.LyraHealthSet`
 - `/Script/TopDownArenaRuntime.TopDownArenaAttributeSet`
 
-The remaining 37-vs-43 ability discrepancy is fully explained. The six missing assets are `Phase_Playing`, `Phase_PostGame`, and `Phase_Warmup` game-phase abilities in ShooterCore and TopDownArena. AssetRegistry registers them as `/Script/GameplayAbilities.GameplayAbilityBlueprint`, not `/Script/Engine.Blueprint`. They inherit `LyraGamePhaseAbility` and are genuine GameplayAbilities.
+The remaining six abilities were identified as ShooterCore and TopDownArena `Phase_Playing`, `Phase_PostGame`, and `Phase_Warmup`. AssetRegistry registers them as `/Script/GameplayAbilities.GameplayAbilityBlueprint`, not `/Script/Engine.Blueprint`. They inherit `LyraGamePhaseAbility` and are genuine GameplayAbilities.
 
-Schema 6 now admits both exact Blueprint asset-class identities into the same loaded generated-class inheritance check. Those six phase abilities have no captured triggers, additional costs, cost GameplayEffect, or cooldown GameplayEffect, so the final recount is expected to change only `gas_abilities` from 37 to 43 while preserving the established child counts.
+Schema 6 therefore admits both exact Blueprint asset-class identities into the same loaded generated-class inheritance check.
+
+### Final Lyra schema-6 acceptance pass
+
+The final focused capture on the specialized-Blueprint fix is accepted as the real-corpus schema-6 gate.
+
+Native/build/runtime result:
+
+- `LyraEditor` DebugGame module build succeeded;
+- isolated systems editor pass completed in 34.33 s;
+- total focused workflow completed in 49.16 s;
+- normal project scan was not run;
+- derive was not run;
+- editor returned 3 only after writing a valid manifest/archive; the validated schema output is authoritative.
+
+Final GAS counts:
+
+- `gas_abilities`: **43**
+- `gas_ability_triggers`: **20**
+- `gas_ability_costs`: **5**
+- `gas_ability_sets`: **12**
+- `gas_ability_set_abilities`: **33**
+- `gas_ability_set_effects`: **3**
+- `gas_ability_set_attributes`: **1**
+- `gas_gameplay_effects`: **42**
+- `gas_gameplay_effect_components`: **31**
+- `gas_gameplay_effect_modifiers`: **10**
+- `gas_gameplay_effect_executions`: **20**
+- `gas_gameplay_effect_execution_modifiers`: **20**
+- `gas_gameplay_effect_cues`: **30**
+- `gas_gameplay_cues`: **24**
+- `gas_attribute_sets`: **4**
+- `gas_attributes`: **10**
+
+Independent archive inspection confirms:
+
+- ZIP CRC OK;
+- 29 members, including 28 JSONL streams;
+- systems manifest schema 6 / `success=true`;
+- every manifest count equals the physical JSONL row count;
+- every JSONL parses cleanly;
+- all ordered GAS child indices are contiguous;
+- all child-parent joins resolve;
+- declared child counts agree with physical child streams;
+- zero truncated structured GAS rows;
+- all six phase abilities are present as `LyraGamePhaseAbility` children with zero trigger/additional-cost/cost/cooldown children.
+
+**Systems schema 6 is therefore real-corpus accepted on UE 5.8.2 Lyra.**
 
 ## Derived schema 22 GAS graph
 
@@ -127,7 +165,7 @@ The GAS graph layer is implemented from normalized exact fields only. It promote
 
 Broad exported tag-container strings are not parsed into guessed graph relations. Runtime specs, active effects, live granted ability specs, prediction state, replicated ASC runtime state, and live attributes remain outside the claim.
 
-The second 37-ability ZIP implies 548 exact GAS-domain graph edges. The six specialized phase abilities add exactly two class-topology edges each, so the corrected 43-ability raw corpus is expected to imply **560 exact semantic GAS edges**. Expectations are generated from accepted raw rows rather than hardcoded to Lyra counts.
+The second 37-ability ZIP implied 548 exact GAS-domain graph edges. The six specialized phase abilities add exactly two class-topology edges each, so the accepted 43-ability raw corpus is expected to imply **560 exact semantic GAS edges**. `systems-schema6-accept` computes that expectation from the accepted raw rows rather than hardcoding the Lyra number.
 
 `systems-schema6-accept` promotes an accepted focused schema-6 capture into the canonical corpus without running Unreal or derive and writes `gas_graph_expectations.json`. `gas-graph-verify` later requires exact source/relation/target equality, `exact_semantic` edge quality, canonical stream evidence, and specialist GAS roots against derived schema 22.
 
@@ -135,6 +173,6 @@ The second 37-ability ZIP implies 548 exact GAS-domain graph edges. The six spec
 
 Schema 6 is authored/default-state coverage only. It does not claim active GameplayEffect specs, current granted ability specs, prediction keys/state, replicated AbilitySystemComponent runtime state, live attribute values, or runtime activation/cooldown state. The focused corpus also did not establish exact authored GameFeatureAction_AddAbilities or tag-relationship-mapping instances strongly enough for first-class promotion.
 
-The remaining raw acceptance gate is one focused Lyra `systems-capture` to prove the `GameplayAbilityBlueprint` membership fix and obtain the authoritative 43-root corpus. No normal Lyra scan or derive is required for that gate.
+The remaining acceptance path is Python-only: canonical schema-6 promotion, one derived-schema-22 derive, then exact GAS graph verification. No additional Unreal GAS capture is required.
 
-Python/schema composition, schema-6 validation, specialized Blueprint membership regressions, exact GAS graph expectations/verifier, and derived-schema-22 composition are green in CI through **Python schema smoke #340**.
+Python/schema composition, schema-6 validation, specialized Blueprint membership regressions, exact GAS graph expectations/verifier, retained schema-21 Mass/ZoneGraph compatibility, and derived-schema-22 composition are green in CI through **Python schema smoke #341**.
