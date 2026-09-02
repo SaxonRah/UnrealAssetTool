@@ -8,32 +8,37 @@ PRIVATE = ROOT / "Source/UnrealAssetTool/Private"
 
 
 class SystemsSchema7PublicationTest(unittest.TestCase):
-    def test_schema7_promotion_runs_after_shared_driver_scan_on_post_engine_init(self) -> None:
+    def test_schema7_wraps_the_authoritative_driver_manifest_write(self) -> None:
         scanner = (PRIVATE / "UnrealAssetToolSystemsScanner.cpp").read_text(encoding="utf-8")
         driver = (PRIVATE / "UnrealAssetToolSystemsDriver.inl").read_text(encoding="utf-8")
-        finalize = (PRIVATE / "UnrealAssetToolSystemsFinalize.inl").read_text(encoding="utf-8")
         policy = (PRIVATE / "UnrealAssetToolSystemsSmartObjectsPolicy.inl").read_text(encoding="utf-8")
 
+        self.assertIn('SaveSystemsManifest(OutputDir, Counts, true, FString())', driver)
+        self.assertIn('#define FFileHelper FSmartObjectSystemsFileHelperProxy', scanner)
+        self.assertLess(
+            scanner.index('#define FFileHelper FSmartObjectSystemsFileHelperProxy'),
+            scanner.index('#include "UnrealAssetToolSystemsDriver.inl"'),
+        )
         self.assertLess(
             scanner.index('#include "UnrealAssetToolSystemsDriver.inl"'),
-            scanner.index('#include "UnrealAssetToolSystemsFinalize.inl"'),
+            scanner.index('#undef FFileHelper'),
         )
-        self.assertIn(
-            'FCoreDelegates::GetOnPostEngineInit().AddStatic(&OnPostEngineInit);',
-            driver,
-        )
-        self.assertIn(
-            'FCoreDelegates::GetOnPostEngineInit().AddStatic(&FinalizeSmartObjectSchema7Manifest);',
-            finalize,
-        )
-        self.assertIn('SaveSystemsManifest(OutputDir, Counts, true, FString())', driver)
-        self.assertIn('UpgradeSystemsManifestToSchema7()', policy)
-        self.assertIn('Root->SetNumberField(TEXT("schema_version"), 7)', policy)
 
-    def test_schema7_publication_does_not_depend_only_on_pre_exit(self) -> None:
+        self.assertIn('struct FSmartObjectSystemsFileHelperProxy', policy)
+        self.assertIn('FFileHelper::SaveStringToFile(String, Filename, EncodingOptions)', policy)
+        self.assertIn('return UpgradeSystemsManifestToSchema7(Path);', policy)
+        self.assertIn('Root->SetNumberField(TEXT("schema_version"), 7)', policy)
+        self.assertIn('smartobject_definitions.jsonl', policy)
+        self.assertIn('smartobject_behavior_properties.jsonl', policy)
+
+    def test_schema7_publication_has_no_multicast_order_dependency(self) -> None:
+        policy = (PRIVATE / "UnrealAssetToolSystemsSmartObjectsPolicy.inl").read_text(encoding="utf-8")
         finalize = (PRIVATE / "UnrealAssetToolSystemsFinalize.inl").read_text(encoding="utf-8")
-        self.assertIn('GetOnPostEngineInit()', finalize)
-        self.assertIn('FinalizeSmartObjectSchema7Manifest', finalize)
+
+        self.assertNotIn('FinalizeSmartObjectSchema7Manifest', policy)
+        self.assertNotIn('OnEnginePreExit.AddStatic(&FinalizeSmartObjectSchema7Manifest)', policy)
+        self.assertNotIn('GetOnPostEngineInit().AddStatic(&FinalizeSmartObjectSchema7Manifest)', finalize)
+        self.assertIn('OnEnginePreExit.AddStatic(&FinalizeSystemsOnlyWriterBuffers)', finalize)
 
 
 if __name__ == "__main__":
