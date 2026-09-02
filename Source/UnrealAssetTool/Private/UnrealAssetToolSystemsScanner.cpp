@@ -51,6 +51,7 @@ namespace UnrealAssetToolSystems
 #include "UnrealAssetToolSystemsMassZoneGraph.inl"
 #include "UnrealAssetToolSystemsGAS.inl"
 #include "UnrealAssetToolSystemsGASPolicy.inl"
+#include "UnrealAssetToolSystemsSmartObjects.inl"
 #define ScanGASProjectModel ScanGASProjectModelPolicy
 #include "UnrealAssetToolSystemsDriver.inl"
 #undef ScanGASProjectModel
