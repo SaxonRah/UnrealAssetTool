@@ -1,20 +1,20 @@
 # UnrealAssetTool
 
-**UnrealAssetTool** builds an AI-friendly structural index of an Unreal Engine project from Unreal's own serialized/editor data. It is intended to answer gameplay and content questions from authored facts rather than screenshots, guessed relationships, or hand-maintained project documentation.
+**UnrealAssetTool** builds an AI-friendly structural and semantic index of an Unreal Engine project from Unreal's own serialized/editor data. It is intended to answer gameplay and content questions from authored facts rather than screenshots, guessed relationships, or hand-maintained project documentation.
 
 > Unreal Engine already uses **UAT** for **Unreal AutomationTool**. This project is `UnrealAssetTool`; the command-line launcher is `uatool`.
 
 ## Current baseline
 
-- release line: **0.7.0**
+- release line: **0.8.0**
 - Unreal target: **UE 5.8+**
 - validated engine: **UE 5.8.2**
 - structural scanner schema: **12**
 - world scanner schema: **12**
 - animation scanner schema: **1**
 - VFX scanner schema: **1**
-- systems scanner schema: **5**
-- derived schema: **21**
+- systems scanner schema: **6**
+- derived schema: **22**
 
 The schemas are independently versioned because they represent different extraction lifecycles. A change to a Python-only derived view does not require renumbering canonical Unreal scanner output.
 
@@ -47,11 +47,32 @@ UnrealAssetTool currently has dedicated extraction for:
 - Mover component/mode/settings/transition composition plus derived concrete transition behavior/routes;
 - Gameplay Cameras CameraAsset/CameraRig/node/transition/director topology, generic Chooser decisions and Blueprint camera-provider/director behavior;
 - Mass entity configs/ordered Traits, MassSpawner composition, spawn-generator inheritance, MassAgent components, and authored placed ZoneShape/ZoneShapePoint topology;
+- Gameplay Ability System authored definitions and relationships: GameplayAbilities, triggers, additional costs, Ability Sets/grants, GameplayEffects/components/modifiers/executions/cues, Gameplay Cues, AttributeSets and attributes;
 - typed project-level graph edges and bounded neighborhoods with per-hop provenance/coverage quality.
 
 Unsupported asset families still appear through Asset Registry identity/tags/package dependencies. Their presence in `assets.jsonl` does **not** imply that UnrealAssetTool understands their internal authored structure.
 
 See [docs/coverage.md](docs/coverage.md) for the maintained coverage matrix and remaining gaps.
+
+## Machine-readable capability contract
+
+Every current derive emits `capabilities.json`. It tells tools and AI what the current UnrealAssetTool build knows and, separately, which canonical passes are actually present in this corpus.
+
+The contract includes:
+
+- structural/world/animation/VFX/systems/derived schema versions;
+- the maintained coverage vocabulary (`first_class`, `first_class_depth_pending`, `partial`, `generic_only`, `external_or_excluded`);
+- per-family tool coverage and corpus coverage;
+- canonical streams and high-value derived relations owned by each family;
+- explicit runtime/generated-state boundaries;
+- acceptance/verification provenance for evidence-driven Mass/ZoneGraph and GAS corpora when present;
+- honest partial-corpus state for focused captures.
+
+Inspect or regenerate it without rescanning Unreal:
+
+```powershell
+python scripts\uatool.py capabilities "E:\Path\Project\.uatool" --check
+```
 
 ## Output model
 
@@ -67,14 +88,15 @@ The `.uatool` directory contains canonical JSONL, deterministic derived JSONL, m
 Important schema layers:
 
 ```text
-manifest.json             structural schema 12 + derived schema 21
+manifest.json             structural schema 12 + derived schema 22
 world_manifest.json       world schema 12
 animation_manifest.json   animation schema 1
 vfx_manifest.json         VFX schema 1
-systems_manifest.json     systems schema 5
+systems_manifest.json     systems schema 6
+capabilities.json         capability contract schema 1
 ```
 
-Derived schema 21 includes the typed project graph and later Blueprint/Chooser/Mover/Gameplay Camera/Mass/ZoneGraph semantics while preserving the earlier derived streams:
+Derived schema 22 includes the typed project graph and Blueprint/Chooser/Mover/Gameplay Camera/Mass/ZoneGraph/GAS semantics while preserving the earlier derived streams:
 
 ```text
 project_nodes.jsonl
@@ -92,13 +114,16 @@ gameplay_camera_director_inputs.jsonl
 
 `project_edges.jsonl` is authoritative for typed project-graph relationships and provenance. Neighborhoods store compact references to those edges instead of duplicating full evidence payloads.
 
-Systems schema 5 additionally preserves acceptance/provenance manifests for the evidence-driven Mass/ZoneGraph slice when those focused validation commands have been run:
+Evidence-driven acceptance/provenance manifests are included when the corresponding focused validation workflows have been run. Current accepted contracts include:
 
 ```text
 systems_schema5_acceptance.json
 zonegraph_world_manifest.json
 mass_zonegraph_graph_expectations.json
 mass_zonegraph_graph_verification.json
+systems_schema6_acceptance.json
+gas_graph_expectations.json
+gas_graph_verification.json
 ```
 
 ## Quick start
@@ -144,8 +169,9 @@ A normal scan:
 3. runs the world process, which also executes animation, VFX and systems passes;
 4. validates raw manifests;
 5. performs deterministic derivation and canonical cleanup;
-6. builds `uat.db`;
-7. creates the upload ZIP.
+6. emits the machine-readable capability contract;
+7. builds `uat.db`;
+8. creates the upload ZIP.
 
 Useful scan options include:
 
@@ -194,6 +220,18 @@ python scripts\uatool.py query `
 
 The query surface searches canonical/derived specialist tables plus typed project nodes/edges. Human-readable project-neighborhood text is reconstructed on demand from compact edge references.
 
+### Focused systems / GAS acceptance
+
+Expensive subsystem investigations do not require a full project rescan. Systems schema 6 retains the focused capture/promote/derive/verify lifecycle used for Lyra GAS acceptance. Focused corpora are explicitly marked partial so they never imply unrelated structural/world/animation/VFX coverage.
+
+The exact GAS graph verifier is available through the canonical launcher:
+
+```powershell
+python scripts\uatool.py gas-graph-verify "E:\Path\Lyra\.uatool"
+```
+
+See [docs/gas-evidence.md](docs/gas-evidence.md) and [docs/systems-schema-6.md](docs/systems-schema-6.md).
+
 ## Repository layout
 
 ```text
@@ -214,6 +252,7 @@ UnrealAssetTool/
     uatool_vfx*.py
     uatool_systems*.py
     uatool_project_*.py
+    uatool_capabilities.py
   docs/
   tests/
 ```
@@ -226,6 +265,7 @@ The main UE 5.8.2 validation corpora are:
 
 - **Game Animation Sample (GASP)** — large Blueprint/animation/Pose Search/Enhanced Input graph plus accepted Mover and Gameplay Cameras coverage;
 - **City Sample** — large Mass/traffic/crowd and authored ZoneGraph regression, including accepted systems-schema-5 and schema-21 graph contracts;
+- **Lyra Starter Game** — accepted systems-schema-6 / derived-schema-22 Gameplay Ability System corpus with **560 exact semantic GAS graph edges**;
 - **Content Examples** — broad Sequencer, audio, MetaSound, VFX, materials and gameplay-data/Gameplay Tags coverage;
 - **StackOBot + Niagara Examples** — World Partition/LevelInstance/PCG/VFX and cross-project build regression;
 - **Cropout Sample Project** — compact Blueprint/gameplay regression.
@@ -244,7 +284,9 @@ A scanner family is not considered stable merely because it compiles. Corpus val
 - [Systems schema 1](docs/systems-schema-1.md) — historical initial contract
 - [Systems schema 2](docs/systems-schema-2.md) — historical gameplay-data/tag extension
 - [Systems schema 4](docs/systems-schema-4.md) — historical Mover and Gameplay Cameras contract
-- [Systems schema 5](docs/zonegraph-mass-schema5.md) — current Mass + authored ZoneGraph contract
+- [Systems schema 5](docs/zonegraph-mass-schema5.md) — historical/retained Mass + authored ZoneGraph contract
+- [Systems schema 6](docs/systems-schema-6.md) — current GAS extension and Lyra acceptance contract
+- [GAS evidence workflow](docs/gas-evidence.md)
 
 ## Coverage policy
 
@@ -269,4 +311,4 @@ generic_only
 external_or_excluded
 ```
 
-That distinction is essential: an exact authored Blueprint-to-Niagara reference and a generic package dependency are both useful, but they are not the same fact.
+That distinction is essential: an exact authored Blueprint-to-Niagara reference and a generic package dependency are both useful, but they are not the same fact. `capabilities.json` exposes the same vocabulary before an AI or downstream tool decides what claims it can safely make.
