@@ -75,18 +75,19 @@ class SystemsGASRealCorpusRegressionTest(unittest.TestCase):
         self.assertIn("#define ScanGASProjectModel ScanGASProjectModelPolicy", scanner)
         self.assertIn("#undef ScanGASProjectModel", scanner)
 
-    def test_second_lyra_capture_boundary_is_documented_as_pre_final_recount(self) -> None:
+    def test_final_lyra_schema6_acceptance_is_documented(self) -> None:
         docs = (ROOT / "docs/gas-evidence.md").read_text(encoding="utf-8")
         for text in (
-            "37 GameplayAbility roots",
-            "42 GameplayEffects",
-            "24 Gameplay Cues",
-            "4 project-owned AttributeSets",
-            "10 project-owned attributes",
+            "Systems schema 6 is therefore real-corpus accepted",
+            "`gas_abilities`: **43**",
+            "`gas_gameplay_effects`: **42**",
+            "`gas_gameplay_cues`: **24**",
+            "`gas_attribute_sets`: **4**",
+            "`gas_attributes`: **10**",
             "/Script/GameplayAbilities.GameplayAbilityBlueprint",
-            "37 to 43",
             "548 exact GAS-domain graph edges",
             "560 exact semantic GAS edges",
+            "No additional Unreal GAS capture is required",
         ):
             self.assertIn(text, docs)
 
