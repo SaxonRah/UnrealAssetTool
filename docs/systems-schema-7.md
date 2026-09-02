@@ -42,52 +42,6 @@ UseTime: 5.0
 
 That distinction is preserved exactly. Schema 7 does **not** rewrite the default behavior as though it were authored independently on each slot.
 
-### First canonical systems-schema-7 City Sample capture
-
-The first run of the canonical `systems-capture` scanner on UE 5.8.2 successfully built and emitted the new normalized streams:
-
-```text
-smartobject_definitions:          1
-smartobject_slots:                2
-smartobject_behaviors:            1
-smartobject_behavior_properties:  1
-```
-
-The exact normalized authored values matched the focused capture:
-
-```text
-slot 0 id: 573FF06A43CF8E90E0C1A6A26469B851
-slot 0 offset: -85, 0, 0
-slot 0 yaw: 90
-slot 0 slot-local behaviors: 0
-
-slot 1 id: E321BAA54EA72F347C192C9A0530BCB5
-slot 1 offset: 85, 0, 0
-slot 1 yaw: 90
-slot 1 slot-local behaviors: 0
-
-default behavior count: 1
-default behavior class: /Script/MassSmartObjects.SmartObjectMassBehaviorDefinition
-UseTime: 5.000000
-```
-
-This run exposed one integration defect rather than an extraction defect: the native systems manifest remained at schema 6 and therefore omitted the four Smart Object count/file declarations. `systems-capture` correctly refused `6 != 7` before creating its ZIP, so the capture directory was archived manually for inspection.
-
-The schema-7 finalizer has since been changed to register its shutdown callbacks from the active Smart Object scan path, after engine initialization, rather than from translation-unit static initialization. The canonical extraction values above are accepted evidence; automatic schema-7 manifest/ZIP publication still requires one rerun of the fixed branch before merge.
-
-The captured normalized rows imply exactly **7** Smart Object `exact_semantic` graph edges:
-
-```text
-has_smart_object_slot:                       2
-has_default_smart_object_behavior:           1
-has_smart_object_behavior:                   0
-instance_of_smart_object_behavior_class:     1
-uses_smart_object_world_condition_schema:    1
-uses_smart_object_selection_schema:          2
-```
-
-These counts are now the schema-7/derived-schema-23 acceptance contract.
-
 ## Canonical streams
 
 Schema 7 adds:
@@ -259,9 +213,26 @@ live Mass entities using a Smart Object
 transient/generated runtime tags
 ```
 
-## Final real-corpus acceptance gate
+## Real-corpus acceptance status
 
-Run the fixed isolated canonical systems scanner on UE 5.8.2 City Sample:
+Two canonical City Sample systems runs have already reproduced the normalized Smart Object payload exactly:
+
+```text
+smartobject_definitions:          1
+smartobject_slots:                2
+smartobject_behaviors:            1
+smartobject_behavior_properties:  1
+```
+
+Both runs reproduced the same two serialized slot GUIDs, `-85/+85` X offsets, yaw `90`, zero slot-local behaviors, one definition-default `SmartObjectMassBehaviorDefinition`, and `UseTime=5.000000`.
+
+The first run exposed that the schema-6 base manifest was published before a shutdown-time schema-7 promotion could run. The second run proved the raw-archive preservation guard works, but also proved that relying on engine-exit delegates is not a valid publication mechanism: the preserved archive still contained a schema-6 manifest.
+
+Schema-7 publication is now synchronous. While the shared systems driver include is compiled, its `FFileHelper::SaveStringToFile` manifest write is routed through a narrow proxy. The proxy performs the real base-manifest write and immediately upgrades that exact completed file to schema 7 before `SaveSystemsManifest()` returns. No multicast delegate ordering or shutdown callback participates in correctness. The raw archive guard remains as evidence preservation if a later Python validation gate fails.
+
+One final UE 5.8.2 City Sample run must prove this publication path by producing `systems_manifest.json` with `schema_version=7`, Smart Object counts/files present, and a normally validated automatic ZIP. Once that succeeds, the capture can be promoted with `systems-schema7-accept`, derived to schema 23, verified with `smartobject-graph-verify`, and Smart Objects can move to maintained `first_class` capability coverage.
+
+Run:
 
 ```powershell
 python scripts\uatool.py systems-capture `
@@ -269,15 +240,3 @@ python scripts\uatool.py systems-capture `
     --editor "E:\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Win64-DebugGame-Cmd.exe" `
     --archive "N:\EpicVault\Projects\CitySample\.uatool\CitySample.systems-schema7-capture.zip"
 ```
-
-The final rerun must:
-
-1. build the current schema-7 branch successfully;
-2. publish `systems_manifest.json` with `schema_version=7` and `success=true`;
-3. create the requested ZIP automatically;
-4. reproduce `1 / 2 / 1 / 1` Smart Object definition/slot/behavior/property counts and the exact normalized values above;
-5. pass schema-7 Python validation;
-6. preserve runtime-state exclusion boundaries;
-7. pass `systems-schema7-accept`, derive schema 23, and `smartobject-graph-verify` before merge.
-
-Until that final publication gate passes, maintained capability coverage should not claim Smart Objects as accepted first-class coverage.
