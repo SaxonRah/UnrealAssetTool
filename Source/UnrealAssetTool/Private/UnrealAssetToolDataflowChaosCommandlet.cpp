@@ -20,8 +20,6 @@ namespace UnrealAssetToolDataflowChaos
 {
 constexpr int32 SchemaVersion = 1;
 constexpr int32 MaxExportChars = 65536;
-constexpr int32 MaxPropertyDepth = 16;
-constexpr int32 MaxElementsPerContainer = 4096;
 constexpr int32 MaxPropertyRowsPerOwner = 65536;
 
 struct FCounts
@@ -41,9 +39,7 @@ struct FCounts
     int64 GeometryCollectionProperties = 0;
     int64 GeometryCollectionReferences = 0;
     int64 TruncatedProperties = 0;
-    int64 PropertyDepthLimitHits = 0;
     int64 PropertyRowLimitHits = 0;
-    int64 ContainerElementLimitHits = 0;
 };
 
 class FJsonlWriter
@@ -140,17 +136,6 @@ static bool ShouldInspectProperty(const FProperty* Property)
     return !Property->HasAnyPropertyFlags(Rejected);
 }
 
-static FString ContainerKind(const FProperty* Property)
-{
-    if (CastField<FArrayProperty>(Property)) return TEXT("array");
-    if (CastField<FSetProperty>(Property)) return TEXT("set");
-    if (CastField<FMapProperty>(Property)) return TEXT("map");
-    if (CastField<FStructProperty>(Property)) return TEXT("struct");
-    if (CastField<FSoftObjectProperty>(Property)) return TEXT("soft_object");
-    if (CastField<FObjectPropertyBase>(Property)) return TEXT("object");
-    return TEXT("scalar");
-}
-
 static FString ExportProperty(
     const FProperty* Property,
     const void* ValuePtr,
@@ -169,257 +154,77 @@ static FString ExportProperty(
     return Text;
 }
 
-struct FWalkContext
-{
-    FString SourcePath;
-    FString OwnerId;
-    FString OwnerKind;
-    FString OwnerType;
-    UObject* ExportOwner = nullptr;
-    UObject* DefaultExportOwner = nullptr;
-    FJsonlWriter* PropertyWriter = nullptr;
-    FJsonlWriter* ReferenceWriter = nullptr;
-    FCounts* Counts = nullptr;
-    int64* PropertyCounter = nullptr;
-    int64* ReferenceCounter = nullptr;
-    int32 Rows = 0;
-    bool bFailed = false;
-};
-
-static void EmitReference(
-    FWalkContext& Context,
-    const FString& RootProperty,
-    const FString& PropertyPath,
-    const FString& ReferenceKind,
-    const FString& TargetPath,
-    const FString& TargetClass)
-{
-    if (!Context.ReferenceWriter || !Context.ReferenceCounter || TargetPath.IsEmpty() || Context.bFailed) return;
-    TSharedRef<FJsonObject> Row = MakeShared<FJsonObject>();
-    Row->SetStringField(TEXT("source_path"), Context.SourcePath);
-    Row->SetStringField(TEXT("owner_id"), Context.OwnerId);
-    Row->SetStringField(TEXT("owner_kind"), Context.OwnerKind);
-    Row->SetStringField(TEXT("owner_type"), Context.OwnerType);
-    Row->SetStringField(TEXT("root_property"), RootProperty);
-    Row->SetStringField(TEXT("property_path"), PropertyPath);
-    Row->SetStringField(TEXT("reference_kind"), ReferenceKind);
-    Row->SetStringField(TEXT("target_path"), TargetPath);
-    Row->SetStringField(TEXT("target_class"), TargetClass);
-    if (!Context.ReferenceWriter->Write(Row))
-    {
-        Context.bFailed = true;
-        return;
-    }
-    ++(*Context.ReferenceCounter);
-}
-
-static void EmitProperty(
+static bool WriteDirectReference(
     const FProperty* Property,
     const void* ValuePtr,
-    const void* DefaultValuePtr,
-    const FString& RootProperty,
+    const FString& SourcePath,
+    const FString& OwnerId,
+    const FString& OwnerKind,
+    const FString& OwnerType,
     const FString& PropertyPath,
-    int32 Depth,
-    int32 ElementCount,
-    FWalkContext& Context)
+    FJsonlWriter& ReferenceWriter,
+    int64& ReferenceCount)
 {
-    if (!Context.PropertyWriter || !Context.PropertyCounter || !Context.Counts || !Property || Context.bFailed) return;
-    if (Context.Rows >= MaxPropertyRowsPerOwner)
-    {
-        ++Context.Counts->PropertyRowLimitHits;
-        return;
-    }
-
-    bool bTruncated = false;
-    const FString Value = ExportProperty(Property, ValuePtr, Context.ExportOwner, bTruncated);
-    bool bDefaultTruncated = false;
-    const FString DefaultValue = DefaultValuePtr
-        ? ExportProperty(Property, DefaultValuePtr, Context.DefaultExportOwner, bDefaultTruncated)
-        : FString();
-
-    TSharedRef<FJsonObject> Row = MakeShared<FJsonObject>();
-    Row->SetStringField(TEXT("source_path"), Context.SourcePath);
-    Row->SetStringField(TEXT("owner_id"), Context.OwnerId);
-    Row->SetStringField(TEXT("owner_kind"), Context.OwnerKind);
-    Row->SetStringField(TEXT("owner_type"), Context.OwnerType);
-    Row->SetStringField(TEXT("declaring_type"),
-        Property->GetOwnerStruct() ? Property->GetOwnerStruct()->GetPathName() : FString());
-    Row->SetStringField(TEXT("root_property"), RootProperty);
-    Row->SetStringField(TEXT("property_name"), Property->GetName());
-    Row->SetStringField(TEXT("property_path"), PropertyPath);
-    Row->SetStringField(TEXT("property_type"), Property->GetClass()->GetName());
-    Row->SetStringField(TEXT("cpp_type"), Property->GetCPPType());
-    Row->SetStringField(TEXT("container_kind"), ContainerKind(Property));
-    Row->SetNumberField(TEXT("depth"), Depth);
-    if (ElementCount >= 0) Row->SetNumberField(TEXT("element_count"), ElementCount);
-    Row->SetStringField(TEXT("value"), Value);
-    Row->SetBoolField(TEXT("default_present"), DefaultValuePtr != nullptr);
-    if (DefaultValuePtr)
-    {
-        Row->SetStringField(TEXT("default_value"), DefaultValue);
-        Row->SetBoolField(TEXT("differs_from_default"), !Property->Identical(ValuePtr, DefaultValuePtr, PPF_None));
-    }
-    Row->SetBoolField(TEXT("truncated"), bTruncated || bDefaultTruncated);
-    Row->SetBoolField(TEXT("dataflow_input"), Property->HasMetaData(TEXT("DataflowInput")));
-    Row->SetBoolField(TEXT("dataflow_output"), Property->HasMetaData(TEXT("DataflowOutput")));
-    Row->SetBoolField(TEXT("dataflow_passthrough"), Property->HasMetaData(TEXT("DataflowPassthrough")));
-    Row->SetBoolField(TEXT("dataflow_intrinsic"), Property->HasMetaData(TEXT("DataflowIntrinsic")));
-    if (!Context.PropertyWriter->Write(Row))
-    {
-        Context.bFailed = true;
-        return;
-    }
-    ++Context.Rows;
-    ++(*Context.PropertyCounter);
-    if (bTruncated || bDefaultTruncated) ++Context.Counts->TruncatedProperties;
-}
-
-static void WalkPropertyValue(
-    const FProperty* Property,
-    const void* ValuePtr,
-    const void* DefaultValuePtr,
-    const FString& RootProperty,
-    const FString& PropertyPath,
-    int32 Depth,
-    FWalkContext& Context)
-{
-    if (!Property || !ValuePtr || Context.bFailed) return;
-    if (Depth > MaxPropertyDepth)
-    {
-        ++Context.Counts->PropertyDepthLimitHits;
-        return;
-    }
-    if (Context.Rows >= MaxPropertyRowsPerOwner)
-    {
-        ++Context.Counts->PropertyRowLimitHits;
-        return;
-    }
-
-    if (const FArrayProperty* ArrayProperty = CastField<FArrayProperty>(Property))
-    {
-        FScriptArrayHelper Helper(ArrayProperty, ValuePtr);
-        EmitProperty(Property, ValuePtr, DefaultValuePtr, RootProperty, PropertyPath, Depth, Helper.Num(), Context);
-        TUniquePtr<FScriptArrayHelper> DefaultHolder;
-        FScriptArrayHelper* DefaultHelper = nullptr;
-        if (DefaultValuePtr)
-        {
-            DefaultHolder = MakeUnique<FScriptArrayHelper>(ArrayProperty, DefaultValuePtr);
-            DefaultHelper = DefaultHolder.Get();
-        }
-        const int32 Limit = FMath::Min(Helper.Num(), MaxElementsPerContainer);
-        if (Helper.Num() > Limit) ++Context.Counts->ContainerElementLimitHits;
-        for (int32 Index = 0; Index < Limit && !Context.bFailed; ++Index)
-        {
-            const void* ChildDefault = DefaultHelper && Index < DefaultHelper->Num()
-                ? DefaultHelper->GetRawPtr(Index) : nullptr;
-            WalkPropertyValue(
-                ArrayProperty->Inner,
-                Helper.GetRawPtr(Index),
-                ChildDefault,
-                RootProperty,
-                FString::Printf(TEXT("%s[%d]"), *PropertyPath, Index),
-                Depth + 1,
-                Context);
-        }
-        return;
-    }
-
-    if (const FSetProperty* SetProperty = CastField<FSetProperty>(Property))
-    {
-        FScriptSetHelper Helper(SetProperty, ValuePtr);
-        EmitProperty(Property, ValuePtr, DefaultValuePtr, RootProperty, PropertyPath, Depth, Helper.Num(), Context);
-        int32 Emitted = 0;
-        for (int32 Index = 0; Index < Helper.GetMaxIndex() && Emitted < MaxElementsPerContainer && !Context.bFailed; ++Index)
-        {
-            if (!Helper.IsValidIndex(Index)) continue;
-            WalkPropertyValue(
-                SetProperty->ElementProp,
-                Helper.GetElementPtr(Index),
-                nullptr,
-                RootProperty,
-                FString::Printf(TEXT("%s{%d}"), *PropertyPath, Emitted++),
-                Depth + 1,
-                Context);
-        }
-        if (Helper.Num() > Emitted) ++Context.Counts->ContainerElementLimitHits;
-        return;
-    }
-
-    if (const FMapProperty* MapProperty = CastField<FMapProperty>(Property))
-    {
-        FScriptMapHelper Helper(MapProperty, ValuePtr);
-        EmitProperty(Property, ValuePtr, DefaultValuePtr, RootProperty, PropertyPath, Depth, Helper.Num(), Context);
-        int32 Emitted = 0;
-        for (int32 Index = 0; Index < Helper.GetMaxIndex() && Emitted < MaxElementsPerContainer && !Context.bFailed; ++Index)
-        {
-            if (!Helper.IsValidIndex(Index)) continue;
-            const FString Base = FString::Printf(TEXT("%s{%d}"), *PropertyPath, Emitted++);
-            WalkPropertyValue(MapProperty->KeyProp, Helper.GetKeyPtr(Index), nullptr, RootProperty, Base + TEXT(".key"), Depth + 1, Context);
-            WalkPropertyValue(MapProperty->ValueProp, Helper.GetValuePtr(Index), nullptr, RootProperty, Base + TEXT(".value"), Depth + 1, Context);
-        }
-        if (Helper.Num() > Emitted) ++Context.Counts->ContainerElementLimitHits;
-        return;
-    }
-
-    if (const FStructProperty* StructProperty = CastField<FStructProperty>(Property))
-    {
-        EmitProperty(Property, ValuePtr, DefaultValuePtr, RootProperty, PropertyPath, Depth, -1, Context);
-        if (!StructProperty->Struct) return;
-        for (TFieldIterator<FProperty> It(StructProperty->Struct); It && !Context.bFailed; ++It)
-        {
-            const FProperty* Inner = *It;
-            if (!ShouldInspectProperty(Inner)) continue;
-            for (int32 StaticIndex = 0; StaticIndex < Inner->ArrayDim && !Context.bFailed; ++StaticIndex)
-            {
-                const void* InnerValue = Inner->ContainerPtrToValuePtr<void>(ValuePtr, StaticIndex);
-                const void* InnerDefault = DefaultValuePtr
-                    ? Inner->ContainerPtrToValuePtr<void>(DefaultValuePtr, StaticIndex)
-                    : nullptr;
-                const FString ChildPath = PropertyPath + TEXT(".") + Inner->GetName() +
-                    (Inner->ArrayDim > 1 ? FString::Printf(TEXT("[%d]"), StaticIndex) : FString());
-                WalkPropertyValue(Inner, InnerValue, InnerDefault, RootProperty, ChildPath, Depth + 1, Context);
-            }
-        }
-        return;
-    }
-
-    EmitProperty(Property, ValuePtr, DefaultValuePtr, RootProperty, PropertyPath, Depth, -1, Context);
+    FString TargetPath;
+    FString TargetClass;
+    FString ReferenceKind;
 
     if (const FSoftObjectProperty* SoftProperty = CastField<FSoftObjectProperty>(Property))
     {
         const FSoftObjectPtr* SoftPtr = static_cast<const FSoftObjectPtr*>(ValuePtr);
         if (SoftPtr && !SoftPtr->IsNull())
         {
-            EmitReference(Context, RootProperty, PropertyPath, TEXT("soft_object"), SoftPtr->ToSoftObjectPath().ToString(), FString());
+            TargetPath = SoftPtr->ToSoftObjectPath().ToString();
+            ReferenceKind = TEXT("soft_object");
         }
-        return;
+    }
+    else if (const FObjectPropertyBase* ObjectProperty = CastField<FObjectPropertyBase>(Property))
+    {
+        if (UObject* Target = ObjectProperty->GetObjectPropertyValue(ValuePtr))
+        {
+            TargetPath = Target->GetPathName();
+            TargetClass = Target->GetClass()->GetPathName();
+            ReferenceKind = TEXT("hard_object");
+        }
     }
 
-    if (const FObjectPropertyBase* ObjectProperty = CastField<FObjectPropertyBase>(Property))
-    {
-        UObject* Target = ObjectProperty->GetObjectPropertyValue(ValuePtr);
-        if (Target)
-        {
-            EmitReference(
-                Context,
-                RootProperty,
-                PropertyPath,
-                TEXT("hard_object"),
-                Target->GetPathName(),
-                Target->GetClass()->GetPathName());
-        }
-    }
+    if (TargetPath.IsEmpty()) return true;
+
+    TSharedRef<FJsonObject> Row = MakeShared<FJsonObject>();
+    Row->SetStringField(TEXT("source_path"), SourcePath);
+    Row->SetStringField(TEXT("owner_id"), OwnerId);
+    Row->SetStringField(TEXT("owner_kind"), OwnerKind);
+    Row->SetStringField(TEXT("owner_type"), OwnerType);
+    Row->SetStringField(TEXT("root_property"), Property->GetName());
+    Row->SetStringField(TEXT("property_path"), PropertyPath);
+    Row->SetStringField(TEXT("reference_kind"), ReferenceKind);
+    Row->SetStringField(TEXT("target_path"), TargetPath);
+    Row->SetStringField(TEXT("target_class"), TargetClass);
+    if (!ReferenceWriter.Write(Row)) return false;
+    ++ReferenceCount;
+    return true;
 }
 
-static bool WalkStructProperties(
+static bool WriteTopLevelProperties(
     const UStruct* Struct,
     void* Container,
     const void* DefaultContainer,
-    FWalkContext& Context)
+    UObject* ExportOwner,
+    UObject* DefaultExportOwner,
+    const FString& SourcePath,
+    const FString& OwnerId,
+    const FString& OwnerKind,
+    const FString& OwnerType,
+    FJsonlWriter& PropertyWriter,
+    FJsonlWriter& ReferenceWriter,
+    FCounts& Counts,
+    int64& PropertyCount,
+    int64& ReferenceCount)
 {
     if (!Struct || !Container) return true;
+    int32 Rows = 0;
     TSet<FString> Seen;
-    for (TFieldIterator<FProperty> It(Struct); It && !Context.bFailed; ++It)
+    for (TFieldIterator<FProperty> It(Struct); It; ++It)
     {
         FProperty* Property = *It;
         if (!ShouldInspectProperty(Property)) continue;
@@ -427,19 +232,73 @@ static bool WalkStructProperties(
             TEXT("::") + Property->GetName();
         if (Seen.Contains(Key)) continue;
         Seen.Add(Key);
-        for (int32 StaticIndex = 0; StaticIndex < Property->ArrayDim && !Context.bFailed; ++StaticIndex)
+
+        for (int32 StaticIndex = 0; StaticIndex < Property->ArrayDim; ++StaticIndex)
         {
+            if (Rows >= MaxPropertyRowsPerOwner)
+            {
+                ++Counts.PropertyRowLimitHits;
+                return true;
+            }
             const void* ValuePtr = Property->ContainerPtrToValuePtr<void>(Container, StaticIndex);
             const void* DefaultPtr = DefaultContainer
                 ? Property->ContainerPtrToValuePtr<void>(DefaultContainer, StaticIndex)
                 : nullptr;
-            const FString Root = Property->GetName();
-            const FString Path = Root +
+            const FString PropertyPath = Property->GetName() +
                 (Property->ArrayDim > 1 ? FString::Printf(TEXT("[%d]"), StaticIndex) : FString());
-            WalkPropertyValue(Property, ValuePtr, DefaultPtr, Root, Path, 0, Context);
+
+            bool bTruncated = false;
+            const FString Value = ExportProperty(Property, ValuePtr, ExportOwner, bTruncated);
+            bool bDefaultTruncated = false;
+            const FString DefaultValue = DefaultPtr
+                ? ExportProperty(Property, DefaultPtr, DefaultExportOwner, bDefaultTruncated)
+                : FString();
+
+            TSharedRef<FJsonObject> Row = MakeShared<FJsonObject>();
+            Row->SetStringField(TEXT("source_path"), SourcePath);
+            Row->SetStringField(TEXT("owner_id"), OwnerId);
+            Row->SetStringField(TEXT("owner_kind"), OwnerKind);
+            Row->SetStringField(TEXT("owner_type"), OwnerType);
+            Row->SetStringField(TEXT("declaring_type"),
+                Property->GetOwnerStruct() ? Property->GetOwnerStruct()->GetPathName() : FString());
+            Row->SetStringField(TEXT("root_property"), Property->GetName());
+            Row->SetStringField(TEXT("property_name"), Property->GetName());
+            Row->SetStringField(TEXT("property_path"), PropertyPath);
+            Row->SetStringField(TEXT("property_type"), Property->GetClass()->GetName());
+            Row->SetStringField(TEXT("cpp_type"), Property->GetCPPType());
+            Row->SetStringField(TEXT("value"), Value);
+            Row->SetBoolField(TEXT("default_present"), DefaultPtr != nullptr);
+            if (DefaultPtr)
+            {
+                Row->SetStringField(TEXT("default_value"), DefaultValue);
+                Row->SetBoolField(TEXT("differs_from_default"), !Property->Identical(ValuePtr, DefaultPtr, PPF_None));
+            }
+            Row->SetBoolField(TEXT("truncated"), bTruncated || bDefaultTruncated);
+            Row->SetBoolField(TEXT("dataflow_input"), Property->HasMetaData(TEXT("DataflowInput")));
+            Row->SetBoolField(TEXT("dataflow_output"), Property->HasMetaData(TEXT("DataflowOutput")));
+            Row->SetBoolField(TEXT("dataflow_passthrough"), Property->HasMetaData(TEXT("DataflowPassthrough")));
+            Row->SetBoolField(TEXT("dataflow_intrinsic"), Property->HasMetaData(TEXT("DataflowIntrinsic")));
+            if (!PropertyWriter.Write(Row)) return false;
+            ++Rows;
+            ++PropertyCount;
+            if (bTruncated || bDefaultTruncated) ++Counts.TruncatedProperties;
+
+            if (!WriteDirectReference(
+                    Property,
+                    ValuePtr,
+                    SourcePath,
+                    OwnerId,
+                    OwnerKind,
+                    OwnerType,
+                    PropertyPath,
+                    ReferenceWriter,
+                    ReferenceCount))
+            {
+                return false;
+            }
         }
     }
-    return !Context.bFailed;
+    return true;
 }
 
 static FString GuidText(const FGuid& Guid)
@@ -478,19 +337,21 @@ static bool WriteDataflow(UDataflow* DataflowAsset, FWriters& Writers, FCounts& 
     ++Counts.DataflowAssets;
 
     UObject* DefaultObject = DataflowAsset->GetClass()->GetDefaultObject(false);
-    FWalkContext AssetContext;
-    AssetContext.SourcePath = AssetPath;
-    AssetContext.OwnerId = AssetPath;
-    AssetContext.OwnerKind = TEXT("dataflow_asset");
-    AssetContext.OwnerType = DataflowAsset->GetClass()->GetPathName();
-    AssetContext.ExportOwner = DataflowAsset;
-    AssetContext.DefaultExportOwner = DefaultObject;
-    AssetContext.PropertyWriter = &Writers.DataflowAssetProperties;
-    AssetContext.ReferenceWriter = &Writers.DataflowAssetReferences;
-    AssetContext.Counts = &Counts;
-    AssetContext.PropertyCounter = &Counts.DataflowAssetProperties;
-    AssetContext.ReferenceCounter = &Counts.DataflowAssetReferences;
-    if (!WalkStructProperties(DataflowAsset->GetClass(), DataflowAsset, DefaultObject, AssetContext))
+    if (!WriteTopLevelProperties(
+            DataflowAsset->GetClass(),
+            DataflowAsset,
+            DefaultObject,
+            DataflowAsset,
+            DefaultObject,
+            AssetPath,
+            AssetPath,
+            TEXT("dataflow_asset"),
+            DataflowAsset->GetClass()->GetPathName(),
+            Writers.DataflowAssetProperties,
+            Writers.DataflowAssetReferences,
+            Counts,
+            Counts.DataflowAssetProperties,
+            Counts.DataflowAssetReferences))
     {
         OutError = TEXT("failed reflecting UDataflow asset state: ") + AssetPath;
         return false;
@@ -555,24 +416,24 @@ static bool WriteDataflow(UDataflow* DataflowAsset, FWriters& Writers, FCounts& 
             }
         }
 
-        if (NodeStruct)
+        if (NodeStruct && !WriteTopLevelProperties(
+                NodeStruct,
+                Node.Get(),
+                nullptr,
+                DataflowAsset,
+                nullptr,
+                AssetPath,
+                GuidText(NodeGuid),
+                TEXT("dataflow_node"),
+                NodeStruct->GetPathName(),
+                Writers.NodeProperties,
+                Writers.NodeReferences,
+                Counts,
+                Counts.NodeProperties,
+                Counts.NodeReferences))
         {
-            FWalkContext NodeContext;
-            NodeContext.SourcePath = AssetPath;
-            NodeContext.OwnerId = GuidText(NodeGuid);
-            NodeContext.OwnerKind = TEXT("dataflow_node");
-            NodeContext.OwnerType = NodeStruct->GetPathName();
-            NodeContext.ExportOwner = DataflowAsset;
-            NodeContext.PropertyWriter = &Writers.NodeProperties;
-            NodeContext.ReferenceWriter = &Writers.NodeReferences;
-            NodeContext.Counts = &Counts;
-            NodeContext.PropertyCounter = &Counts.NodeProperties;
-            NodeContext.ReferenceCounter = &Counts.NodeReferences;
-            if (!WalkStructProperties(NodeStruct, Node.Get(), nullptr, NodeContext))
-            {
-                OutError = TEXT("failed reflecting Dataflow node state: ") + AssetPath + TEXT(" ") + GuidText(NodeGuid);
-                return false;
-            }
+            OutError = TEXT("failed reflecting Dataflow node state: ") + AssetPath + TEXT(" ") + GuidText(NodeGuid);
+            return false;
         }
     }
 
@@ -602,19 +463,21 @@ static bool WriteGeometryCollection(UObject* AssetObject, FWriters& Writers, FCo
     ++Counts.GeometryCollections;
 
     UObject* DefaultObject = AssetObject->GetClass()->GetDefaultObject(false);
-    FWalkContext Context;
-    Context.SourcePath = AssetPath;
-    Context.OwnerId = AssetPath;
-    Context.OwnerKind = TEXT("geometry_collection");
-    Context.OwnerType = AssetObject->GetClass()->GetPathName();
-    Context.ExportOwner = AssetObject;
-    Context.DefaultExportOwner = DefaultObject;
-    Context.PropertyWriter = &Writers.GeometryCollectionProperties;
-    Context.ReferenceWriter = &Writers.GeometryCollectionReferences;
-    Context.Counts = &Counts;
-    Context.PropertyCounter = &Counts.GeometryCollectionProperties;
-    Context.ReferenceCounter = &Counts.GeometryCollectionReferences;
-    if (!WalkStructProperties(AssetObject->GetClass(), AssetObject, DefaultObject, Context))
+    if (!WriteTopLevelProperties(
+            AssetObject->GetClass(),
+            AssetObject,
+            DefaultObject,
+            AssetObject,
+            DefaultObject,
+            AssetPath,
+            AssetPath,
+            TEXT("geometry_collection"),
+            AssetObject->GetClass()->GetPathName(),
+            Writers.GeometryCollectionProperties,
+            Writers.GeometryCollectionReferences,
+            Counts,
+            Counts.GeometryCollectionProperties,
+            Counts.GeometryCollectionReferences))
     {
         OutError = TEXT("failed reflecting Geometry Collection asset state: ") + AssetPath;
         return false;
@@ -692,6 +555,7 @@ static bool WriteManifest(const FString& OutputDir, const FCounts& Counts, bool 
     CountsJson->SetNumberField(TEXT("nodes"), Counts.Nodes);
     CountsJson->SetNumberField(TEXT("pins"), Counts.Pins);
     CountsJson->SetNumberField(TEXT("edges"), Counts.Edges);
+    CountsJson->SetNumberField(TEXT("disabled_nodes"), 0);
     CountsJson->SetNumberField(TEXT("dataflow_asset_properties"), Counts.DataflowAssetProperties);
     CountsJson->SetNumberField(TEXT("dataflow_asset_references"), Counts.DataflowAssetReferences);
     CountsJson->SetNumberField(TEXT("node_properties"), Counts.NodeProperties);
@@ -699,9 +563,9 @@ static bool WriteManifest(const FString& OutputDir, const FCounts& Counts, bool 
     CountsJson->SetNumberField(TEXT("geometry_collection_properties"), Counts.GeometryCollectionProperties);
     CountsJson->SetNumberField(TEXT("geometry_collection_references"), Counts.GeometryCollectionReferences);
     CountsJson->SetNumberField(TEXT("truncated_properties"), Counts.TruncatedProperties);
-    CountsJson->SetNumberField(TEXT("property_depth_limit_hits"), Counts.PropertyDepthLimitHits);
+    CountsJson->SetNumberField(TEXT("property_depth_limit_hits"), 0);
     CountsJson->SetNumberField(TEXT("property_row_limit_hits"), Counts.PropertyRowLimitHits);
-    CountsJson->SetNumberField(TEXT("container_element_limit_hits"), Counts.ContainerElementLimitHits);
+    CountsJson->SetNumberField(TEXT("container_element_limit_hits"), 0);
     Root->SetObjectField(TEXT("counts"), CountsJson);
 
     static const TCHAR* FileNames[] = {
@@ -715,7 +579,7 @@ static bool WriteManifest(const FString& OutputDir, const FCounts& Counts, bool 
         TEXT("dataflow_node_properties.jsonl"),
         TEXT("dataflow_node_references.jsonl"),
         TEXT("geometry_collection_properties.jsonl"),
-        TEXT("geometry_collection_references.jsonl")),
+        TEXT("geometry_collection_references.jsonl"),
     };
     TArray<TSharedPtr<FJsonValue>> Files;
     for (const TCHAR* Name : FileNames) Files.Add(MakeShared<FJsonValueString>(Name));
