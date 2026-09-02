@@ -12,7 +12,6 @@
 #include "Misc/Parse.h"
 #include "Misc/Paths.h"
 #include "Serialization/JsonSerializer.h"
-#include "UObject/Package.h"
 #include "UObject/SoftObjectPtr.h"
 #include "UObject/UObjectGlobals.h"
 #include "UObject/UnrealType.h"
@@ -35,7 +34,6 @@ struct FCounts
     int64 Nodes = 0;
     int64 Pins = 0;
     int64 Edges = 0;
-    int64 DisabledNodes = 0;
     int64 DataflowAssetProperties = 0;
     int64 DataflowAssetReferences = 0;
     int64 NodeProperties = 0;
@@ -142,6 +140,17 @@ static bool ShouldInspectProperty(const FProperty* Property)
     return !Property->HasAnyPropertyFlags(Rejected);
 }
 
+static FString ContainerKind(const FProperty* Property)
+{
+    if (CastField<FArrayProperty>(Property)) return TEXT("array");
+    if (CastField<FSetProperty>(Property)) return TEXT("set");
+    if (CastField<FMapProperty>(Property)) return TEXT("map");
+    if (CastField<FStructProperty>(Property)) return TEXT("struct");
+    if (CastField<FSoftObjectProperty>(Property)) return TEXT("soft_object");
+    if (CastField<FObjectPropertyBase>(Property)) return TEXT("object");
+    return TEXT("scalar");
+}
+
 static FString ExportProperty(
     const FProperty* Property,
     const void* ValuePtr,
@@ -160,17 +169,6 @@ static FString ExportProperty(
     return Text;
 }
 
-static FString ContainerKind(const FProperty* Property)
-{
-    if (CastField<FArrayProperty>(Property)) return TEXT("array");
-    if (CastField<FSetProperty>(Property)) return TEXT("set");
-    if (CastField<FMapProperty>(Property)) return TEXT("map");
-    if (CastField<FStructProperty>(Property)) return TEXT("struct");
-    if (CastField<FSoftObjectProperty>(Property)) return TEXT("soft_object");
-    if (CastField<FObjectPropertyBase>(Property)) return TEXT("object");
-    return TEXT("scalar");
-}
-
 struct FWalkContext
 {
     FString SourcePath;
@@ -178,10 +176,9 @@ struct FWalkContext
     FString OwnerKind;
     FString OwnerType;
     UObject* ExportOwner = nullptr;
-    const void* DefaultContainer = nullptr;
     UObject* DefaultExportOwner = nullptr;
-    FJsonlWriter* Properties = nullptr;
-    FJsonlWriter* References = nullptr;
+    FJsonlWriter* PropertyWriter = nullptr;
+    FJsonlWriter* ReferenceWriter = nullptr;
     FCounts* Counts = nullptr;
     int64* PropertyCounter = nullptr;
     int64* ReferenceCounter = nullptr;
@@ -197,7 +194,7 @@ static void EmitReference(
     const FString& TargetPath,
     const FString& TargetClass)
 {
-    if (!Context.References || !Context.Counts || !Context.ReferenceCounter || TargetPath.IsEmpty() || Context.bFailed) return;
+    if (!Context.ReferenceWriter || !Context.ReferenceCounter || TargetPath.IsEmpty() || Context.bFailed) return;
     TSharedRef<FJsonObject> Row = MakeShared<FJsonObject>();
     Row->SetStringField(TEXT("source_path"), Context.SourcePath);
     Row->SetStringField(TEXT("owner_id"), Context.OwnerId);
@@ -208,7 +205,7 @@ static void EmitReference(
     Row->SetStringField(TEXT("reference_kind"), ReferenceKind);
     Row->SetStringField(TEXT("target_path"), TargetPath);
     Row->SetStringField(TEXT("target_class"), TargetClass);
-    if (!Context.References->Write(Row))
+    if (!Context.ReferenceWriter->Write(Row))
     {
         Context.bFailed = true;
         return;
@@ -226,7 +223,7 @@ static void EmitProperty(
     int32 ElementCount,
     FWalkContext& Context)
 {
-    if (!Context.Properties || !Context.Counts || !Context.PropertyCounter || !Property || Context.bFailed) return;
+    if (!Context.PropertyWriter || !Context.PropertyCounter || !Context.Counts || !Property || Context.bFailed) return;
     if (Context.Rows >= MaxPropertyRowsPerOwner)
     {
         ++Context.Counts->PropertyRowLimitHits;
@@ -267,7 +264,7 @@ static void EmitProperty(
     Row->SetBoolField(TEXT("dataflow_output"), Property->HasMetaData(TEXT("DataflowOutput")));
     Row->SetBoolField(TEXT("dataflow_passthrough"), Property->HasMetaData(TEXT("DataflowPassthrough")));
     Row->SetBoolField(TEXT("dataflow_intrinsic"), Property->HasMetaData(TEXT("DataflowIntrinsic")));
-    if (!Context.Properties->Write(Row))
+    if (!Context.PropertyWriter->Write(Row))
     {
         Context.bFailed = true;
         return;
@@ -414,12 +411,11 @@ static void WalkPropertyValue(
     }
 }
 
-static bool WalkStruct(
+static bool WalkStructProperties(
     const UStruct* Struct,
     void* Container,
     const void* DefaultContainer,
-    FWalkContext& Context,
-    const TSet<FName>* RootAllowList = nullptr)
+    FWalkContext& Context)
 {
     if (!Struct || !Container) return true;
     TSet<FString> Seen;
@@ -427,7 +423,6 @@ static bool WalkStruct(
     {
         FProperty* Property = *It;
         if (!ShouldInspectProperty(Property)) continue;
-        if (RootAllowList && !RootAllowList->Contains(Property->GetFName())) continue;
         const FString Key = (Property->GetOwnerStruct() ? Property->GetOwnerStruct()->GetPathName() : FString()) +
             TEXT("::") + Property->GetName();
         if (Seen.Contains(Key)) continue;
@@ -468,7 +463,6 @@ static bool WritePin(
     Row->SetStringField(TEXT("pin_name"), Connection->GetName().ToString());
     Row->SetStringField(TEXT("direction"), Direction);
     Row->SetStringField(TEXT("original_type"), Connection->GetOriginalType().ToString());
-    Row->SetBoolField(TEXT("hidden"), Connection->GetPinIsHidden());
     const FProperty* Property = Connection->GetProperty();
     Row->SetStringField(TEXT("property_name"), Property ? Property->GetName() : FString());
     Row->SetStringField(TEXT("property_type"), Property ? Property->GetCPPType() : FString());
@@ -483,23 +477,20 @@ static bool WriteDataflow(UDataflow* DataflowAsset, FWriters& Writers, FCounts& 
     const FString AssetPath = DataflowAsset->GetPathName();
     ++Counts.DataflowAssets;
 
-    static const TSet<FName> AssetRoots = {
-        TEXT("Type"), TEXT("Variables"), TEXT("ReferenceAsset"), TEXT("Material")
-    };
+    UObject* DefaultObject = DataflowAsset->GetClass()->GetDefaultObject(false);
     FWalkContext AssetContext;
     AssetContext.SourcePath = AssetPath;
     AssetContext.OwnerId = AssetPath;
     AssetContext.OwnerKind = TEXT("dataflow_asset");
     AssetContext.OwnerType = DataflowAsset->GetClass()->GetPathName();
     AssetContext.ExportOwner = DataflowAsset;
-    AssetContext.DefaultContainer = DataflowAsset->GetClass()->GetDefaultObject(false);
-    AssetContext.DefaultExportOwner = Cast<UObject>(const_cast<void*>(AssetContext.DefaultContainer));
-    AssetContext.Properties = &Writers.DataflowAssetProperties;
-    AssetContext.References = &Writers.DataflowAssetReferences;
+    AssetContext.DefaultExportOwner = DefaultObject;
+    AssetContext.PropertyWriter = &Writers.DataflowAssetProperties;
+    AssetContext.ReferenceWriter = &Writers.DataflowAssetReferences;
     AssetContext.Counts = &Counts;
     AssetContext.PropertyCounter = &Counts.DataflowAssetProperties;
     AssetContext.ReferenceCounter = &Counts.DataflowAssetReferences;
-    if (!WalkStruct(DataflowAsset->GetClass(), DataflowAsset, AssetContext.DefaultContainer, AssetContext, &AssetRoots))
+    if (!WalkStructProperties(DataflowAsset->GetClass(), DataflowAsset, DefaultObject, AssetContext))
     {
         OutError = TEXT("failed reflecting UDataflow asset state: ") + AssetPath;
         return false;
@@ -514,15 +505,11 @@ static bool WriteDataflow(UDataflow* DataflowAsset, FWriters& Writers, FCounts& 
 
     const auto& GraphNodes = Graph->GetNodes();
     const auto& GraphEdges = Graph->GetConnections();
-    const TSet<FName>& Disabled = Graph->GetDisabledNodes();
 
     TSharedRef<FJsonObject> GraphRow = MakeShared<FJsonObject>();
     GraphRow->SetStringField(TEXT("asset_path"), AssetPath);
-    GraphRow->SetStringField(TEXT("topology_guid"), GuidText(Graph->GetGraphTopologyGuid()));
     GraphRow->SetNumberField(TEXT("node_count"), GraphNodes.Num());
     GraphRow->SetNumberField(TEXT("edge_count"), GraphEdges.Num());
-    GraphRow->SetNumberField(TEXT("disabled_node_count"), Disabled.Num());
-    GraphRow->SetNumberField(TEXT("subgraph_count"), DataflowAsset->GetSubGraphs().Num());
     GraphRow->SetStringField(TEXT("provenance"), TEXT("loaded_udataflow_internal_fgraph"));
     if (!Writers.Graphs.Write(GraphRow))
     {
@@ -535,25 +522,21 @@ static bool WriteDataflow(UDataflow* DataflowAsset, FWriters& Writers, FCounts& 
     {
         if (!Node.IsValid()) continue;
         const FGuid NodeGuid = Node->GetGuid();
-        const FName NodeName = Node->GetName();
         const UScriptStruct* NodeStruct = Node->TypedScriptStruct();
-        const bool bDisabled = Disabled.Contains(NodeName);
 
         TSharedRef<FJsonObject> NodeRow = MakeShared<FJsonObject>();
         NodeRow->SetStringField(TEXT("asset_path"), AssetPath);
         NodeRow->SetStringField(TEXT("node_guid"), GuidText(NodeGuid));
-        NodeRow->SetStringField(TEXT("node_name"), NodeName.ToString());
+        NodeRow->SetStringField(TEXT("node_name"), Node->GetName().ToString());
         NodeRow->SetStringField(TEXT("node_struct"), NodeStruct ? NodeStruct->GetPathName() : FString());
         NodeRow->SetNumberField(TEXT("input_count"), Node->GetInputs().Num());
         NodeRow->SetNumberField(TEXT("output_count"), Node->GetOutputs().Num());
-        NodeRow->SetBoolField(TEXT("disabled"), bDisabled);
         if (!Writers.Nodes.Write(NodeRow))
         {
             OutError = TEXT("failed writing Dataflow node row: ") + AssetPath;
             return false;
         }
         ++Counts.Nodes;
-        if (bDisabled) ++Counts.DisabledNodes;
 
         for (FDataflowInput* Input : Node->GetInputs())
         {
@@ -580,12 +563,12 @@ static bool WriteDataflow(UDataflow* DataflowAsset, FWriters& Writers, FCounts& 
             NodeContext.OwnerKind = TEXT("dataflow_node");
             NodeContext.OwnerType = NodeStruct->GetPathName();
             NodeContext.ExportOwner = DataflowAsset;
-            NodeContext.Properties = &Writers.NodeProperties;
-            NodeContext.References = &Writers.NodeReferences;
+            NodeContext.PropertyWriter = &Writers.NodeProperties;
+            NodeContext.ReferenceWriter = &Writers.NodeReferences;
             NodeContext.Counts = &Counts;
             NodeContext.PropertyCounter = &Counts.NodeProperties;
             NodeContext.ReferenceCounter = &Counts.NodeReferences;
-            if (!WalkStruct(NodeStruct, Node.Get(), nullptr, NodeContext))
+            if (!WalkStructProperties(NodeStruct, Node.Get(), nullptr, NodeContext))
             {
                 OutError = TEXT("failed reflecting Dataflow node state: ") + AssetPath + TEXT(" ") + GuidText(NodeGuid);
                 return false;
@@ -625,14 +608,13 @@ static bool WriteGeometryCollection(UObject* AssetObject, FWriters& Writers, FCo
     Context.OwnerKind = TEXT("geometry_collection");
     Context.OwnerType = AssetObject->GetClass()->GetPathName();
     Context.ExportOwner = AssetObject;
-    Context.DefaultContainer = DefaultObject;
     Context.DefaultExportOwner = DefaultObject;
-    Context.Properties = &Writers.GeometryCollectionProperties;
-    Context.References = &Writers.GeometryCollectionReferences;
+    Context.PropertyWriter = &Writers.GeometryCollectionProperties;
+    Context.ReferenceWriter = &Writers.GeometryCollectionReferences;
     Context.Counts = &Counts;
     Context.PropertyCounter = &Counts.GeometryCollectionProperties;
     Context.ReferenceCounter = &Counts.GeometryCollectionReferences;
-    if (!WalkStruct(AssetObject->GetClass(), AssetObject, DefaultObject, Context))
+    if (!WalkStructProperties(AssetObject->GetClass(), AssetObject, DefaultObject, Context))
     {
         OutError = TEXT("failed reflecting Geometry Collection asset state: ") + AssetPath;
         return false;
@@ -710,7 +692,6 @@ static bool WriteManifest(const FString& OutputDir, const FCounts& Counts, bool 
     CountsJson->SetNumberField(TEXT("nodes"), Counts.Nodes);
     CountsJson->SetNumberField(TEXT("pins"), Counts.Pins);
     CountsJson->SetNumberField(TEXT("edges"), Counts.Edges);
-    CountsJson->SetNumberField(TEXT("disabled_nodes"), Counts.DisabledNodes);
     CountsJson->SetNumberField(TEXT("dataflow_asset_properties"), Counts.DataflowAssetProperties);
     CountsJson->SetNumberField(TEXT("dataflow_asset_references"), Counts.DataflowAssetReferences);
     CountsJson->SetNumberField(TEXT("node_properties"), Counts.NodeProperties);
@@ -734,7 +715,7 @@ static bool WriteManifest(const FString& OutputDir, const FCounts& Counts, bool 
         TEXT("dataflow_node_properties.jsonl"),
         TEXT("dataflow_node_references.jsonl"),
         TEXT("geometry_collection_properties.jsonl"),
-        TEXT("geometry_collection_references.jsonl"),
+        TEXT("geometry_collection_references.jsonl")),
     };
     TArray<TSharedPtr<FJsonValue>> Files;
     for (const TCHAR* Name : FileNames) Files.Add(MakeShared<FJsonValueString>(Name));
