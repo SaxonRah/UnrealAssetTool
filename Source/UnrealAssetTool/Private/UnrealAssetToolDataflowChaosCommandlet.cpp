@@ -357,7 +357,7 @@ static bool WriteDataflow(UDataflow* DataflowAsset, FWriters& Writers, FCounts& 
         return false;
     }
 
-    const TSharedPtr<UE::Dataflow::FGraph> Graph = DataflowAsset->Dataflow;
+    const auto Graph = DataflowAsset->GetDataflow();
     if (!Graph.IsValid())
     {
         OutError = TEXT("loaded UDataflow has no internal FGraph: ") + AssetPath;
