@@ -152,10 +152,14 @@ def _unique_nonblank(rows: list[dict], field: str, label: str) -> tuple[str | No
     return None, set(values)
 
 
+def _owner_text(value) -> str:
+    return "" if value is None else str(value)
+
+
 def _contiguous(rows: list[dict], owner_fields: tuple[str, ...], index_field: str, label: str) -> str | None:
     grouped: dict[tuple[str, ...], list[int]] = collections.defaultdict(list)
     for row in rows:
-        owner = tuple(str(row.get(field, "") or "") for field in owner_fields)
+        owner = tuple(_owner_text(row.get(field)) for field in owner_fields)
         if any(not part for part in owner):
             return f"{label} has blank owner field"
         grouped[owner].append(int(row.get(index_field, -1)))
