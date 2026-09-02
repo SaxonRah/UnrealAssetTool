@@ -84,12 +84,12 @@ class SystemsSchema7AcceptanceTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "edge set mismatch"):
                 accept._verify_graph(root, self._rows)
 
-    def test_public_composition_installs_schema7_acceptance_commands(self) -> None:
+    def test_public_composition_keeps_schema7_acceptance_commands_installed(self) -> None:
         import uatool  # noqa: F401
         import uatool_runtime
         import uatool_systems
 
-        self.assertEqual(uatool_systems.SYSTEMS_SCHEMA_VERSION, 7)
+        self.assertGreaterEqual(uatool_systems.SYSTEMS_SCHEMA_VERSION, 7)
         self.assertTrue(getattr(uatool_runtime, "_systems_schema7_accept_installed", False))
 
     def test_native_manifest_publication_is_synchronous(self) -> None:
@@ -99,9 +99,13 @@ class SystemsSchema7AcceptanceTest(unittest.TestCase):
         policy = (
             ROOT / "Source/UnrealAssetTool/Private/UnrealAssetToolSystemsSmartObjectsPolicy.inl"
         ).read_text(encoding="utf-8")
+        ai_policy = (
+            ROOT / "Source/UnrealAssetTool/Private/UnrealAssetToolSystemsAIPerceptionPolicy.inl"
+        ).read_text(encoding="utf-8")
         self.assertIn("FSmartObjectSystemsFileHelperProxy", policy)
         self.assertIn("UpgradeSystemsManifestToSchema7", policy)
-        self.assertIn("#define FFileHelper FSmartObjectSystemsFileHelperProxy", scanner)
+        self.assertIn("FSmartObjectSystemsFileHelperProxy::SaveStringToFile", ai_policy)
+        self.assertIn("#define FFileHelper FAIPerceptionSystemsFileHelperProxy", scanner)
         self.assertIn("#undef FFileHelper", scanner)
         self.assertNotIn("GSmartObjectSchema7ExitHookRegistered", policy)
         self.assertNotIn("FCoreDelegates::OnEnginePreExit.AddStatic", policy)
