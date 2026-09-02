@@ -472,7 +472,7 @@ static bool WriteAsset(
     FString& OutError)
 {
     UBlueprint* Blueprint = Cast<UBlueprint>(AssetObject);
-    UClass* GeneratedClass = Blueprint ? Blueprint->GeneratedClass : Cast<UClass>(AssetObject);
+    UClass* GeneratedClass = Blueprint ? Blueprint->GeneratedClass.Get() : Cast<UClass>(AssetObject);
 
     TSharedRef<FJsonObject> AssetRow = MakeShared<FJsonObject>();
     AssetRow->SetStringField(TEXT("asset_path"), AssetPath);
