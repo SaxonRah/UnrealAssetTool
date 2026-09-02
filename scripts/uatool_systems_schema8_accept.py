@@ -16,6 +16,12 @@ ACCEPTANCE_MANIFEST = "systems_schema8_acceptance.json"
 GRAPH_EXPECTATIONS_MANIFEST = "ai_perception_graph_expectations.json"
 GRAPH_VERIFICATION_MANIFEST = "ai_perception_graph_verification.json"
 TARGET_DERIVED_SCHEMA_VERSION = 24
+LOSS_COUNT_KEYS = (
+    "ai_perception_truncated_properties",
+    "ai_perception_property_depth_limit_hits",
+    "ai_perception_property_row_limit_hits",
+    "ai_perception_container_element_limit_hits",
+)
 
 
 def _read_json(path: Path) -> dict:
@@ -73,6 +79,17 @@ def _resolve_project(value: str) -> Path:
     return project
 
 
+def _require_lossless_manifest(manifest: dict) -> dict:
+    counts = manifest.get("counts", {}) if isinstance(manifest.get("counts"), dict) else {}
+    for key in LOSS_COUNT_KEYS:
+        value = int(counts.get(key, -1))
+        if value < 0:
+            raise RuntimeError(f"systems schema 8 manifest is missing required loss counter: {key}")
+        if value:
+            raise RuntimeError(f"systems schema 8 AI Perception traversal is incomplete: {key}={value}")
+    return counts
+
+
 def accept_schema8(systems_module, project: Path, *, corpus: Path, systems_capture: Path) -> dict:
     if int(getattr(systems_module, "SYSTEMS_SCHEMA_VERSION", 0) or 0) != 8:
         raise RuntimeError("systems-schema8-accept requires composed systems schema 8")
@@ -80,6 +97,7 @@ def accept_schema8(systems_module, project: Path, *, corpus: Path, systems_captu
     manifest = _read_json(systems_capture / "systems_manifest.json")
     if int(manifest.get("schema_version", 0) or 0) != 8 or not bool(manifest.get("success", False)):
         raise RuntimeError("isolated systems capture is not a successful schema-8 manifest")
+    counts = _require_lossless_manifest(manifest)
     error = systems_module.validation_error(systems_capture)
     if error:
         raise RuntimeError(f"isolated systems capture is not valid schema 8: {error}")
@@ -100,7 +118,6 @@ def accept_schema8(systems_module, project: Path, *, corpus: Path, systems_captu
             raise RuntimeError(f"staged systems schema 8 failed validation: {error}")
 
         expectations = _graph_expectations(stage, systems_module._rows)
-        counts = manifest.get("counts", {}) if isinstance(manifest.get("counts"), dict) else {}
         acceptance = {
             "acceptance_schema_version": 1,
             "systems_schema_version": 8,
@@ -191,7 +208,8 @@ def _verify_graph(corpus: Path, rows) -> dict:
         },
         "ai_perception_sense_config": {
             str(row.get("config_path", "") or "")
-            for row in rows(corpus / "ai_perception_sense_configs.jsonl") if row.get("config_path")
+            for row in rows(corpus / "ai_perception_sense_configs.jsonl")
+            if row.get("config_path") and not bool(row.get("is_null", False))
         },
         "ai_perception_stimuli_source": {
             str(row.get("component_path", "") or "")
