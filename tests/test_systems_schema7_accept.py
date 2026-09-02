@@ -92,15 +92,21 @@ class SystemsSchema7AcceptanceTest(unittest.TestCase):
         self.assertEqual(uatool_systems.SYSTEMS_SCHEMA_VERSION, 7)
         self.assertTrue(getattr(uatool_runtime, "_systems_schema7_accept_installed", False))
 
-    def test_native_manifest_hook_registers_after_scan_starts(self) -> None:
+    def test_native_manifest_publication_is_synchronous(self) -> None:
+        scanner = (
+            ROOT / "Source/UnrealAssetTool/Private/UnrealAssetToolSystemsScanner.cpp"
+        ).read_text(encoding="utf-8")
         policy = (
             ROOT / "Source/UnrealAssetTool/Private/UnrealAssetToolSystemsSmartObjectsPolicy.inl"
         ).read_text(encoding="utf-8")
-        self.assertIn("GSmartObjectSchema7ExitHookRegistered", policy)
-        self.assertIn("FCoreDelegates::OnEnginePreExit.AddStatic", policy)
-        self.assertIn("FCoreDelegates::OnPreExit.AddStatic", policy)
-        self.assertIn("FCoreDelegates::OnExit.AddStatic", policy)
-        self.assertNotIn("FSmartObjectSchema7FinalizeBootstrap", policy)
+        self.assertIn("FSmartObjectSystemsFileHelperProxy", policy)
+        self.assertIn("return UpgradeSystemsManifestToSchema7(Path);", policy)
+        self.assertIn("#define FFileHelper FSmartObjectSystemsFileHelperProxy", scanner)
+        self.assertIn("#undef FFileHelper", scanner)
+        self.assertNotIn("GSmartObjectSchema7ExitHookRegistered", policy)
+        self.assertNotIn("OnEnginePreExit.AddStatic(&FinalizeSmartObjectSchema7Manifest)", policy)
+        self.assertNotIn("OnPreExit.AddStatic(&FinalizeSmartObjectSchema7Manifest)", policy)
+        self.assertNotIn("OnExit.AddStatic(&FinalizeSmartObjectSchema7Manifest)", policy)
 
 
 if __name__ == "__main__":
