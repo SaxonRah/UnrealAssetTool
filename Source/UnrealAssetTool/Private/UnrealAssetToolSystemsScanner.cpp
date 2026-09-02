@@ -32,6 +32,7 @@
 #include "Serialization/JsonWriter.h"
 #include "UObject/FindObjectFlags.h"
 #include "UObject/SoftObjectPtr.h"
+#include "UObject/UObjectGlobals.h"
 #include "UObject/UObjectHash.h"
 #include "UObject/UObjectIterator.h"
 #include "UObject/UnrealType.h"
