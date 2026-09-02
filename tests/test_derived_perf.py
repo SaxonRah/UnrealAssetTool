@@ -110,6 +110,16 @@ class DerivedPerfTest(unittest.TestCase):
             os.utime(source, None)
             self.assertFalse(freshness.is_fresh(output, schema_version=14, script_dir=scripts))
 
+    def test_composed_derive_checks_freshness_before_canonical_cleanup(self) -> None:
+        source = (SCRIPTS / "uatool.py").read_text(encoding="utf-8")
+        start = source.index("def derive_output(output):")
+        end = source.index("\ndef build_database(output):", start)
+        body = source[start:end]
+        freshness_guard = body.index("if _derived_is_fresh(output):")
+        cleanup = body.index("cleanup = canonical_cleanup.apply(output)")
+        self.assertLess(freshness_guard, cleanup)
+        self.assertEqual(body.count("if _derived_is_fresh(output):"), 1)
+
     def test_validator_cache_reuses_only_unchanged_files(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             output = Path(temp_dir)

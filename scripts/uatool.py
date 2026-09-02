@@ -210,6 +210,16 @@ def _semantic_coverage_counts(semantic_nodes: list[dict]) -> tuple[int, int, int
 def derive_output(output):
     output = Path(output).expanduser().resolve()
 
+    # The freshness stamp is written only after canonical cleanup plus every raw
+    # and derived validator succeeds. Check it before touching canonical files.
+    # Several storage normalizers legitimately rewrite small manifests while
+    # repairing stale/legacy output; running them before this guard used to
+    # change manifest mtimes and invalidate an otherwise valid stamp, forcing a
+    # full City Sample derive again from pack/bundle.
+    if _derived_is_fresh(output):
+        print(f"derived output current: reusing validated schema {FINAL_DERIVED_SCHEMA_VERSION}")
+        return _declared_derived_counts(output)
+
     cleanup = canonical_cleanup.apply(output)
     cleanup_error = canonical_cleanup.validation_error(output)
     if cleanup_error:
@@ -225,13 +235,6 @@ def derive_output(output):
             f"{cleanup.get('inline_blueprint_pins', 0)} "
             f"from nodes={cleanup['blueprint_nodes_rewritten']}"
         )
-
-    # A freshness stamp exists only after a complete raw + derived validation.
-    # Canonical cleanup runs first: if it changed a raw file, its metadata no
-    # longer matches the stamp and this fast path automatically misses.
-    if _derived_is_fresh(output):
-        print(f"derived output current: reusing validated schema {FINAL_DERIVED_SCHEMA_VERSION}")
-        return _declared_derived_counts(output)
 
     # Raw specialist passes are prerequisites for the unified graph. Gate before
     # rewriting derived files so failed/old scans cannot look fresh.

@@ -5,7 +5,7 @@ static bool SaveSystemsManifest(
     const FString& Error)
 {
     TSharedRef<FJsonObject> Root = MakeShared<FJsonObject>();
-    Root->SetNumberField(TEXT("schema_version"), 4);
+    Root->SetNumberField(TEXT("schema_version"), 5);
     Root->SetStringField(TEXT("pass"), TEXT("UnrealAssetToolSystems"));
     Root->SetStringField(TEXT("generated_utc"), FDateTime::UtcNow().ToIso8601());
     Root->SetStringField(TEXT("engine_version"), FEngineVersion::Current().ToString());
@@ -53,6 +53,15 @@ static bool SaveSystemsManifest(
     C->SetNumberField(TEXT("gameplay_camera_transitions"), GGameplayCameraCounts.Transitions);
     C->SetNumberField(TEXT("gameplay_camera_directors"), GGameplayCameraCounts.Directors);
     C->SetNumberField(TEXT("gameplay_camera_rig_references"), GGameplayCameraCounts.RigReferences);
+    C->SetNumberField(TEXT("mass_entity_configs"), GMassZoneGraphCounts.EntityConfigs);
+    C->SetNumberField(TEXT("mass_entity_traits"), GMassZoneGraphCounts.EntityTraits);
+    C->SetNumberField(TEXT("mass_spawners"), GMassZoneGraphCounts.Spawners);
+    C->SetNumberField(TEXT("mass_spawner_entity_types"), GMassZoneGraphCounts.SpawnerEntityTypes);
+    C->SetNumberField(TEXT("mass_spawner_generators"), GMassZoneGraphCounts.SpawnerGenerators);
+    C->SetNumberField(TEXT("mass_spawn_generator_assets"), GMassZoneGraphCounts.SpawnGeneratorAssets);
+    C->SetNumberField(TEXT("mass_agent_components"), GMassZoneGraphCounts.AgentComponents);
+    C->SetNumberField(TEXT("zonegraph_shapes"), GMassZoneGraphCounts.ZoneShapes);
+    C->SetNumberField(TEXT("zonegraph_shape_points"), GMassZoneGraphCounts.ZoneShapePoints);
     Root->SetObjectField(TEXT("counts"), C);
 
     static const TCHAR* Names[] = {
@@ -95,7 +104,16 @@ static bool SaveSystemsManifest(
         TEXT("gameplay_camera_node_edges.jsonl"),
         TEXT("gameplay_camera_transitions.jsonl"),
         TEXT("gameplay_camera_directors.jsonl"),
-        TEXT("gameplay_camera_rig_references.jsonl")
+        TEXT("gameplay_camera_rig_references.jsonl"),
+        TEXT("mass_entity_configs.jsonl"),
+        TEXT("mass_entity_traits.jsonl"),
+        TEXT("mass_spawners.jsonl"),
+        TEXT("mass_spawner_entity_types.jsonl"),
+        TEXT("mass_spawner_generators.jsonl"),
+        TEXT("mass_spawn_generator_assets.jsonl"),
+        TEXT("mass_agent_components.jsonl"),
+        TEXT("zonegraph_shapes.jsonl"),
+        TEXT("zonegraph_shape_points.jsonl")
     };
     TArray<TSharedPtr<FJsonValue>> Files;
     for (const TCHAR* Name : Names)
@@ -143,9 +161,13 @@ static bool RunSystemsScan(FString& OutError)
 
     GMoverCounts = FMoverCounts();
     GGameplayCameraCounts = FGameplayCameraCounts();
+    GMassZoneGraphCounts = FMassZoneGraphCounts();
     FWriters Writers;
     FCounts Counts;
-    if (!Writers.Open(OutputDir) || !GMoverWriters.Open(OutputDir) || !GGameplayCameraWriters.Open(OutputDir))
+    if (!Writers.Open(OutputDir) ||
+        !GMoverWriters.Open(OutputDir) ||
+        !GGameplayCameraWriters.Open(OutputDir) ||
+        !GMassZoneGraphWriters.Open(OutputDir))
     {
         OutError = TEXT("could not create systems JSONL output files");
         SaveSystemsManifest(OutputDir, Counts, false, OutError);
@@ -318,6 +340,35 @@ static bool RunSystemsScan(FString& OutError)
         return false;
     }
 
+    if (!ScanMassZoneGraphProjectModel(
+            Assets,
+            ProjectDir,
+            bIncludeEngine,
+            bIncludeSelf,
+            ToolPluginDir,
+            Writers,
+            Counts,
+            SeenStateOwners,
+            OutError))
+    {
+        SaveSystemsManifest(OutputDir, Counts, false, OutError);
+        return false;
+    }
+
+    // All schema streams must be physically finalized before the success
+    // manifest is published. In particular, the schema-3/4/5 writer groups are
+    // static globals and otherwise retain FArchive file-writer buffers until
+    // module shutdown. City Sample proved those buffers flush in 4096-byte
+    // chunks, leaving truncated JSONL tails (and even zero-byte small streams)
+    // when systems-only mode exits immediately. Replacing every writer group
+    // here destroys the active FArchive instances synchronously, before any
+    // success manifest or RequestExit can be observed.
+    Writers = FWriters();
+    GMoverWriters = FMoverWriters();
+    GGameplayCameraWriters = FGameplayCameraWriters();
+    GMassZoneGraphWriters = FMassZoneGraphWriters();
+    UE_LOG(LogTemp, Display, TEXT("UnrealAssetToolSystems: finalized all JSONL writers before manifest"));
+
     if (!SaveSystemsManifest(OutputDir, Counts, true, FString()))
     {
         OutError = TEXT("could not write systems_manifest.json");
@@ -327,7 +378,7 @@ static bool RunSystemsScan(FString& OutError)
     UE_LOG(
         LogTemp,
         Display,
-        TEXT("UnrealAssetToolSystems: assets=%lld sequences=%lld audio=%lld actions=%lld contexts=%lld mappings=%lld data_rows=%lld data_fields=%lld curve_tables=%lld curve_rows=%lld curve_keys=%lld primary_data=%lld tag_sources=%lld tag_dictionary=%lld mover_blueprints=%lld mover_components=%lld mover_modes=%lld mover_settings=%lld mover_transitions=%lld camera_assets=%lld camera_rigs=%lld camera_nodes=%lld camera_node_edges=%lld camera_transitions=%lld camera_directors=%lld camera_rig_refs=%lld"),
+        TEXT("UnrealAssetToolSystems: assets=%lld sequences=%lld audio=%lld actions=%lld contexts=%lld mappings=%lld data_rows=%lld data_fields=%lld curve_tables=%lld curve_rows=%lld curve_keys=%lld primary_data=%lld tag_sources=%lld tag_dictionary=%lld mover_blueprints=%lld mover_components=%lld mover_modes=%lld mover_settings=%lld mover_transitions=%lld camera_assets=%lld camera_rigs=%lld camera_nodes=%lld camera_node_edges=%lld camera_transitions=%lld camera_directors=%lld camera_rig_refs=%lld mass_configs=%lld mass_traits=%lld mass_spawners=%lld mass_entity_types=%lld mass_generators=%lld mass_generator_assets=%lld mass_agents=%lld zone_shapes=%lld zone_points=%lld"),
         Counts.Assets,
         Counts.LevelSequences,
         Counts.AudioAssets,
@@ -353,7 +404,16 @@ static bool RunSystemsScan(FString& OutError)
         GGameplayCameraCounts.NodeEdges,
         GGameplayCameraCounts.Transitions,
         GGameplayCameraCounts.Directors,
-        GGameplayCameraCounts.RigReferences);
+        GGameplayCameraCounts.RigReferences,
+        GMassZoneGraphCounts.EntityConfigs,
+        GMassZoneGraphCounts.EntityTraits,
+        GMassZoneGraphCounts.Spawners,
+        GMassZoneGraphCounts.SpawnerEntityTypes,
+        GMassZoneGraphCounts.SpawnerGenerators,
+        GMassZoneGraphCounts.SpawnGeneratorAssets,
+        GMassZoneGraphCounts.AgentComponents,
+        GMassZoneGraphCounts.ZoneShapes,
+        GMassZoneGraphCounts.ZoneShapePoints);
     return true;
 }
 
@@ -361,14 +421,26 @@ static void OnPostEngineInit()
 {
     FString RunCommandlet;
     FParse::Value(FCommandLine::Get(), TEXT("run="), RunCommandlet);
-    if (!RunCommandlet.Equals(TEXT("UnrealAssetToolWorld"), ESearchCase::IgnoreCase))
+    const bool bSystemsOnly = FParse::Param(FCommandLine::Get(), TEXT("UnrealAssetToolSystemsOnly"));
+    if (!bSystemsOnly && !RunCommandlet.Equals(TEXT("UnrealAssetToolWorld"), ESearchCase::IgnoreCase))
     {
         return;
     }
+
     FString Error;
-    if (!RunSystemsScan(Error))
+    const bool bSuccess = RunSystemsScan(Error);
+    if (!bSuccess)
     {
         UE_LOG(LogTemp, Error, TEXT("UnrealAssetToolSystems: %s"), *Error);
+    }
+
+    if (bSystemsOnly)
+    {
+        UE_LOG(
+            LogTemp,
+            Display,
+            TEXT("UnrealAssetToolSystems: isolated systems capture complete; requesting editor exit"));
+        FPlatformMisc::RequestExit(false);
     }
 }
 

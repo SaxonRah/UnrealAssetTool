@@ -4,8 +4,15 @@
 Several composition layers intentionally validate a freshly written derived
 stream before proceeding and then validate the same unchanged stream again at a
 higher gate. The second parse adds no safety when the exact validated files have
-not changed. Cache validator results only against exact file size + mtime_ns
-signatures; any rewrite automatically misses the cache.
+not changed.
+
+Filesystem metadata alone is not a sufficient in-process cache key. In
+particular, large derived files on network/coarse-timestamp filesystems can be
+rewritten to the same byte size without receiving a distinguishable mtime before
+the next validation. Track successful ``uatool_runtime._write`` calls with a
+monotonic per-path revision and include that revision in validator signatures.
+Validation failures are never cached: a later pipeline stage may repair the same
+files before the next gate.
 """
 from __future__ import annotations
 
@@ -15,23 +22,58 @@ from pathlib import Path
 from typing import Callable, Iterable
 
 PROFILE_ENV = "UATOOL_PROFILE_DERIVE"
+_WRITE_REVISIONS: dict[str, int] = {}
 
 
 def _profiling() -> bool:
     return os.environ.get(PROFILE_ENV, "0").strip().lower() not in {"", "0", "false", "no", "off"}
 
 
-def _signature(output: Path, names: Iterable[str]) -> tuple[tuple[str, int, int], ...]:
+def _path_key(path: Path) -> str:
+    try:
+        return str(Path(path).expanduser().resolve())
+    except OSError:
+        return str(Path(path).expanduser().absolute())
+
+
+def _bump_write_revision(path: Path) -> None:
+    key = _path_key(path)
+    _WRITE_REVISIONS[key] = _WRITE_REVISIONS.get(key, 0) + 1
+
+
+def _write_revision(path: Path) -> int:
+    return _WRITE_REVISIONS.get(_path_key(path), 0)
+
+
+def _signature(output: Path, names: Iterable[str]) -> tuple[tuple[str, int, int, int], ...]:
     result = []
     for name in names:
         path = output / name
+        revision = _write_revision(path)
         try:
             stat = path.stat()
         except OSError:
-            result.append((name, -1, -1))
+            result.append((name, -1, -1, revision))
             continue
-        result.append((name, int(stat.st_size), int(stat.st_mtime_ns)))
+        result.append((name, int(stat.st_size), int(stat.st_mtime_ns), revision))
     return tuple(result)
+
+
+def _install_write_tracking() -> None:
+    import uatool_runtime as runtime
+
+    if getattr(runtime, "_validation_write_revision_tracking_installed", False):
+        return
+
+    original_write = runtime._write
+
+    def tracked_write(path, values):
+        result = original_write(path, values)
+        _bump_write_revision(Path(path))
+        return result
+
+    runtime._write = tracked_write
+    runtime._validation_write_revision_tracking_installed = True
 
 
 def _wrap(module, names: tuple[str, ...], label: str) -> None:
@@ -51,9 +93,19 @@ def _wrap(module, names: tuple[str, ...], label: str) -> None:
         started = time.perf_counter()
         result = original(output, *args, **kwargs)
         elapsed = time.perf_counter() - started
-        cached_signature = signature
-        cached_result = result
-        has_cache = True
+
+        # Only cache a successful validation. Derived pipelines are allowed to
+        # repair/rewrite an intermediate stream before the next validation gate;
+        # preserving an earlier failure across that repair is always incorrect.
+        if result is None:
+            cached_signature = signature
+            cached_result = None
+            has_cache = True
+        else:
+            cached_signature = None
+            cached_result = None
+            has_cache = False
+
         if _profiling():
             print(f"derive profile: {label} validation {elapsed:.3f}s")
         return result
@@ -82,6 +134,8 @@ def install() -> None:
     import uatool_project_graph_finalize as project_graph_finalize
     import uatool_project_neighborhood_compact as neighborhood_compact
     import uatool_project_neighborhoods as neighborhoods
+
+    _install_write_tracking()
 
     _wrap(
         vfx_stitch,

@@ -13,8 +13,8 @@
 - world scanner schema: **12**
 - animation scanner schema: **1**
 - VFX scanner schema: **1**
-- systems scanner schema: **4**
-- derived schema: **20**
+- systems scanner schema: **5**
+- derived schema: **21**
 
 The schemas are independently versioned because they represent different extraction lifecycles. A change to a Python-only derived view does not require renumbering canonical Unreal scanner output.
 
@@ -46,6 +46,7 @@ UnrealAssetTool currently has dedicated extraction for:
 - general DataTable and CurveTable authored rows/values/references, PrimaryDataAsset identity and the project Gameplay Tags settings/source/dictionary/redirect model;
 - Mover component/mode/settings/transition composition plus derived concrete transition behavior/routes;
 - Gameplay Cameras CameraAsset/CameraRig/node/transition/director topology, generic Chooser decisions and Blueprint camera-provider/director behavior;
+- Mass entity configs/ordered Traits, MassSpawner composition, spawn-generator inheritance, MassAgent components, and authored placed ZoneShape/ZoneShapePoint topology;
 - typed project-level graph edges and bounded neighborhoods with per-hop provenance/coverage quality.
 
 Unsupported asset families still appear through Asset Registry identity/tags/package dependencies. Their presence in `assets.jsonl` does **not** imply that UnrealAssetTool understands their internal authored structure.
@@ -66,14 +67,14 @@ The `.uatool` directory contains canonical JSONL, deterministic derived JSONL, m
 Important schema layers:
 
 ```text
-manifest.json             structural schema 12 + derived schema 20
+manifest.json             structural schema 12 + derived schema 21
 world_manifest.json       world schema 12
 animation_manifest.json   animation schema 1
 vfx_manifest.json         VFX schema 1
-systems_manifest.json     systems schema 4
+systems_manifest.json     systems schema 5
 ```
 
-Derived schema 20 includes the typed project graph and later Blueprint/Chooser/Mover camera semantics while preserving the earlier derived streams:
+Derived schema 21 includes the typed project graph and later Blueprint/Chooser/Mover/Gameplay Camera/Mass/ZoneGraph semantics while preserving the earlier derived streams:
 
 ```text
 project_nodes.jsonl
@@ -90,6 +91,15 @@ gameplay_camera_director_inputs.jsonl
 ```
 
 `project_edges.jsonl` is authoritative for typed project-graph relationships and provenance. Neighborhoods store compact references to those edges instead of duplicating full evidence payloads.
+
+Systems schema 5 additionally preserves acceptance/provenance manifests for the evidence-driven Mass/ZoneGraph slice when those focused validation commands have been run:
+
+```text
+systems_schema5_acceptance.json
+zonegraph_world_manifest.json
+mass_zonegraph_graph_expectations.json
+mass_zonegraph_graph_verification.json
+```
 
 ## Quick start
 
@@ -215,6 +225,7 @@ Supporting modules isolate real concerns, but there is intentionally one canonic
 The main UE 5.8.2 validation corpora are:
 
 - **Game Animation Sample (GASP)** — large Blueprint/animation/Pose Search/Enhanced Input graph plus accepted Mover and Gameplay Cameras coverage;
+- **City Sample** — large Mass/traffic/crowd and authored ZoneGraph regression, including accepted systems-schema-5 and schema-21 graph contracts;
 - **Content Examples** — broad Sequencer, audio, MetaSound, VFX, materials and gameplay-data/Gameplay Tags coverage;
 - **StackOBot + Niagara Examples** — World Partition/LevelInstance/PCG/VFX and cross-project build regression;
 - **Cropout Sample Project** — compact Blueprint/gameplay regression.
@@ -232,7 +243,8 @@ A scanner family is not considered stable merely because it compiles. Corpus val
 - [VFX schema 1](docs/vfx-schema-1.md)
 - [Systems schema 1](docs/systems-schema-1.md) — historical initial contract
 - [Systems schema 2](docs/systems-schema-2.md) — historical gameplay-data/tag extension
-- [Systems schema 4](docs/systems-schema-4.md) — current Mover and Gameplay Cameras contract
+- [Systems schema 4](docs/systems-schema-4.md) — historical Mover and Gameplay Cameras contract
+- [Systems schema 5](docs/zonegraph-mass-schema5.md) — current Mass + authored ZoneGraph contract
 
 ## Coverage policy
 
