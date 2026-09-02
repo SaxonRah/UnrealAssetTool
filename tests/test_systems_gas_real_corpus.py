@@ -45,18 +45,11 @@ class SystemsGASRealCorpusRegressionTest(unittest.TestCase):
         )
 
     def test_native_policy_uses_real_inheritance_and_project_module_scope(self) -> None:
-        policy = (
-            ROOT / "Source/UnrealAssetTool/Private/UnrealAssetToolSystemsGASPolicy.inl"
-        ).read_text(encoding="utf-8")
-        smart_policy = (
-            ROOT / "Source/UnrealAssetTool/Private/UnrealAssetToolSystemsSmartObjectsPolicy.inl"
-        ).read_text(encoding="utf-8")
-        ai_policy = (
-            ROOT / "Source/UnrealAssetTool/Private/UnrealAssetToolSystemsAIPerceptionPolicy.inl"
-        ).read_text(encoding="utf-8")
-        scanner = (
-            ROOT / "Source/UnrealAssetTool/Private/UnrealAssetToolSystemsScanner.cpp"
-        ).read_text(encoding="utf-8")
+        policy = (ROOT / "Source/UnrealAssetTool/Private/UnrealAssetToolSystemsGASPolicy.inl").read_text(encoding="utf-8")
+        smart_policy = (ROOT / "Source/UnrealAssetTool/Private/UnrealAssetToolSystemsSmartObjectsPolicy.inl").read_text(encoding="utf-8")
+        ai_policy = (ROOT / "Source/UnrealAssetTool/Private/UnrealAssetToolSystemsAIPerceptionPolicy.inl").read_text(encoding="utf-8")
+        dataflow_policy = (ROOT / "Source/UnrealAssetTool/Private/UnrealAssetToolSystemsDataflowChaosPolicy.inl").read_text(encoding="utf-8")
+        scanner = (ROOT / "Source/UnrealAssetTool/Private/UnrealAssetToolSystemsScanner.cpp").read_text(encoding="utf-8")
 
         self.assertIn("AssetInSystemsScope(", policy)
         self.assertIn("Asset.GetAsset()", policy)
@@ -65,12 +58,9 @@ class SystemsGASRealCorpusRegressionTest(unittest.TestCase):
         self.assertIn("GASWriteGameplayCue(Blueprint", policy)
         self.assertNotIn("GASBlueprintMetadataCandidate(Asset)", policy)
 
-        # Lyra game phases use the specialized GameplayAbilityBlueprint asset
-        # class. It must enter the actual generated-class inheritance path too.
         self.assertIn("GASIsBlueprintAsset(Asset)", policy)
         self.assertIn("/Script/GameplayAbilities.GameplayAbilityBlueprint", policy)
         self.assertIn("UBlueprint::StaticClass()->GetClassPathName()", policy)
-
         self.assertIn("FModuleManager::Get().GetModuleFilename", policy)
         self.assertIn("FPackageName::DoesPackageExist", policy)
         self.assertIn("IsInsideDirectory(OwnerFilename, ProjectDir)", policy)
@@ -80,9 +70,11 @@ class SystemsGASRealCorpusRegressionTest(unittest.TestCase):
         self.assertIn('#include "UnrealAssetToolSystemsGASPolicy.inl"', scanner)
         self.assertIn('#include "UnrealAssetToolSystemsSmartObjectsPolicy.inl"', scanner)
         self.assertIn('#include "UnrealAssetToolSystemsAIPerceptionPolicy.inl"', scanner)
+        self.assertIn('#include "UnrealAssetToolSystemsDataflowChaosPolicy.inl"', scanner)
         self.assertIn("return ScanGASProjectModelPolicy(", smart_policy)
         self.assertIn("return ScanGASAndSmartObjectProjectModels(", ai_policy)
-        self.assertIn("#define ScanGASProjectModel ScanGASSmartObjectsAndAIPerceptionProjectModels", scanner)
+        self.assertIn("return ScanGASSmartObjectsAndAIPerceptionProjectModels(", dataflow_policy)
+        self.assertIn("#define ScanGASProjectModel ScanGASSmartObjectsAIPerceptionAndDataflowChaosProjectModels", scanner)
         self.assertIn("#undef ScanGASProjectModel", scanner)
 
     def test_final_lyra_schema6_acceptance_is_documented(self) -> None:
