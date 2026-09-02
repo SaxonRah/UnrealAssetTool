@@ -174,6 +174,7 @@ class SystemsSmartObjectsTest(unittest.TestCase):
         import uatool_project_graph
         import uatool_systems
         import uatool_systems_capture
+        import uatool_runtime
 
         self.assertEqual(uatool_systems.SYSTEMS_SCHEMA_VERSION, 7)
         self.assertEqual(uatool.FINAL_DERIVED_SCHEMA_VERSION, 23)
@@ -181,6 +182,8 @@ class SystemsSmartObjectsTest(unittest.TestCase):
         self.assertTrue(getattr(uatool_project_graph, "_smartobject_graph_installed", False))
         self.assertTrue(set(smart.SMARTOBJECT_FILES).issubset(uatool_systems.JSONL_FILES))
         self.assertTrue(set(smart.SMARTOBJECT_FILES).issubset(uatool_systems_capture.CAPTURE_FILES))
+        self.assertTrue(getattr(uatool_systems_capture, "_smartobject_schema7_raw_archive_guard_installed", False))
+        self.assertTrue(getattr(uatool_runtime, "_systems_schema7_accept_installed", False))
 
 
 if __name__ == "__main__":
