@@ -1,6 +1,6 @@
 # Gameplay Ability System evidence and schema 6
 
-Gameplay Ability System coverage began as an evidence-first investigation. UE 5.8.2 Lyra evidence is now strong enough to define the first-class **systems schema 6** raw boundary, while derived project-graph promotion remains deliberately pending until the schema-6 real-corpus capture is accepted.
+Gameplay Ability System coverage began as an evidence-first investigation. UE 5.8.2 Lyra evidence now defines the first-class **systems schema 6** raw boundary. One final focused Lyra recount remains to prove the specialized `GameplayAbilityBlueprint` asset-class fix in native output. Derived GAS project-graph schema 22 is implemented and synthetic-contract tested, but is not yet claimed as real-corpus accepted.
 
 ## Diagnostic evidence commands
 
@@ -11,148 +11,46 @@ python scripts\uatool.py gas-evidence <Project>\.uatool
 python scripts\uatool.py gas-focus <Project>\.uatool
 ```
 
-Both commands are diagnostic only:
+Both commands are diagnostic only: they do not launch Unreal, modify canonical JSONL, run derive, or promote GAS relationships into the project graph. Large derived semantic/project-graph streams are opt-in with `--include-derived`; source chunks are separately opt-in with `--include-source`.
 
-- they do not launch Unreal;
-- they do not modify canonical JSONL;
-- they do not run derive;
-- they do not promote GAS relationships into the project graph;
-- by default they inspect canonical authored streams only.
-
-The large derived Blueprint semantic/project-graph streams are opt-in with `--include-derived`. Source chunks are separately opt-in with `--include-source`.
-
-`gas-focus` groups concrete evidence into six families:
-
-- `ability` — GameplayAbility classes/assets, authored policies, tags, triggers, cost and cooldown references;
-- `effect` — GameplayEffect definitions/components, modifiers, executions, duration/period, cues and stacking evidence;
-- `ability-system` — AbilitySystemComponent templates/instances and authored component policy;
-- `attribute` — AttributeSet classes/data plus `FGameplayAttribute` / `FGameplayAttributeData` evidence;
-- `cue-task` — Gameplay Cue handlers/tags and AbilityTask helpers;
-- `granting` — Lyra/GameFeature ability grants, ability sets and tag-relationship evidence.
-
-Matching requires a concrete GAS/Lyra anchor. Generic words such as `ability`, `Modifiers`, `Tags`, or `Effects` are ranking details only and cannot create a match by themselves.
+`gas-focus` groups concrete evidence into abilities, GameplayEffects/components, AbilitySystemComponent, AttributeSets, Gameplay Cues/AbilityTasks, and Lyra/GameFeature granting structures. Matching requires concrete GAS/Lyra anchors rather than generic English words.
 
 ## Focused native diagnostic capture
-
-When no suitable pre-existing corpus exists, use the focused native pass instead of running a broad scan merely to discover GAS serialization shapes:
 
 ```powershell
 python scripts\uatool.py gas-capture <Project.uproject> --editor <UnrealEditor-Cmd.exe>
 ```
 
-`gas-capture` does **not** invoke the normal scanner and does **not** run derive. It performs one AssetRegistry enumeration, filters likely candidates, loads only candidates, and reflects authored/default state. It also enumerates loaded GAS-derived classes so native AttributeSets and other subclasses can be observed even when they do not have standalone assets.
+`gas-capture` is a diagnostic AssetRegistry+reflection pass. It does not invoke the normal scanner and does not run derive. Its manifest explicitly states `diagnostic_only=true`, `semantic_promotion=false`, and `runtime_state_captured=false`.
 
-The focused output is written under `<Project>/.uatool`:
+The GASP smoke proved the commandlet builds/runs on UE 5.8.2 and, after fixing a PCG `AttributeSet` false positive, produced 0 project GAS candidates while retaining 75 loaded GAS-derived classes as independent engine/plugin vocabulary. The accepted confirmation run took 25.30 seconds total and ran neither the normal scanner nor derive.
 
-- `gas-capture/gas_capture_manifest.json`
-- `gas-capture/gas_assets.jsonl`
-- `gas-capture/gas_classes.jsonl`
-- `gas-capture/gas_properties.jsonl`
-- `gas-capture/gas_references.jsonl`
-- `<Project>.gas-capture.zip`
-- `<Project>.gas-capture.txt`
+## Lyra evidence
 
-The manifest is schema 1 and explicitly states:
+The focused Lyra diagnostic considered 18,033 assets and emitted 315 GAS-derived classes, 16,090 reflected properties, 948 references, 31 nested GAS objects, and zero truncated properties.
 
-- `diagnostic_only=true`
-- `semantic_promotion=false`
-- `runtime_state_captured=false`
+Deep inspection established the real authored boundary:
 
-Transient/deprecated/skip-serialization properties are excluded. Relevant nested subobjects are reflected and hard/soft object references are recorded recursively. JSONL writers are synchronously closed before a success manifest is published.
-
-### Game Animation Sample smoke
-
-The accepted GASP smoke on UE 5.8.2 produced:
-
-- 13,005 assets considered;
-- 0 project GAS candidate assets after the PCG `AttributeSet` false-positive fix;
-- 75 loaded GAS-derived classes as an independent native/plugin vocabulary inventory;
-- 944 reflected class-CDO properties;
-- 2 hard references;
-- 0 truncated properties;
-- commandlet execution 0.51 s;
-- focused editor run 11.67 s;
-- total focused workflow 25.30 s;
-- no normal scan and no derive.
-
-This proves the commandlet builds/runs and that project-authored candidates are distinct from the loaded native GAS vocabulary. It is not semantic acceptance evidence.
-
-## Lyra UE 5.8.2 evidence
-
-The focused Lyra capture considered 18,033 assets and initially emitted 125 candidates, 315 GAS-derived classes, 16,090 reflected properties, 948 references, 31 nested objects, and **zero truncated properties**.
-
-Deeper inspection of the raw ZIP identified four remaining diagnostic-selector false positives whose asset names contain `GameplayEffect` but whose actual classes are actors/world objects. The source was the diagnostic selector's use of AssetRegistry `GeneratedClass`, whose value embeds the asset path. Those four rows are not treated as GAS evidence. The schema-6 scanner therefore nominates Blueprint candidates from `ParentClass` / `NativeParentClass` metadata and then verifies the loaded generated class by inheritance; it does **not** use `GeneratedClass` text as nomination evidence.
-
-After removing those four false positives, the authored Lyra evidence is:
-
-- 43 GameplayAbility assets;
-- 42 GameplayEffect assets;
+- 43 genuine GameplayAbility assets;
+- 42 genuine GameplayEffect assets;
 - 24 GameplayCue assets;
-- 12 Lyra Ability Set assets.
-
-The real corpus proves these normalized structures:
-
-### GameplayAbility
-
-All 43 authored abilities expose authored/default policy and tag state including activation policy/group, replication, instancing, net execution/security, ability tag containers, `CostGameplayEffectClass`, `CooldownGameplayEffectClass`, `AbilityTriggers`, and Lyra `AdditionalCosts`.
-
-Observed policy distributions include:
-
-- activation: 34 `OnInputTriggered`, 5 `OnSpawn`, 4 `WhileInputActive`;
-- activation group: 41 `Independent`, 2 `Exclusive_Blocking`;
-- instancing: 43 `InstancedPerActor`;
-- net execution: 27 `LocalPredicted`, 9 `ServerInitiated`, 7 `LocalOnly`.
-
-Exact authored relationships present in the focused rows include:
-
+- 12 Lyra Ability Set assets;
 - 20 ability trigger entries;
-- 5 Lyra additional-cost object references;
-- 1 cost GameplayEffect class reference;
-- 2 cooldown GameplayEffect class references.
+- 5 Lyra additional-cost objects;
+- 33 Ability Set ability grants;
+- 3 Ability Set GameplayEffect grants;
+- 1 Ability Set AttributeSet grant;
+- 31 GameplayEffectComponent entries;
+- 10 top-level GameplayEffect modifiers;
+- 20 GameplayEffect executions;
+- 20 execution calculation modifiers;
+- 30 GameplayEffect cue entries.
 
-### Lyra Ability Sets
+Four diagnostic-only actor/world assets whose names contain `GameplayEffect` are not GAS content. Canonical schema 6 therefore does not infer semantic type from asset names or path-bearing `GeneratedClass` strings; actual loaded inheritance is authoritative.
 
-The 12 ability sets prove ordered grant arrays with exact class references:
+## Systems schema 6
 
-- 33 `GrantedGameplayAbilities` entries, including their `InputTag`;
-- 3 `GrantedGameplayEffects` entries;
-- 1 `GrantedAttributes` entry.
-
-These relationships are safe to normalize as authored semantic structure because the source object, array index, and target class are all explicit in the serialized object state.
-
-### GameplayEffect
-
-The 42 true GameplayEffects prove:
-
-- duration policy/magnitude and period;
-- periodic execution/inhibition policy;
-- inherited tag containers and tag requirements;
-- stacking state;
-- 31 `GEComponents` entries;
-- 10 top-level modifier entries;
-- 20 execution entries;
-- 20 execution calculation-modifier entries;
-- 30 GameplayCue entries.
-
-Modifier rows expose exact `FGameplayAttribute` name/owner, modifier operation and magnitude. Execution rows expose exact calculation classes; nested execution modifiers expose captured attribute name/owner, snapshot state, operation and magnitude. GameplayEffect cue entries expose cue tags and optional magnitude attribute name/owner.
-
-### Gameplay Cues
-
-The 24 authored cue Blueprints expose their generated/parent class plus authored/default `GameplayCueTag`, `GameplayCueName` and override state.
-
-### Attribute Sets
-
-The loaded Lyra project/plugin class inventory proves native AttributeSet subclasses and declared `FGameplayAttributeData` properties. Project-relevant examples include:
-
-- `LyraCombatSet`: `BaseDamage`, `BaseHeal`;
-- `LyraHealthSet`: `Health`, `MaxHealth`, `Healing`, `Damage`;
-- `TopDownArenaAttributeSet`: `BombsRemaining`, `BombCapacity`, `BombRange`, `MovementSpeed`.
-
-Schema 6 records CDO/default `BaseValue` and `CurrentValue`; these are **not live runtime attribute values**.
-
-## Systems schema 6 raw streams
-
-Schema 6 extends schema 5 with these first-class streams:
+Schema 6 additively retains the prior systems families and introduces 16 GAS streams:
 
 1. `gas_abilities.jsonl`
 2. `gas_ability_triggers.jsonl`
@@ -171,19 +69,85 @@ Schema 6 extends schema 5 with these first-class streams:
 15. `gas_attribute_sets.jsonl`
 16. `gas_attributes.jsonl`
 
-The Python schema-6 validator enforces unique roots, parent resolution, contiguous ordered child indices, declared child counts, execution/modifier ownership, and no truncated structured rows. The SQLite/query surface exposes the same normalized structures.
+Native extraction remains reflection-first and does not add hard GameplayAbilities headers/module dependencies. Python schema 6 adds SQLite/query support and validates unique roots, exact Blueprint object/package/generated-class/CDO identity, child-parent resolution, contiguous ordered child indices, declared child-count agreement, execution/modifier ownership, AttributeSet attribute counts, and absence of truncated structured rows.
 
-## Current semantic boundary
+### First Lyra schema-6 pass
 
-Schema 6 is authored/default-state coverage only. It does **not** claim:
+The first real schema-6 capture built and ran successfully but exposed two policy bugs:
 
-- active GameplayEffect specs;
-- current granted ability specs;
-- prediction keys/state;
-- replicated AbilitySystemComponent runtime state;
-- live attribute values;
-- runtime activation or cooldown state.
+1. Python incorrectly required literal `Ability` / `GameplayEffect` words in class names, rejecting valid chains such as `GA_Weapon_Reload_Pistol -> GA_Weapon_ReloadMagazine_C` and `GE_AdditionalHeart -> GET_ArenaPickup_Base_C`.
+2. the loaded AttributeSet loop admitted engine vocabulary (`AttributeSet`, `AbilitySystemTestAttributeSet`) as project content.
 
-The focused corpus shows the native `GameFeatureAction_AddAbilities` class, but it did not establish authored standalone Game Feature grant instances strongly enough for first-class promotion. Likewise, no exact authored tag-relationship-mapping corpus was established. Those remain outside schema 6 rather than being inferred.
+The validator now trusts native inheritance and validates structural Blueprint identity instead. AttributeSet classes are scoped by actual module/package ownership.
 
-Derived GAS project-graph edges are also not claimed yet. The next acceptance gate is one **systems-only Lyra schema-6 capture**; graph promotion follows only after those normalized raw rows pass the real-corpus validator.
+### Second Lyra schema-6 pass
+
+The preserved second ZIP is internally healthy:
+
+- ZIP CRC OK;
+- schema 6 / success true;
+- all 28 focused JSONL streams parse cleanly;
+- all manifest counts equal physical row counts;
+- all ordered GAS child indices are contiguous;
+- all child-parent joins resolve;
+- every declared child count agrees;
+- zero truncated structured GAS rows.
+
+Observed second-pass counts:
+
+- 37 GameplayAbility roots;
+- 20 triggers;
+- 5 additional costs;
+- 12 Ability Sets;
+- 33 / 3 / 1 ability/effect/AttributeSet grants;
+- 42 GameplayEffects;
+- 31 GE components;
+- 10 modifiers;
+- 20 executions;
+- 20 execution modifiers;
+- 30 effect cue entries;
+- 24 Gameplay Cues;
+- 4 project-owned AttributeSets;
+- 10 project-owned attributes.
+
+The AttributeSet scope is accepted exactly:
+
+- `/Script/LyraGame.LyraAttributeSet`
+- `/Script/LyraGame.LyraCombatSet`
+- `/Script/LyraGame.LyraHealthSet`
+- `/Script/TopDownArenaRuntime.TopDownArenaAttributeSet`
+
+The remaining 37-vs-43 ability discrepancy is also fully explained. The six missing assets are the `Phase_Playing`, `Phase_PostGame`, and `Phase_Warmup` game-phase abilities in ShooterCore and TopDownArena. AssetRegistry registers them as `/Script/GameplayAbilities.GameplayAbilityBlueprint`, not `/Script/Engine.Blueprint`. They inherit `LyraGamePhaseAbility` and are genuine GameplayAbilities.
+
+Schema 6 now admits both exact Blueprint asset-class identities into the same loaded generated-class inheritance check. Those six phase abilities have no captured triggers, additional costs, cost GameplayEffect, or cooldown GameplayEffect, so the final recount is expected to change only `gas_abilities` from 37 to 43 while preserving the established child counts.
+
+## Derived schema 22 GAS graph
+
+The GAS graph layer is implemented from normalized exact fields only. It promotes relationships such as:
+
+- ability asset -> generated class -> direct parent;
+- ability -> cost/cooldown GameplayEffect class;
+- ability -> ordered trigger -> exact trigger Gameplay Tag;
+- ability -> additional cost object -> cost class;
+- Ability Set -> granted ability/effect/AttributeSet classes;
+- GameplayEffect asset -> generated class -> direct parent;
+- GameplayEffect -> GE component -> component class;
+- GameplayEffect -> ordered modifier -> exact gameplay attribute;
+- GameplayEffect -> ordered execution -> calculation class;
+- execution -> ordered execution modifier -> captured attribute;
+- GameplayEffect -> ordered cue entry -> magnitude attribute when present;
+- GameplayCue asset -> generated class -> direct parent;
+- GameplayCue asset -> exact scalar cue tag;
+- AttributeSet -> direct parent and declared gameplay attributes.
+
+Broad exported tag-container strings are not parsed into guessed graph relations. Runtime specs, active effects, live granted ability specs, prediction state, replicated ASC runtime state, and live attributes remain outside the claim.
+
+The second 37-ability ZIP implies 548 exact GAS-domain graph edges. The six specialized phase abilities add exactly two class-topology edges each, so the corrected 43-ability raw corpus is expected to imply **560 exact semantic GAS edges**. Expectations are generated from accepted raw rows rather than hardcoded to Lyra counts.
+
+`systems-schema6-accept` promotes an accepted focused schema-6 capture into the canonical corpus without running Unreal or derive and writes `gas_graph_expectations.json`. `gas-graph-verify` later requires exact source/relation/target equality, `exact_semantic` edge quality, canonical stream evidence, and specialist GAS roots against derived schema 22.
+
+## Semantic boundary
+
+Schema 6 is authored/default-state coverage only. It does not claim active GameplayEffect specs, current granted ability specs, prediction keys/state, replicated AbilitySystemComponent runtime state, live attribute values, or runtime activation/cooldown state. The focused corpus also did not establish exact authored GameFeatureAction_AddAbilities or tag-relationship-mapping instances strongly enough for first-class promotion.
+
+The remaining raw acceptance gate is one focused Lyra `systems-capture` to prove the `GameplayAbilityBlueprint` membership fix and obtain the authoritative 43-root corpus. No normal Lyra scan or derive is required for that gate.
