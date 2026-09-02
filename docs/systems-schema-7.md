@@ -197,6 +197,19 @@ Placed-world `SmartObjectComponent -> SmartObjectDefinition` references already 
 
 The acceptance tooling writes deterministic `smartobject_graph_expectations.json` directly from the canonical schema-7 rows and verifies that derived schema 23 contains exactly the expected Smart Object domain edge set with canonical stream evidence.
 
+For the accepted City Sample rows the exact specialist graph contract is:
+
+```text
+has_smart_object_slot:                       2
+has_default_smart_object_behavior:           1
+has_smart_object_behavior:                   0
+instance_of_smart_object_behavior_class:     1
+uses_smart_object_world_condition_schema:    1
+uses_smart_object_selection_schema:          2
+```
+
+Total: **7 `exact_semantic` edges**.
+
 ## Explicit non-claims
 
 Schema 7 is authored/default-state coverage only. It does not capture or infer:
@@ -215,28 +228,39 @@ transient/generated runtime tags
 
 ## Real-corpus acceptance status
 
-Two canonical City Sample systems runs have already reproduced the normalized Smart Object payload exactly:
+Three canonical City Sample systems runs reproduced the normalized Smart Object payload exactly. The first two isolated the manifest-publication defect; the third, using the synchronous manifest-write proxy, completed the raw schema-7 acceptance gate successfully:
 
 ```text
-smartobject_definitions:          1
-smartobject_slots:                2
-smartobject_behaviors:            1
-smartobject_behavior_properties:  1
+systems_manifest.schema_version:       7
+systems_manifest.success:              true
+smartobject_definitions:                 1
+smartobject_slots:                       2
+smartobject_behaviors:                   1
+smartobject_behavior_properties:         1
 ```
 
-Both runs reproduced the same two serialized slot GUIDs, `-85/+85` X offsets, yaw `90`, zero slot-local behaviors, one definition-default `SmartObjectMassBehaviorDefinition`, and `UseTime=5.000000`.
+The final capture reproduced the same two serialized slot GUIDs:
 
-The first run exposed that the schema-6 base manifest was published before a shutdown-time schema-7 promotion could run. The second run proved the raw-archive preservation guard works, but also proved that relying on engine-exit delegates is not a valid publication mechanism: the preserved archive still contained a schema-6 manifest.
+```text
+573FF06A43CF8E90E0C1A6A26469B851
+E321BAA54EA72F347C192C9A0530BCB5
+```
 
-Schema-7 publication is now synchronous. While the shared systems driver include is compiled, its `FFileHelper::SaveStringToFile` manifest write is routed through a narrow proxy. The proxy performs the real base-manifest write and immediately upgrades that exact completed file to schema 7 before `SaveSystemsManifest()` returns. No multicast delegate ordering or shutdown callback participates in correctness. The raw archive guard remains as evidence preservation if a later Python validation gate fails.
+and the same `-85/+85` X offsets, yaw `90`, zero slot-local behaviors, one definition-default `SmartObjectMassBehaviorDefinition`, and `UseTime=5.000000`.
 
-One final UE 5.8.2 City Sample run must prove this publication path by producing `systems_manifest.json` with `schema_version=7`, Smart Object counts/files present, and a normally validated automatic ZIP. Once that succeeds, the capture can be promoted with `systems-schema7-accept`, derived to schema 23, verified with `smartobject-graph-verify`, and Smart Objects can move to maintained `first_class` capability coverage.
+Schema-7 publication is synchronous. While the shared systems driver include is compiled, its `FFileHelper::SaveStringToFile` manifest write is routed through a narrow proxy. The proxy performs the real base-manifest write and immediately upgrades that exact completed file to schema 7 before `SaveSystemsManifest()` returns. No multicast delegate ordering or shutdown callback participates in correctness. The raw archive guard remains as evidence preservation if a later Python validation gate fails.
 
-Run:
+Raw systems schema 7 is therefore accepted. The remaining merge gate is promotion into the existing City Sample corpus, derived-schema-23 regeneration, and exact Smart Object graph verification:
 
 ```powershell
-python scripts\uatool.py systems-capture `
-    "N:\EpicVault\Projects\CitySample\CitySample.uproject" `
-    --editor "E:\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Win64-DebugGame-Cmd.exe" `
-    --archive "N:\EpicVault\Projects\CitySample\.uatool\CitySample.systems-schema7-capture.zip"
+python scripts\uatool.py systems-schema7-accept `
+    "N:\EpicVault\Projects\CitySample\CitySample.uproject"
+
+python scripts\uatool.py derive `
+    "N:\EpicVault\Projects\CitySample\.uatool"
+
+python scripts\uatool.py smartobject-graph-verify `
+    "N:\EpicVault\Projects\CitySample\CitySample.uproject"
 ```
+
+`smartobject-graph-verify` must report exactly seven specialist `exact_semantic` edges and one `smart_object_definition` root. Maintained capability coverage moves to accepted `first_class` only after that verifier passes.
