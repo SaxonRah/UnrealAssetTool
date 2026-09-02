@@ -149,7 +149,7 @@ FOCUS_DEFINITIONS = {
             "smartobjecthandle",
             "smartobject actor",
             "slot handle",
-            "slotto beclaimed",
+            "slot to be claimed",
             "slottobeclaimed",
         ),
         "details": (
@@ -261,13 +261,6 @@ def build_report(
                     "referenced_object_class", "actor_class", "node_class", "instance_class",
                 ),
             )
-            object_path = _counter_value(
-                row,
-                (
-                    "object_path", "asset_path", "systems_path", "blueprint_path", "actor_path",
-                    "component_path", "owner_path", "target_path", "referenced_object_path",
-                ),
-            )
 
             if filename == "assets.jsonl" and "smartobjectdefinition" in class_value.lower():
                 value = str(row.get("object_path", "") or "")
@@ -286,7 +279,12 @@ def build_report(
                     placed_actors.add(value)
             if filename in {"world_references.jsonl", "systems_references.jsonl", "blueprint_node_references.jsonl"}:
                 target = _counter_value(row, ("target_path", "referenced_object_path", "target_object_path"))
-                if "smartobjectdefinition" in target.lower():
+                target_class = _counter_value(row, ("target_class", "referenced_object_class", "target_object_class"))
+                if target and (
+                    target in definitions
+                    or "smartobjectdefinition" in target.lower()
+                    or "smartobjectdefinition" in target_class.lower()
+                ):
                     owner = _counter_value(row, ("owner_path", "actor_path", "asset_path", "blueprint_path"))
                     definition_refs.add((owner, target))
                     proof["exact_definition_references"] += 1
