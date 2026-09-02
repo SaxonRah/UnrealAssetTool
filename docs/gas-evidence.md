@@ -200,6 +200,19 @@ The graph expectation contract recomputed **560 exact semantic GAS edges** from 
 
 `runtime_state_captured` remains false. The promotion result exactly matches the precomputed 560-edge expectation, so the canonical raw promotion gate is accepted.
 
+### Focused-corpus derive policy
+
+The first schema-22 derive attempt exposed a pipeline assumption rather than a GAS data problem: the canonical derive preflight required `vfx_manifest.json` even though this Lyra corpus was deliberately built from the accepted systems-only capture and had never run the VFX scanner.
+
+Focused derived acceptance now has an explicit conservative policy:
+
+- a completely absent VFX pass is allowed only when `systems_schema6_acceptance.json` and a successful schema-6 `systems_manifest.json` prove this is an accepted systems-only corpus;
+- any VFX raw stream present without a valid VFX manifest still uses the original strict failure path;
+- normal/full corpora keep the original VFX prerequisite unchanged;
+- when an accepted focused corpus has no top `manifest.json`, derive creates a minimal commit marker with `partial_corpus=true`, `canonical_passes=["systems"]`, and `schema_version=0` rather than claiming structural/world/VFX scanner coverage that did not occur.
+
+This policy is CI-covered, including strict rejection of partial VFX data and preservation of any existing top manifest. It does not run or synthesize any missing scanner pass.
+
 ## Derived schema 22 GAS graph
 
 The GAS graph layer is implemented from normalized exact fields only. It promotes relationships such as ability/class inheritance, cost/cooldown classes, ordered trigger/tag links, additional-cost objects/classes, Ability Set grants, GameplayEffect components/modifiers/executions/cues, exact attributes, GameplayCue scalar tags, and AttributeSet declarations.
@@ -213,5 +226,3 @@ The accepted 43-ability raw corpus implies **560 exact semantic GAS edges**. `ga
 Schema 6 is authored/default-state coverage only. It does not claim active GameplayEffect specs, current granted ability specs, prediction keys/state, replicated AbilitySystemComponent runtime state, live attribute values, or runtime activation/cooldown state. The focused corpus also did not establish exact authored GameFeatureAction_AddAbilities or tag-relationship-mapping instances strongly enough for first-class promotion.
 
 The remaining acceptance path is one derived-schema-22 derive followed by exact GAS graph verification. No additional Unreal GAS capture is required.
-
-Python/schema composition, schema-6 validation, specialized Blueprint membership regressions, exact GAS graph expectations/verifier, retained schema-21 Mass/ZoneGraph compatibility, canonical schema-6 promotion, and derived-schema-22 composition are green in CI through **Python schema smoke #345**.
