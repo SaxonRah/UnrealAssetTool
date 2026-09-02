@@ -206,15 +206,22 @@ def _bucket() -> dict:
 
 
 def _asset_family(class_path: str) -> str:
+    """Classify only proven authored asset classes, never substring-promote caches.
+
+    `GeometryCollectionCache` contains the token `GeometryCollection`, so generic
+    substring tests would inflate the Geometry Collection asset count. Keep the
+    primary Dataflow/GeometryCollection identities exact and classify support
+    assets before any broader token-based support checks.
+    """
     value = (class_path or "").lower()
-    if value.endswith(".dataflow") or "/script/dataflowengine.dataflow" in value:
+    if value == "/script/dataflowengine.dataflow":
         return "dataflow"
-    if value.endswith(".geometrycollection") or "/script/geometrycollectionengine.geometrycollection" in value:
-        return "geometry_collection"
     if "geometrycollectioncache" in value:
         return "geometry_collection_cache"
     if "chaoscachecollection" in value:
         return "chaos_cache_collection"
+    if value == "/script/geometrycollectionengine.geometrycollection":
+        return "geometry_collection"
     if "fieldsystem" in value and "component" not in value and "actor" not in value:
         return "field_system"
     return ""
