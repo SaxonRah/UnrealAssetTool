@@ -10,8 +10,8 @@ The stamp deliberately uses file metadata for large canonical/derived JSONL
 rather than re-hashing gigabytes of data. Scanner and cleanup rewrites change
 size and/or mtime in normal operation. Python that can affect derived output is
 content-hashed so a derived-code edit invalidates the stamp even when the schema
-number does not change. Pure read-only reporting helpers are excluded because
-they cannot alter derived JSONL.
+number does not change. Pure read-only reporting/capture launchers are excluded
+because they cannot alter derived JSONL.
 """
 from __future__ import annotations
 
@@ -23,10 +23,9 @@ from pathlib import Path
 STAMP_FILE = ".derived_freshness.json"
 STAMP_VERSION = 1
 
-# These modules only read existing canonical/derived output. Changes to their
-# presentation or diagnostic matching must not force deterministic regeneration.
 NON_DERIVED_SCRIPTS = frozenset({
     "uatool_blueprint_program_report.py",
+    "uatool_gas_capture.py",
     "uatool_gas_evidence.py",
     "uatool_mover_report.py",
     "uatool_semantic_report.py",
