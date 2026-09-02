@@ -33,6 +33,7 @@
 #include "UObject/FindObjectFlags.h"
 #include "UObject/SoftObjectPtr.h"
 #include "UObject/UObjectHash.h"
+#include "UObject/UObjectIterator.h"
 #include "UObject/UnrealType.h"
 
 #include <initializer_list>
@@ -48,6 +49,10 @@ namespace UnrealAssetToolSystems
 #include "UnrealAssetToolSystemsMover.inl"
 #include "UnrealAssetToolSystemsGameplayCameras.inl"
 #include "UnrealAssetToolSystemsMassZoneGraph.inl"
+#include "UnrealAssetToolSystemsGAS.inl"
+#include "UnrealAssetToolSystemsGASPolicy.inl"
+#define ScanGASProjectModel ScanGASProjectModelPolicy
 #include "UnrealAssetToolSystemsDriver.inl"
+#undef ScanGASProjectModel
 #include "UnrealAssetToolSystemsFinalize.inl"
 }
