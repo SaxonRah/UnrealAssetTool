@@ -94,6 +94,117 @@ def _promote_composed_derived_schema_version() -> None:
             setattr(module, "FINAL_DERIVED_SCHEMA_VERSION", TARGET_DERIVED_SCHEMA_VERSION)
 
 
+def _accepted_systems_only_corpus(output: Path) -> bool:
+    output = Path(output).expanduser().resolve()
+    acceptance_path = output / ACCEPTANCE_MANIFEST
+    systems_path = output / "systems_manifest.json"
+    if not acceptance_path.is_file() or not systems_path.is_file():
+        return False
+    try:
+        acceptance = _read_json(acceptance_path)
+        systems_manifest = _read_json(systems_path)
+    except RuntimeError:
+        return False
+    return (
+        int(acceptance.get("systems_schema_version", 0) or 0) == 6
+        and int(acceptance.get("target_derived_schema_version", 0) or 0) == TARGET_DERIVED_SCHEMA_VERSION
+        and int(systems_manifest.get("schema_version", 0) or 0) == 6
+        and bool(systems_manifest.get("success", False))
+    )
+
+
+def _vfx_raw_present(output: Path, vfx_module) -> bool:
+    output = Path(output).expanduser().resolve()
+    for filename in tuple(getattr(vfx_module, "RAW_FILES", ())):
+        if filename == "vfx_manifest.json":
+            continue
+        if (output / filename).is_file():
+            return True
+    return False
+
+
+def _ensure_partial_top_manifest(output: Path) -> bool:
+    """Create an honest top manifest for an accepted focused systems corpus.
+
+    The focused schema-6 promotion intentionally does not run the structural,
+    world, animation, or VFX scanners. Derived graph code still needs a top
+    manifest as its commit marker. Do not claim a structural scanner schema;
+    record the corpus as partial and name the only canonical pass explicitly.
+    """
+    output = Path(output).expanduser().resolve()
+    manifest_path = output / "manifest.json"
+    if manifest_path.is_file() or not _accepted_systems_only_corpus(output):
+        return False
+
+    systems_manifest = _read_json(output / "systems_manifest.json")
+    manifest = {
+        "schema_version": 0,
+        "schema_name": "partial_canonical_corpus",
+        "success": True,
+        "partial_corpus": True,
+        "canonical_passes": ["systems"],
+        "systems_schema_version": 6,
+        "systems_counts": systems_manifest.get("counts", {}),
+        "systems_files": systems_manifest.get("files", []),
+        "systems_pass": systems_manifest.get("pass", "UnrealAssetToolSystems"),
+    }
+    _write_json_atomic(manifest_path, manifest)
+    print("created partial canonical manifest from accepted systems schema 6")
+    return True
+
+
+def _install_systems_only_derive_policy(runtime_module) -> None:
+    """Permit derive on an explicitly accepted systems-only corpus.
+
+    Missing VFX is optional only when the whole VFX pass is absent. A partial
+    VFX stream set without a valid manifest remains an error and is delegated to
+    the original strict validator. Normal/full corpora therefore keep the old
+    prerequisite behavior unchanged.
+    """
+    if getattr(runtime_module, "_systems_only_derive_policy_installed", False):
+        return
+
+    vfx_module = getattr(runtime_module, "vfx", None)
+    original_require_vfx = getattr(runtime_module, "_require_vfx", None)
+    original_require_vfx_derived = getattr(runtime_module, "_require_vfx_derived", None)
+    original_derive_output = getattr(runtime_module, "derive_output", None)
+    if vfx_module is None or not callable(original_require_vfx) or not callable(original_derive_output):
+        return
+
+    def vfx_is_fully_absent(output: Path) -> bool:
+        output = Path(output).expanduser().resolve()
+        return (
+            _accepted_systems_only_corpus(output)
+            and not bool(vfx_module.read_manifest(output))
+            and not _vfx_raw_present(output, vfx_module)
+        )
+
+    def require_vfx(output: Path) -> None:
+        output = Path(output).expanduser().resolve()
+        if vfx_is_fully_absent(output):
+            print("VFX specialist pass absent: continuing accepted systems-only derive")
+            return
+        return original_require_vfx(output)
+
+    def require_vfx_derived(output: Path) -> None:
+        output = Path(output).expanduser().resolve()
+        if vfx_is_fully_absent(output):
+            return
+        if callable(original_require_vfx_derived):
+            return original_require_vfx_derived(output)
+
+    def derive_output(output):
+        output = Path(output).expanduser().resolve()
+        _ensure_partial_top_manifest(output)
+        return original_derive_output(output)
+
+    runtime_module._require_vfx = require_vfx
+    if callable(original_require_vfx_derived):
+        runtime_module._require_vfx_derived = require_vfx_derived
+    runtime_module.derive_output = derive_output
+    runtime_module._systems_only_derive_policy_installed = True
+
+
 def _resolve_project(value: str) -> Path:
     project = Path(value).expanduser().resolve()
     if not project.is_file() or project.suffix.lower() != ".uproject":
@@ -304,6 +415,7 @@ def install(runtime_module, systems_module) -> None:
         return
 
     _promote_composed_derived_schema_version()
+    _install_systems_only_derive_policy(runtime_module)
     try:
         import uatool_core as core_module
         core_module.DEFAULT_BUNDLE_FILES = tuple(dict.fromkeys((
