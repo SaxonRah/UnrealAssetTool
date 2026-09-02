@@ -24,6 +24,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -72,6 +73,7 @@ SKIP_INPUT_DIRS = {
     ".vs",
 }
 PLUGIN_DISCOVERY_PRUNE_DIRS = SKIP_INPUT_DIRS | {"config", "documentation", "screenshots"}
+_EDITOR_TARGET_RE = re.compile(r"\bType\s*=\s*TargetType\.Editor\b")
 
 
 def _cache_enabled() -> bool:
@@ -254,6 +256,52 @@ def _run_timed(command: list[str], label: str) -> int:
     return result
 
 
+def _resolve_editor_target(project: Path) -> str:
+    """Resolve the actual project Editor target from Source/*.Target.cs.
+
+    Unreal project descriptor names do not have to match target names. Lyra is
+    the canonical example: LyraStarterGame.uproject builds the LyraEditor target.
+    Prefer a Target.cs that explicitly assigns TargetType.Editor. The historical
+    <uproject stem>Editor convention remains only as a fallback.
+    """
+    source = project.parent / "Source"
+    candidates: list[str] = []
+    if source.is_dir():
+        for path in sorted(source.glob("*.Target.cs"), key=lambda item: item.name.lower()):
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            if _EDITOR_TARGET_RE.search(text):
+                candidates.append(path.name[: -len(".Target.cs")])
+
+    conventional = f"{project.stem}Editor"
+    if conventional in candidates:
+        target = conventional
+    elif len(candidates) == 1:
+        target = candidates[0]
+    else:
+        editor_named = [name for name in candidates if name.lower().endswith("editor")]
+        if len(editor_named) == 1:
+            target = editor_named[0]
+        elif not candidates:
+            target = conventional
+            print(
+                "no explicit TargetType.Editor Target.cs found; "
+                f"falling back to conventional target: {target}"
+            )
+            return target
+        else:
+            joined = ", ".join(candidates)
+            raise RuntimeError(
+                "Multiple Editor targets were discovered and no unique project Editor target "
+                f"could be selected for {project.name}: {joined}"
+            )
+
+    print(f"resolved Editor target: {target}")
+    return target
+
+
 def _optimized_build_project(
     core,
     project: Path,
@@ -262,7 +310,7 @@ def _optimized_build_project(
     active_plugin_root: Path | None = None,
 ) -> int:
     build_script = core.resolve_build_script(editor, build_script_arg)
-    target = f"{project.stem}Editor"
+    target = _resolve_editor_target(project)
     configuration = core.editor_configuration(editor)
 
     # The staged scanner appears as a changed/untracked working set in many
