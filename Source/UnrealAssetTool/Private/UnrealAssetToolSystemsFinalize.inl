@@ -26,16 +26,6 @@ struct FSystemsFinalizeBootstrap
 {
     FSystemsFinalizeBootstrap()
     {
-        // This bootstrap is defined after UnrealAssetToolSystemsDriver.inl in
-        // the same translation unit. The driver's FSystemsScannerBootstrap is
-        // therefore constructed first and registers OnPostEngineInit first.
-        // During the single post-engine-init broadcast RunSystemsScan() writes
-        // the schema-6 base manifest, returns, and only then this callback
-        // promotes that completed manifest to schema 7. This is synchronous and
-        // does not depend on RequestExit/pre-exit delegate behavior.
-        FCoreDelegates::GetOnPostEngineInit().AddStatic(&FinalizeSmartObjectSchema7Manifest);
-
-        // Keep the existing writer-buffer cleanup as a defensive exit fallback.
         FCoreDelegates::OnEnginePreExit.AddStatic(&FinalizeSystemsOnlyWriterBuffers);
     }
 };
