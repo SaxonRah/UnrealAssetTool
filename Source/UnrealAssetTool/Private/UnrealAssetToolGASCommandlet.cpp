@@ -178,7 +178,13 @@ static FString ClassifyMetadata(const FString& Text)
     if (Lower.Contains(TEXT("lyragameplaytagrelationshipmapping"))) return TEXT("tag_relationship");
     if (Lower.Contains(TEXT("lyraabilityset"))) return TEXT("ability_set");
     if (Lower.Contains(TEXT("abilitysystemcomponent"))) return TEXT("ability_system_component");
-    if (Lower.Contains(TEXT("attributeset")) || Lower.Contains(TEXT("lyrahealthset")) || Lower.Contains(TEXT("lyracombatset"))) return TEXT("attribute_set");
+    if (Lower.Contains(TEXT("/script/gameplayabilities.attributeset")) ||
+        Lower.Contains(TEXT("lyraattributeset")) ||
+        Lower.Contains(TEXT("lyrahealthset")) ||
+        Lower.Contains(TEXT("lyracombatset")))
+    {
+        return TEXT("attribute_set");
+    }
     if (Lower.Contains(TEXT("gameplayeffectcomponent"))) return TEXT("gameplay_effect_component");
     if (Lower.Contains(TEXT("gameplayeffectexecutioncalculation")) || Lower.Contains(TEXT("gameplaymodmagnitudecalculation")) || Lower.Contains(TEXT("gameplayeffectcustomapplicationrequirement"))) return TEXT("gameplay_effect_calculation");
     if (Lower.Contains(TEXT("gameplayeffect"))) return TEXT("gameplay_effect");
@@ -194,7 +200,7 @@ static bool ContainsCandidateAnchor(const FString& Text)
     const FString Lower = Text.ToLower();
     static const TCHAR* Anchors[] = {
         TEXT("/script/gameplayabilities"), TEXT("gameplayability"),
-        TEXT("abilitysystemcomponent"), TEXT("attributeset"), TEXT("gameplayeffect"),
+        TEXT("abilitysystemcomponent"), TEXT("gameplayeffect"),
         TEXT("gameplaycuenotify"), TEXT("gameplaycueset"), TEXT("abilitytask"),
         TEXT("gameplaymodmagnitudecalculation"), TEXT("gameplayeffectexecutioncalculation"),
         TEXT("gameplayeffectcustomapplicationrequirement"), TEXT("gameplaytagresponsetable"),
@@ -221,11 +227,11 @@ static FString AssetTag(const FAssetData& Asset, const TCHAR* Name)
 
 static FString CandidateText(const FAssetData& Asset)
 {
+    // Only class metadata is allowed to nominate a candidate. Asset/package
+    // names are intentionally excluded: non-GAS systems such as PCG also use
+    // generic terms like "AttributeSet" in ordinary asset names.
     TArray<FString> Parts;
-    Parts.Reserve(7);
-    Parts.Add(Asset.GetSoftObjectPath().ToString());
-    Parts.Add(Asset.PackageName.ToString());
-    Parts.Add(Asset.AssetName.ToString());
+    Parts.Reserve(4);
     Parts.Add(Asset.AssetClassPath.ToString());
     Parts.Add(AssetTag(Asset, TEXT("ParentClass")));
     Parts.Add(AssetTag(Asset, TEXT("NativeParentClass")));
