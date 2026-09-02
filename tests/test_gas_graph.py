@@ -44,11 +44,16 @@ class GASGraphTest(unittest.TestCase):
             root = Path(temp)
             self._write(root)
             expected = graph.expected_edge_keys(root, graph._read_rows if hasattr(graph, "_read_rows") else self._rows)
-            # The synthetic fixture has one of each structured family and
-            # therefore a stable exact contract of 28 GAS relations.
+            # The synthetic fixture has a stable exact contract of 28 edges.
+            # Optional relations appear only when their normalized source field
+            # is populated; this fixture deliberately has no cooldown GE class.
             self.assertEqual(len(expected), 28)
             relations = {relation for _, relation, _ in expected}
-            self.assertEqual(relations, set(graph.RELATION_STREAMS))
+            self.assertTrue(relations.issubset(set(graph.RELATION_STREAMS)))
+            self.assertNotIn("uses_cooldown_gameplay_effect_class", relations)
+            self.assertIn("uses_cost_gameplay_effect_class", relations)
+            self.assertIn("triggered_by_gameplay_tag", relations)
+            self.assertIn("handles_gameplay_cue_tag", relations)
             self.assertNotIn("emits_gameplay_cue_tag", relations)
 
     @staticmethod
