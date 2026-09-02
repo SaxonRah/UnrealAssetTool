@@ -108,7 +108,12 @@ static bool UpgradeSystemsManifestToSchema7()
     Root->SetNumberField(TEXT("schema_version"), 7);
 
     TSharedPtr<FJsonObject> Counts;
-    if (!Root->TryGetObjectField(TEXT("counts"), &Counts) || !Counts.IsValid())
+    const TSharedPtr<FJsonObject>* CountsField = nullptr;
+    if (Root->TryGetObjectField(TEXT("counts"), CountsField) && CountsField && CountsField->IsValid())
+    {
+        Counts = *CountsField;
+    }
+    else
     {
         Counts = MakeShared<FJsonObject>();
         Root->SetObjectField(TEXT("counts"), Counts.ToSharedRef());
