@@ -148,6 +148,18 @@ This keeps sense-specific and future subclass-specific authored settings recover
 
 The systems scanner remains reflection-first and does not add an `AIModule` build dependency or AI Perception header includes. Loaded class inheritance names determine whether an object is an AI Perception component, stimuli-source component or sense config.
 
+The full systems pass explicitly synchronizes and rescans `/Game` before querying Blueprint assets, then exact-loads those Blueprint asset paths before generated-class owned-object traversal. This was required because the initial systems commandlet startup Asset Registry did not expose the representative ContentExamples Blueprints even though the focused commandlet could load them directly.
+
+The schema-8 manifest records discovery-stage counters:
+
+```text
+ai_perception_blueprint_candidates
+ai_perception_scoped_blueprint_candidates
+ai_perception_loaded_blueprints
+ai_perception_generated_classes
+ai_perception_scanned_blueprints
+```
+
 Only authored Blueprint template/default state is captured.
 
 Explicitly excluded:
@@ -191,17 +203,39 @@ total:                                9
 
 Every derived relation must use `edge_quality=exact_semantic` and include evidence from its canonical schema-8 stream. Exact source/relation/target equality is verified, not merely aggregate counts.
 
-## Remaining real-corpus gate
+## Accepted full ContentExamples gate
 
-Implementation alone does not make AI Perception first-class.
+The final UE 5.8.2 full systems capture passed the canonical schema-8 gate with:
 
-The remaining acceptance sequence is:
+```text
+ai_perception_blueprint_candidates           933
+ai_perception_scoped_blueprint_candidates    554
+ai_perception_loaded_blueprints              554
+ai_perception_generated_classes              554
+ai_perception_scanned_blueprints              554
 
-1. run a full systems-only schema-8 capture on ContentExamples;
-2. require a successful schema-8 manifest and zero AI traversal-loss counters;
-3. promote that capture with `systems-schema8-accept`;
-4. run derive once to produce derived schema 24;
-5. run `ai-perception-graph-verify` and require the exact canonical edge set;
-6. only then promote the capability contract to `first_class`.
+ai_perception_components                       1
+ai_perception_sense_configs                     2
+ai_perception_stimuli_sources                   1
+ai_perception_registered_senses                 3
+ai_perception_properties                       94
 
-Until step 5 passes on the real ContentExamples corpus, AI Perception remains a pending first-class capability rather than a maintained guarantee.
+ai_perception_truncated_properties              0
+ai_perception_property_depth_limit_hits          0
+ai_perception_property_row_limit_hits            0
+ai_perception_container_element_limit_hits        0
+```
+
+The raw rows reproduced all 21 authored/default differences from the focused capture, including Hearing range 800, Sight radii 500/600, peripheral angle 45, MaxAge 1 for both configs, all three affiliation flags, dominant Sight, auto-register true and the ordered `Sight, Hearing, None` source array.
+
+`systems-schema8-accept` then promoted the capture into the canonical ContentExamples corpus and generated an exact nine-edge expectation set. Derive completed with `derived_schema_version=24`, and `ai-perception-graph-verify` verified:
+
+```text
+exact_semantic_edges: 9
+ai_perception_component: 1
+ai_perception_sense_config: 2
+ai_perception_stimuli_source: 1
+runtime_state_captured: False
+```
+
+This completes the real-corpus acceptance requirement. AI Perception is therefore maintained `first_class` coverage within the authored/design-time boundary above. No additional Unreal AI Perception capture is required for systems schema 8 / derived schema 24 acceptance.
