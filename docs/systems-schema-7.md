@@ -2,7 +2,7 @@
 
 Systems schema 7 additively retains systems schema 6 and introduces first-class **authored Smart Object definition structure** derived from real UE 5.8.2 City Sample evidence.
 
-This document describes the schema contract under acceptance. It does **not** claim runtime Smart Object state.
+This document describes the accepted schema contract. It does **not** claim runtime Smart Object state.
 
 ## Evidence basis
 
@@ -53,7 +53,7 @@ smartobject_behaviors.jsonl
 smartobject_behavior_properties.jsonl
 ```
 
-These are part of the normal systems manifest and SQLite corpus once schema-7 acceptance is complete.
+These are part of the normal systems manifest and SQLite corpus.
 
 ### `smartobject_definitions.jsonl`
 
@@ -250,17 +250,13 @@ and the same `-85/+85` X offsets, yaw `90`, zero slot-local behaviors, one defin
 
 Schema-7 publication is synchronous. While the shared systems driver include is compiled, its `FFileHelper::SaveStringToFile` manifest write is routed through a narrow proxy. The proxy performs the real base-manifest write and immediately upgrades that exact completed file to schema 7 before `SaveSystemsManifest()` returns. No multicast delegate ordering or shutdown callback participates in correctness. The raw archive guard remains as evidence preservation if a later Python validation gate fails.
 
-Raw systems schema 7 is therefore accepted. The remaining merge gate is promotion into the existing City Sample corpus, derived-schema-23 regeneration, and exact Smart Object graph verification:
+The accepted schema-7 capture was promoted into the canonical City Sample corpus, the full corpus was regenerated at derived schema 23, and `smartobject-graph-verify` passed exactly:
 
-```powershell
-python scripts\uatool.py systems-schema7-accept `
-    "N:\EpicVault\Projects\CitySample\CitySample.uproject"
-
-python scripts\uatool.py derive `
-    "N:\EpicVault\Projects\CitySample\.uatool"
-
-python scripts\uatool.py smartobject-graph-verify `
-    "N:\EpicVault\Projects\CitySample\CitySample.uproject"
+```text
+expected_exact_semantic_edges: 7
+verified_exact_semantic_edges: 7
+smart_object_definition_roots: 1
+runtime_state_captured: False
 ```
 
-`smartobject-graph-verify` must report exactly seven specialist `exact_semantic` edges and one `smart_object_definition` root. Maintained capability coverage moves to accepted `first_class` only after that verifier passes.
+The verified relation counts are exactly the seven-edge contract above; there are no invented slot-local behavior edges. Smart Objects therefore have maintained `first_class` capability coverage beginning with systems schema 7 / derived schema 23.
