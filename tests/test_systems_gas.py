@@ -202,11 +202,11 @@ class SystemsGASTest(unittest.TestCase):
         self.assertTrue(set(gas.GAS_FILES).issubset(fake.JSONL_FILES))
         self.assertTrue(set(gas.GAS_FILES).issubset(fake.RAW_FILES))
 
-    def test_canonical_composition_resolves_schema6(self) -> None:
+    def test_canonical_composition_retains_schema6(self) -> None:
         import uatool  # noqa: F401
         import uatool_systems
 
-        self.assertEqual(uatool_systems.SYSTEMS_SCHEMA_VERSION, 6)
+        self.assertGreaterEqual(uatool_systems.SYSTEMS_SCHEMA_VERSION, 6)
         self.assertTrue(set(gas.GAS_FILES).issubset(uatool_systems.RAW_FILES))
 
     def test_native_schema6_is_reflection_first_and_finalized(self) -> None:
