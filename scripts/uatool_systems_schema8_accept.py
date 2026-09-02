@@ -22,6 +22,13 @@ LOSS_COUNT_KEYS = (
     "ai_perception_property_row_limit_hits",
     "ai_perception_container_element_limit_hits",
 )
+REPRESENTATIVE_COUNT_KEYS = (
+    "ai_perception_components",
+    "ai_perception_sense_configs",
+    "ai_perception_stimuli_sources",
+    "ai_perception_registered_senses",
+    "ai_perception_properties",
+)
 
 
 def _read_json(path: Path) -> dict:
@@ -90,6 +97,15 @@ def _require_lossless_manifest(manifest: dict) -> dict:
     return counts
 
 
+def _require_representative_ai_perception(counts: dict) -> None:
+    missing = [key for key in REPRESENTATIVE_COUNT_KEYS if int(counts.get(key, 0) or 0) <= 0]
+    if missing:
+        details = ", ".join(f"{key}={int(counts.get(key, 0) or 0)}" for key in missing)
+        raise RuntimeError(
+            "systems schema 8 acceptance requires representative authored AI Perception content; " + details
+        )
+
+
 def accept_schema8(systems_module, project: Path, *, corpus: Path, systems_capture: Path) -> dict:
     if int(getattr(systems_module, "SYSTEMS_SCHEMA_VERSION", 0) or 0) != 8:
         raise RuntimeError("systems-schema8-accept requires composed systems schema 8")
@@ -98,6 +114,7 @@ def accept_schema8(systems_module, project: Path, *, corpus: Path, systems_captu
     if int(manifest.get("schema_version", 0) or 0) != 8 or not bool(manifest.get("success", False)):
         raise RuntimeError("isolated systems capture is not a successful schema-8 manifest")
     counts = _require_lossless_manifest(manifest)
+    _require_representative_ai_perception(counts)
     error = systems_module.validation_error(systems_capture)
     if error:
         raise RuntimeError(f"isolated systems capture is not valid schema 8: {error}")
