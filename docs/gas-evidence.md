@@ -117,28 +117,13 @@ The AttributeSet scope is accepted exactly:
 - `/Script/LyraGame.LyraHealthSet`
 - `/Script/TopDownArenaRuntime.TopDownArenaAttributeSet`
 
-The remaining 37-vs-43 ability discrepancy is also fully explained. The six missing assets are the `Phase_Playing`, `Phase_PostGame`, and `Phase_Warmup` game-phase abilities in ShooterCore and TopDownArena. AssetRegistry registers them as `/Script/GameplayAbilities.GameplayAbilityBlueprint`, not `/Script/Engine.Blueprint`. They inherit `LyraGamePhaseAbility` and are genuine GameplayAbilities.
+The remaining 37-vs-43 ability discrepancy is fully explained. The six missing assets are `Phase_Playing`, `Phase_PostGame`, and `Phase_Warmup` game-phase abilities in ShooterCore and TopDownArena. AssetRegistry registers them as `/Script/GameplayAbilities.GameplayAbilityBlueprint`, not `/Script/Engine.Blueprint`. They inherit `LyraGamePhaseAbility` and are genuine GameplayAbilities.
 
 Schema 6 now admits both exact Blueprint asset-class identities into the same loaded generated-class inheritance check. Those six phase abilities have no captured triggers, additional costs, cost GameplayEffect, or cooldown GameplayEffect, so the final recount is expected to change only `gas_abilities` from 37 to 43 while preserving the established child counts.
 
 ## Derived schema 22 GAS graph
 
-The GAS graph layer is implemented from normalized exact fields only. It promotes relationships such as:
-
-- ability asset -> generated class -> direct parent;
-- ability -> cost/cooldown GameplayEffect class;
-- ability -> ordered trigger -> exact trigger Gameplay Tag;
-- ability -> additional cost object -> cost class;
-- Ability Set -> granted ability/effect/AttributeSet classes;
-- GameplayEffect asset -> generated class -> direct parent;
-- GameplayEffect -> GE component -> component class;
-- GameplayEffect -> ordered modifier -> exact gameplay attribute;
-- GameplayEffect -> ordered execution -> calculation class;
-- execution -> ordered execution modifier -> captured attribute;
-- GameplayEffect -> ordered cue entry -> magnitude attribute when present;
-- GameplayCue asset -> generated class -> direct parent;
-- GameplayCue asset -> exact scalar cue tag;
-- AttributeSet -> direct parent and declared gameplay attributes.
+The GAS graph layer is implemented from normalized exact fields only. It promotes relationships such as ability/class inheritance, cost/cooldown classes, ordered trigger/tag links, additional-cost objects/classes, Ability Set grants, GameplayEffect components/modifiers/executions/cues, exact attributes, GameplayCue scalar tags, and AttributeSet declarations.
 
 Broad exported tag-container strings are not parsed into guessed graph relations. Runtime specs, active effects, live granted ability specs, prediction state, replicated ASC runtime state, and live attributes remain outside the claim.
 
@@ -151,3 +136,5 @@ The second 37-ability ZIP implies 548 exact GAS-domain graph edges. The six spec
 Schema 6 is authored/default-state coverage only. It does not claim active GameplayEffect specs, current granted ability specs, prediction keys/state, replicated AbilitySystemComponent runtime state, live attribute values, or runtime activation/cooldown state. The focused corpus also did not establish exact authored GameFeatureAction_AddAbilities or tag-relationship-mapping instances strongly enough for first-class promotion.
 
 The remaining raw acceptance gate is one focused Lyra `systems-capture` to prove the `GameplayAbilityBlueprint` membership fix and obtain the authoritative 43-root corpus. No normal Lyra scan or derive is required for that gate.
+
+Python/schema composition, schema-6 validation, specialized Blueprint membership regressions, exact GAS graph expectations/verifier, and derived-schema-22 composition are green in CI through **Python schema smoke #340**.
