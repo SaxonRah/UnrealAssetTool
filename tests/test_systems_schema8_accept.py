@@ -29,6 +29,16 @@ class SystemsSchema8AcceptanceTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, key):
                 accept._require_lossless_manifest(missing)
 
+    def test_acceptance_rejects_empty_ai_perception_capture(self) -> None:
+        good = {key: 1 for key in accept.REPRESENTATIVE_COUNT_KEYS}
+        accept._require_representative_ai_perception(good)
+
+        for key in accept.REPRESENTATIVE_COUNT_KEYS:
+            empty = dict(good)
+            empty[key] = 0
+            with self.assertRaisesRegex(RuntimeError, key):
+                accept._require_representative_ai_perception(empty)
+
     def test_schema8_contract_and_composition_are_public(self) -> None:
         self.assertEqual(accept.TARGET_DERIVED_SCHEMA_VERSION, 24)
         self.assertEqual(accept.ACCEPTANCE_MANIFEST, "systems_schema8_acceptance.json")
