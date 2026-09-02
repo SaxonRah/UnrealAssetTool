@@ -27,6 +27,8 @@ public class UnrealAssetTool : ModuleRules
             "AnimGraph",
             "AssetRegistry",
             "BlueprintGraph",
+            "DataflowCore",
+            "DataflowEngine",
             "GameplayTags",
             "Json",
             "Projects",
