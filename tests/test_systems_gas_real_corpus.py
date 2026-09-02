@@ -91,6 +91,23 @@ class SystemsGASRealCorpusRegressionTest(unittest.TestCase):
         ):
             self.assertIn(text, docs)
 
+    def test_final_lyra_derived_schema22_acceptance_is_documented(self) -> None:
+        docs = (ROOT / "docs/gas-evidence.md").read_text(encoding="utf-8")
+        for text in (
+            "Derived schema 22 GAS coverage is therefore real-corpus accepted",
+            "`project_nodes`: **8,366**",
+            "`project_edges`: **12,522**",
+            "`project_neighborhoods`: **1,089**",
+            "`exact_semantic_edges`: **560**",
+            "`gameplay_ability_roots`: **43**",
+            "`gameplay_ability_set_roots`: **12**",
+            "`gameplay_attribute_set_roots`: **4**",
+            "`gameplay_cue_roots`: **24**",
+            "`gameplay_effect_roots`: **42**",
+            "`runtime_state_captured`: **False**",
+        ):
+            self.assertIn(text, docs)
+
 
 if __name__ == "__main__":
     unittest.main()
