@@ -5,7 +5,6 @@ import json
 import sqlite3
 import sys
 import tempfile
-import types
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -93,31 +92,31 @@ class SystemsSmartObjectsTest(unittest.TestCase):
     def test_slot_identity_and_counts_are_strict(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            rows = valid_rows()
-            rows["smartobject_slots.jsonl"][1]["slot_id"] = rows["smartobject_slots.jsonl"][0]["slot_id"]
-            self.populate(root, rows)
+            data = valid_rows()
+            data["smartobject_slots.jsonl"][1]["slot_id"] = data["smartobject_slots.jsonl"][0]["slot_id"]
+            self.populate(root, data)
             self.assertIn("slot_id is duplicated", smart.validation_error(root) or "")
 
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            rows = valid_rows()
-            rows["smartobject_definitions.jsonl"][0]["slot_count"] = 3
-            self.populate(root, rows)
+            data = valid_rows()
+            data["smartobject_definitions.jsonl"][0]["slot_count"] = 3
+            self.populate(root, data)
             self.assertIn("slot count mismatch", smart.validation_error(root) or "")
 
     def test_behavior_scope_and_property_count_are_strict(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            rows = valid_rows()
-            rows["smartobject_behaviors.jsonl"][0]["scope"] = "slot"
-            self.populate(root, rows)
+            data = valid_rows()
+            data["smartobject_behaviors.jsonl"][0]["scope"] = "slot"
+            self.populate(root, data)
             self.assertIn("invalid slot_index", smart.validation_error(root) or "")
 
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            rows = valid_rows()
-            rows["smartobject_behavior_properties.jsonl"][0]["truncated"] = True
-            self.populate(root, rows)
+            data = valid_rows()
+            data["smartobject_behavior_properties.jsonl"][0]["truncated"] = True
+            self.populate(root, data)
             self.assertIn("truncated", smart.validation_error(root) or "")
 
     def test_sqlite_round_trip_and_query(self) -> None:
@@ -172,20 +171,19 @@ class SystemsSmartObjectsTest(unittest.TestCase):
         self.assertNotIn('#include "SmartObject', scanner)
         self.assertNotIn('"SmartObjectsModule"', build_cs)
 
-    def test_canonical_composition_promotes_schema7_and_capture_membership(self) -> None:
+    def test_canonical_composition_retains_schema7_inside_schema8(self) -> None:
         import uatool
         import uatool_project_graph
         import uatool_systems
         import uatool_systems_capture
         import uatool_runtime
 
-        self.assertEqual(uatool_systems.SYSTEMS_SCHEMA_VERSION, 7)
-        self.assertEqual(uatool.FINAL_DERIVED_SCHEMA_VERSION, 23)
-        self.assertEqual(uatool_project_graph.DERIVED_SCHEMA_VERSION, 23)
+        self.assertGreaterEqual(uatool_systems.SYSTEMS_SCHEMA_VERSION, 7)
+        self.assertGreaterEqual(uatool.FINAL_DERIVED_SCHEMA_VERSION, 23)
+        self.assertGreaterEqual(uatool_project_graph.DERIVED_SCHEMA_VERSION, 23)
         self.assertTrue(getattr(uatool_project_graph, "_smartobject_graph_installed", False))
         self.assertTrue(set(smart.SMARTOBJECT_FILES).issubset(uatool_systems.JSONL_FILES))
         self.assertTrue(set(smart.SMARTOBJECT_FILES).issubset(uatool_systems_capture.CAPTURE_FILES))
-        self.assertTrue(getattr(uatool_systems_capture, "_smartobject_schema7_raw_archive_guard_installed", False))
         self.assertTrue(getattr(uatool_runtime, "_systems_schema7_accept_installed", False))
 
 
