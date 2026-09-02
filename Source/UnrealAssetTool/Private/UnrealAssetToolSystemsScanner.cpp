@@ -54,7 +54,9 @@ namespace UnrealAssetToolSystems
 #include "UnrealAssetToolSystemsSmartObjects.inl"
 #include "UnrealAssetToolSystemsSmartObjectsPolicy.inl"
 #define ScanGASProjectModel ScanGASAndSmartObjectProjectModels
+#define FFileHelper FSmartObjectSystemsFileHelperProxy
 #include "UnrealAssetToolSystemsDriver.inl"
+#undef FFileHelper
 #undef ScanGASProjectModel
 #include "UnrealAssetToolSystemsFinalize.inl"
 }
