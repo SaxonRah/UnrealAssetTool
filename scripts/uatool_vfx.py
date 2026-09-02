@@ -3,6 +3,7 @@
 from uatool_vfx_defs import VFX_SCHEMA_VERSION, RAW_FILES, create_schema, read_manifest
 from uatool_vfx_validate import validation_error
 from uatool_vfx_storage import load_database, query
+import uatool_runtime as _runtime
 import uatool_systems_only_derive_deferred as _systems_only_derive_deferred
 import uatool_capabilities as _capabilities
 import uatool_inspect as _inspect
@@ -16,7 +17,7 @@ _systems_only_derive_deferred.install()
 _capabilities.install()
 _inspect.install()
 _project_intelligence.install()
-_smartobject_evidence.install(__import__("uatool_runtime"))
+_smartobject_evidence.install(_runtime)
 
 __all__ = (
     "VFX_SCHEMA_VERSION", "RAW_FILES", "create_schema", "read_manifest",
