@@ -220,6 +220,27 @@ python scripts\uatool.py query `
 
 The query surface searches canonical/derived specialist tables plus typed project nodes/edges. Human-readable project-neighborhood text is reconstructed on demand from compact edge references.
 
+### Inspect one asset or object
+
+```powershell
+python scripts\uatool.py inspect `
+    "E:\Path\Project\.uatool" `
+    "/Game/Path/Asset.Asset"
+```
+
+`inspect` builds a provenance-aware dossier from the existing canonical facts, typed project graph and capability contract. It shows the best typed identity, same-path variants, specialist root/child facts, incoming/outgoing relationship counts, edge quality, and the canonical evidence attached to displayed edges. It refuses to guess when a path fragment matches multiple distinct graph paths.
+
+For agent/tool consumption:
+
+```powershell
+python scripts\uatool.py inspect `
+    "E:\Path\Project\.uatool" `
+    "/Game/Path/Asset.Asset" `
+    --json
+```
+
+See [docs/project-intelligence.md](docs/project-intelligence.md).
+
 ### Focused systems / GAS acceptance
 
 Expensive subsystem investigations do not require a full project rescan. Systems schema 6 retains the focused capture/promote/derive/verify lifecycle used for Lyra GAS acceptance. Focused corpora are explicitly marked partial so they never imply unrelated structural/world/animation/VFX coverage.
@@ -255,6 +276,7 @@ UnrealAssetTool/
     uatool_systems*.py
     uatool_project_*.py
     uatool_capabilities.py
+    uatool_inspect.py
   docs/
   tests/
 ```
@@ -279,6 +301,7 @@ A scanner family is not considered stable merely because it compiles. Corpus val
 - [Architecture](docs/architecture.md)
 - [Schema reference](docs/schema.md)
 - [Coverage matrix](docs/coverage.md)
+- [Project intelligence commands](docs/project-intelligence.md)
 - [Cross-project workflow](docs/cross-project-workflow.md)
 - [Build performance and bundle size](docs/build-performance-and-size.md)
 - [Animation schema 1](docs/animation-schema-1.md)
