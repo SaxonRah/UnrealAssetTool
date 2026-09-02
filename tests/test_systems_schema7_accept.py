@@ -99,10 +99,10 @@ class SystemsSchema7AcceptanceTest(unittest.TestCase):
         policy = (
             ROOT / "Source/UnrealAssetTool/Private/UnrealAssetToolSystemsSmartObjectsPolicy.inl"
         ).read_text(encoding="utf-8")
-        self.assertIn("SmartObjectSchema7SaveStringToFile", policy)
+        self.assertIn("FSmartObjectSystemsFileHelperProxy", policy)
         self.assertIn("UpgradeSystemsManifestToSchema7", policy)
-        self.assertIn("#define SaveStringToFile SmartObjectSchema7SaveStringToFile", scanner)
-        self.assertIn("#undef SaveStringToFile", scanner)
+        self.assertIn("#define FFileHelper FSmartObjectSystemsFileHelperProxy", scanner)
+        self.assertIn("#undef FFileHelper", scanner)
         self.assertNotIn("GSmartObjectSchema7ExitHookRegistered", policy)
         self.assertNotIn("FCoreDelegates::OnEnginePreExit.AddStatic", policy)
         self.assertNotIn("FCoreDelegates::OnPreExit.AddStatic", policy)
