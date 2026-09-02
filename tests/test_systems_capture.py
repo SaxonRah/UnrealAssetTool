@@ -89,21 +89,12 @@ class SystemsCaptureTests(unittest.TestCase):
         self.assertLess(driver.index(specialized_finalize), driver.index(success_manifest))
         self.assertLess(driver.index(gas_finalize), driver.index(success_manifest))
 
-        # Writer correctness still does not depend on post-engine-init or
-        # shutdown ordering: all primary writer groups close synchronously in
-        # RunSystemsScan before the base success manifest. Pre-exit remains only
-        # a defensive writer fallback. Schema 7 may use a separate ordered
-        # post-engine-init callback solely to publish the completed manifest.
+        # Pre-exit remains only as a defensive writer-buffer fallback. Schema-7
+        # manifest publication is tested separately and must not use this
+        # delegate path or move writer flushing out of RunSystemsScan().
         self.assertIn('#include "UnrealAssetToolSystemsFinalize.inl"', scanner)
         self.assertIn("FCoreDelegates::OnEnginePreExit.AddStatic", finalizer)
-        self.assertIn(
-            "GetOnPostEngineInit().AddStatic(&FinalizeSmartObjectSchema7Manifest)",
-            finalizer,
-        )
-        self.assertNotIn(
-            "GetOnPostEngineInit().AddStatic(&FinalizeSystemsOnlyWriterBuffers)",
-            finalizer,
-        )
+        self.assertNotIn("GetOnPostEngineInit().AddStatic", finalizer)
         self.assertIn(gas_finalize, finalizer)
 
     def test_canonical_composition_installs_systems_capture_command(self):
