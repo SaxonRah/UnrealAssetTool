@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deterministic asset/object dossier over the existing UnrealAssetTool truth model."""
+"""Provenance-aware asset/object dossier over existing UnrealAssetTool truth."""
 from __future__ import annotations
 
 import argparse
@@ -28,6 +28,9 @@ QUALITY_RANK = {
     "exact_semantic": 3,
 }
 
+# These are retrieval joins over already-normalized SQLite tables. They do not
+# define new semantic truth. A table/column pair is simply ignored when absent,
+# which keeps inspect useful on focused and older compatible corpora.
 ROOT_FACT_SOURCES = (
     ("assets", "object_path"),
     ("blueprints", "object_path"),
@@ -45,6 +48,11 @@ ROOT_FACT_SOURCES = (
     ("materials", "material_path"),
     ("level_sequences", "sequence_path"),
     ("audio_assets", "audio_path"),
+    ("input_actions", "action_path"),
+    ("input_mapping_contexts", "context_path"),
+    ("gameplay_data_assets", "asset_path"),
+    ("curve_tables", "table_path"),
+    ("primary_data_assets", "asset_path"),
     ("mover_blueprints", "blueprint_path"),
     ("mover_components", "component_path"),
     ("gameplay_camera_assets", "camera_asset_path"),
@@ -62,12 +70,37 @@ ROOT_FACT_SOURCES = (
 )
 
 CHILD_FACT_SOURCES = (
+    # Generic Blueprint semantics.
     ("blueprint_semantic_statements", "blueprint_path"),
     ("blueprint_semantic_blocks", "blueprint_path"),
+    # Sequencer / Enhanced Input / gameplay data.
+    ("movie_scene_bindings", "sequence_path"),
+    ("movie_scene_tracks", "sequence_path"),
+    ("movie_scene_sections", "sequence_path"),
+    ("movie_scene_channels", "sequence_path"),
+    ("input_mappings", "context_path"),
+    ("data_table_rows", "table_path"),
+    ("data_table_fields", "table_path"),
+    ("curve_table_rows", "table_path"),
+    ("curve_table_keys", "table_path"),
+    # Mover.
+    ("mover_modes", "component_path"),
+    ("mover_modes", "blueprint_path"),
+    ("mover_settings", "owner_path"),
+    ("mover_transitions", "owner_path"),
+    ("mover_transition_behaviors", "owner_path"),
+    ("mover_transition_routes", "owner_path"),
+    # Gameplay Cameras.
+    ("gameplay_camera_nodes", "rig_path"),
+    ("gameplay_camera_node_edges", "rig_path"),
+    ("gameplay_camera_transitions", "owner_path"),
+    ("gameplay_camera_rig_references", "asset_path"),
+    # Mass / authored ZoneGraph.
     ("mass_entity_traits", "config_path"),
     ("mass_spawner_entity_types", "spawner_path"),
     ("mass_spawner_generators", "spawner_path"),
     ("zonegraph_shape_points", "shape_path"),
+    # GAS.
     ("gas_ability_triggers", "ability_path"),
     ("gas_ability_costs", "ability_path"),
     ("gas_ability_set_abilities", "ability_set_path"),
@@ -139,46 +172,61 @@ def _node_sort_key(row: dict):
     )
 
 
-def _resolve_target(conn: sqlite3.Connection, term: str, candidate_limit: int) -> tuple[str | None, list[dict], list[dict]]:
-    exact_rows = [
+def _node_variants(conn: sqlite3.Connection, path: str) -> list[dict]:
+    return [
         _row_dict(row)
         for row in conn.execute(
             "SELECT node_id,node_kind,path,coverage,class_path,package_name,family,root "
-            "FROM project_nodes WHERE path=?",
-            (term,),
+            "FROM project_nodes WHERE path=? ORDER BY node_kind",
+            (path,),
         )
     ]
-    if exact_rows:
-        return term, exact_rows, []
+
+
+def _candidate_row(conn: sqlite3.Connection, path: str) -> dict:
+    variants = _node_variants(conn, path)
+    primary = max(variants, key=_node_sort_key)
+    return {
+        "path": path,
+        "node_kind": primary.get("node_kind", ""),
+        "coverage": primary.get("coverage", ""),
+        "family": primary.get("family", ""),
+        "class_path": primary.get("class_path", ""),
+    }
+
+
+def _resolve_target(
+    conn: sqlite3.Connection,
+    term: str,
+    candidate_limit: int,
+) -> tuple[str | None, list[dict], list[dict], bool]:
+    exact = _node_variants(conn, term)
+    if exact:
+        return term, exact, [], False
 
     pattern = f"%{_escape_like(term)}%"
-    rows = [
-        _row_dict(row)
+    # Query distinct paths first. LIMIT candidate_limit+1 is enough to prove
+    # ambiguity without sampling a bounded number of node variants. This avoids
+    # falsely treating one path as unique when that path has many node kinds and
+    # another matching path falls beyond the old row sample.
+    paths = [
+        str(row[0])
         for row in conn.execute(
-            "SELECT node_id,node_kind,path,coverage,class_path,package_name,family,root "
-            "FROM project_nodes WHERE path LIKE ? ESCAPE '\\' "
-            "ORDER BY path,node_kind LIMIT ?",
-            (pattern, max(candidate_limit * 8, candidate_limit)),
+            "SELECT DISTINCT path FROM project_nodes WHERE path LIKE ? ESCAPE '\\' "
+            "ORDER BY path LIMIT ?",
+            (pattern, candidate_limit + 1),
         )
+        if str(row[0])
     ]
-    by_path: dict[str, list[dict]] = collections.defaultdict(list)
-    for row in rows:
-        by_path[str(row.get("path", ""))].append(row)
-    paths = sorted(path for path in by_path if path)
-    candidates = []
-    for path in paths[:candidate_limit]:
-        variants = by_path[path]
-        primary = max(variants, key=_node_sort_key)
-        candidates.append({
-            "path": path,
-            "node_kind": primary.get("node_kind", ""),
-            "coverage": primary.get("coverage", ""),
-            "family": primary.get("family", ""),
-            "class_path": primary.get("class_path", ""),
-        })
+    if not paths:
+        return None, [], [], False
     if len(paths) == 1:
-        return paths[0], by_path[paths[0]], candidates
-    return None, [], candidates
+        variants = _node_variants(conn, paths[0])
+        return paths[0], variants, [_candidate_row(conn, paths[0])], False
+
+    truncated = len(paths) > candidate_limit
+    shown = paths[:candidate_limit]
+    return None, [], [_candidate_row(conn, path) for path in shown], truncated
 
 
 def _capability_family(node: dict) -> str:
@@ -187,7 +235,12 @@ def _capability_family(node: dict) -> str:
     if family in _FAMILY_MAP:
         return _FAMILY_MAP[family]
     lowered = kind.lower()
-    if lowered.startswith("gameplay_ability") or lowered.startswith("gameplay_effect") or lowered.startswith("gameplay_cue") or lowered.startswith("gameplay_attribute"):
+    if (
+        lowered.startswith("gameplay_ability")
+        or lowered.startswith("gameplay_effect")
+        or lowered.startswith("gameplay_cue")
+        or lowered.startswith("gameplay_attribute")
+    ):
         return "gas"
     if lowered.startswith("mover"):
         return "mover"
@@ -220,6 +273,7 @@ def _read_capabilities(corpus: Path, primary: dict) -> dict:
         return {}
     if not isinstance(manifest, dict):
         return {}
+
     family_name = _capability_family(primary)
     family = {}
     families = manifest.get("families", [])
@@ -236,16 +290,29 @@ def _read_capabilities(corpus: Path, primary: dict) -> dict:
     }
 
 
-def _fact_rows(conn: sqlite3.Connection, target: str, sources, limit: int | None = None) -> list[dict]:
+def _fact_rows(
+    conn: sqlite3.Connection,
+    target: str,
+    sources,
+    limit: int | None = None,
+) -> list[dict]:
     facts = []
+    seen = set()
     for table, column in sources:
+        key = (table, column)
+        if key in seen:
+            continue
+        seen.add(key)
         if not _table_exists(conn, table):
             continue
-        columns = _table_columns(conn, table)
-        if column not in columns:
+        if column not in _table_columns(conn, table):
             continue
+
         if limit is None:
-            row = conn.execute(f'SELECT * FROM "{table}" WHERE "{column}"=? LIMIT 1', (target,)).fetchone()
+            row = conn.execute(
+                f'SELECT * FROM "{table}" WHERE "{column}"=? LIMIT 1',
+                (target,),
+            ).fetchone()
             if row is not None:
                 facts.append({
                     "table": table,
@@ -253,7 +320,13 @@ def _fact_rows(conn: sqlite3.Connection, target: str, sources, limit: int | None
                     "record": _canonical_row(row),
                 })
             continue
-        count = int(conn.execute(f'SELECT COUNT(*) FROM "{table}" WHERE "{column}"=?', (target,)).fetchone()[0])
+
+        count = int(
+            conn.execute(
+                f'SELECT COUNT(*) FROM "{table}" WHERE "{column}"=?',
+                (target,),
+            ).fetchone()[0]
+        )
         if count <= 0:
             continue
         rows = [
@@ -274,9 +347,18 @@ def _fact_rows(conn: sqlite3.Connection, target: str, sources, limit: int | None
     return facts
 
 
-def _edge_rows(conn: sqlite3.Connection, target: str, edge_limit: int, evidence_limit: int) -> tuple[list[dict], dict]:
-    outgoing = int(conn.execute("SELECT COUNT(*) FROM project_edges WHERE source=?", (target,)).fetchone()[0])
-    incoming = int(conn.execute("SELECT COUNT(*) FROM project_edges WHERE target=?", (target,)).fetchone()[0])
+def _edge_rows(
+    conn: sqlite3.Connection,
+    target: str,
+    edge_limit: int,
+    evidence_limit: int,
+) -> tuple[list[dict], dict]:
+    outgoing = int(
+        conn.execute("SELECT COUNT(*) FROM project_edges WHERE source=?", (target,)).fetchone()[0]
+    )
+    incoming = int(
+        conn.execute("SELECT COUNT(*) FROM project_edges WHERE target=?", (target,)).fetchone()[0]
+    )
     rows = list(conn.execute(
         "SELECT edge_id,source_kind,source,relation,target_kind,target,source_coverage,target_coverage,"
         "edge_quality,evidence_count,evidence_json FROM project_edges WHERE source=? OR target=? "
@@ -287,38 +369,41 @@ def _edge_rows(conn: sqlite3.Connection, target: str, edge_limit: int, evidence_
     ))
     truncated = len(rows) > edge_limit
     rows = rows[:edge_limit]
+
     result = []
     for row in rows:
         item = _row_dict(row)
         evidence = _decode_json(item.pop("evidence_json", ""))
         evidence = evidence if isinstance(evidence, list) else []
         direction = "out" if str(item.get("source", "")) == target else "in"
-        other_kind = item.get("target_kind", "") if direction == "out" else item.get("source_kind", "")
-        other_path = item.get("target", "") if direction == "out" else item.get("source", "")
-        other_coverage = item.get("target_coverage", "") if direction == "out" else item.get("source_coverage", "")
         item.update({
             "direction": direction,
-            "other_kind": other_kind,
-            "other_path": other_path,
-            "other_coverage": other_coverage,
+            "other_kind": item.get("target_kind", "") if direction == "out" else item.get("source_kind", ""),
+            "other_path": item.get("target", "") if direction == "out" else item.get("source", ""),
+            "other_coverage": item.get("target_coverage", "") if direction == "out" else item.get("source_coverage", ""),
             "evidence": evidence[:evidence_limit],
             "evidence_truncated": len(evidence) > evidence_limit,
         })
         result.append(item)
 
-    full_relations = []
+    relation_counts = []
     for direction, endpoint in (("out", "source"), ("in", "target")):
         for relation, count in conn.execute(
             f"SELECT relation,COUNT(*) FROM project_edges WHERE {endpoint}=? GROUP BY relation ORDER BY relation",
             (target,),
         ):
-            full_relations.append({"direction": direction, "relation": relation, "count": int(count)})
-    full_quality = collections.Counter()
+            relation_counts.append({
+                "direction": direction,
+                "relation": str(relation),
+                "count": int(count),
+            })
+
+    quality_counts = collections.Counter()
     for quality, count in conn.execute(
         "SELECT edge_quality,COUNT(*) FROM project_edges WHERE source=? OR target=? GROUP BY edge_quality",
         (target, target),
     ):
-        full_quality[str(quality)] = int(count)
+        quality_counts[str(quality)] = int(count)
 
     return result, {
         "outgoing": outgoing,
@@ -326,20 +411,30 @@ def _edge_rows(conn: sqlite3.Connection, target: str, edge_limit: int, evidence_
         "total": outgoing + incoming,
         "shown": len(result),
         "truncated": truncated,
-        "relation_counts": full_relations,
-        "quality_counts": dict(sorted(full_quality.items(), key=lambda item: (-QUALITY_RANK.get(item[0], -1), item[0]))),
+        "relation_counts": relation_counts,
+        "quality_counts": dict(sorted(
+            quality_counts.items(),
+            key=lambda item: (-QUALITY_RANK.get(item[0], -1), item[0]),
+        )),
     }
 
 
-def build_report(output: Path, term: str, *, edge_limit: int = DEFAULT_EDGE_LIMIT,
-                 evidence_limit: int = DEFAULT_EVIDENCE_LIMIT,
-                 child_limit: int = DEFAULT_CHILD_LIMIT,
-                 candidate_limit: int = DEFAULT_CANDIDATE_LIMIT) -> dict:
+def build_report(
+    output: Path,
+    term: str,
+    *,
+    edge_limit: int = DEFAULT_EDGE_LIMIT,
+    evidence_limit: int = DEFAULT_EVIDENCE_LIMIT,
+    child_limit: int = DEFAULT_CHILD_LIMIT,
+    candidate_limit: int = DEFAULT_CANDIDATE_LIMIT,
+) -> dict:
     root = Path(output).expanduser().resolve()
     db = root if root.suffix.lower() == ".db" else root / "uat.db"
     corpus = db.parent if root.suffix.lower() == ".db" else root
     if not db.is_file():
-        raise FileNotFoundError(f"uat.db missing: {db}; run `python scripts\\uatool.py pack \"{corpus}\"`")
+        raise FileNotFoundError(
+            f"uat.db missing: {db}; run `python scripts\\uatool.py pack \"{corpus}\"`"
+        )
     stamp = corpus / ".derived_freshness.json"
     if stamp.is_file() and db.stat().st_mtime_ns < stamp.stat().st_mtime_ns:
         raise RuntimeError(
@@ -354,14 +449,19 @@ def build_report(output: Path, term: str, *, edge_limit: int = DEFAULT_EDGE_LIMI
     try:
         if not _table_exists(conn, "project_nodes") or not _table_exists(conn, "project_edges"):
             raise RuntimeError("uat.db does not contain the typed project graph; repack the current corpus")
-        resolved, variants, candidates = _resolve_target(conn, str(term), candidate_limit)
+
+        resolved, variants, candidates, candidate_truncated = _resolve_target(
+            conn, str(term), candidate_limit
+        )
         if resolved is None:
             return {
                 "found": False,
                 "query": str(term),
                 "ambiguous": bool(candidates),
                 "candidates": candidates,
+                "candidates_truncated": candidate_truncated,
             }
+
         primary = max(variants, key=_node_sort_key)
         variants = sorted(variants, key=_node_sort_key, reverse=True)
         edges, edge_summary = _edge_rows(conn, resolved, edge_limit, evidence_limit)
@@ -407,15 +507,30 @@ def _record_lines(record: dict, *, field_limit: int = 24) -> list[str]:
     return lines
 
 
+def _child_headline(record: dict):
+    for key in (
+        "text", "operation", "mode_name", "transition_class", "node_name",
+        "row_name", "field_name", "key", "attribute_name", "trigger_tag",
+        "component_class", "trait_class", "point_type",
+    ):
+        if record.get(key) not in ("", None):
+            return record.get(key)
+    return record
+
+
 def print_report(report: dict) -> None:
     if not report.get("found"):
         print("=== UNREAL ASSET DOSSIER ===")
         print(f"Query: {report.get('query', '')}")
         candidates = report.get("candidates", [])
         if candidates:
-            print(f"Result: ambiguous ({len(candidates)} candidates shown)")
+            suffix = "+" if report.get("candidates_truncated") else ""
+            print(f"Result: ambiguous ({len(candidates)}{suffix} candidates shown)")
             for row in candidates:
-                print(f"  {row.get('node_kind','')} {row.get('path','')} coverage={row.get('coverage','')} family={row.get('family','')}")
+                print(
+                    f"  {row.get('node_kind','')} {row.get('path','')} "
+                    f"coverage={row.get('coverage','')} family={row.get('family','')}"
+                )
         else:
             print("Result: no project-graph node matched")
         return
@@ -438,14 +553,18 @@ def print_report(report: dict) -> None:
         print(
             "Corpus: "
             f"partial={bool(corpus.get('partial', False))} "
-            + " ".join(f"{key}={schemas.get(key, 0)}" for key in ("structural", "world", "animation", "vfx", "systems", "derived"))
+            + " ".join(
+                f"{key}={schemas.get(key, 0)}"
+                for key in ("structural", "world", "animation", "vfx", "systems", "derived")
+            )
         )
     family = capabilities.get("family", {}) if isinstance(capabilities.get("family", {}), dict) else {}
     if family:
         print(
             "Capability: "
             f"{family.get('family','')} contract={family.get('contract_coverage','')} "
-            f"corpus={family.get('corpus_coverage','')} runtime_state={family.get('runtime_state_captured', False)}"
+            f"corpus={family.get('corpus_coverage','')} "
+            f"runtime_state={family.get('runtime_state_captured', False)}"
         )
         if family.get("boundary"):
             print(f"Boundary: {family.get('boundary')}")
@@ -472,12 +591,12 @@ def print_report(report: dict) -> None:
         print("\n[canonical/derived child facts]")
         for fact in children:
             print(
-                f"  [{fact.get('table','')}] count={fact.get('count',0)} shown={fact.get('shown',0)} "
+                f"  [{fact.get('table','')}] via {fact.get('identity_column','')} "
+                f"count={fact.get('count',0)} shown={fact.get('shown',0)} "
                 f"truncated={bool(fact.get('truncated', False))}"
             )
             for index, record in enumerate(fact.get("records", [])):
-                headline = record.get("text") or record.get("operation") or record.get("attribute_name") or record.get("trigger_tag") or record.get("component_class") or record.get("trait_class") or record.get("point_type")
-                print(f"    #{index}: {_short(headline or record, 520)}")
+                print(f"    #{index}: {_short(_child_headline(record), 520)}")
 
     graph = report.get("graph", {})
     print(
@@ -497,9 +616,9 @@ def print_report(report: dict) -> None:
     for edge in report.get("edges", []):
         arrow = "->" if edge.get("direction") == "out" else "<-"
         print(
-            f"  {arrow} {edge.get('relation','')} {edge.get('other_kind','')} {edge.get('other_path','')} "
-            f"quality={edge.get('edge_quality','')} coverage={edge.get('other_coverage','')} "
-            f"evidence={edge.get('evidence_count',0)}"
+            f"  {arrow} {edge.get('relation','')} {edge.get('other_kind','')} "
+            f"{edge.get('other_path','')} quality={edge.get('edge_quality','')} "
+            f"coverage={edge.get('other_coverage','')} evidence={edge.get('evidence_count',0)}"
         )
         for evidence in edge.get("evidence", []):
             print(f"      evidence: {_short(evidence, 700)}")
