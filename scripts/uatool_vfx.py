@@ -13,6 +13,7 @@ import uatool_inspect as _inspect
 import uatool_project_intelligence as _project_intelligence
 import uatool_smartobject_evidence as _smartobject_evidence
 import uatool_smartobject_capture as _smartobject_capture
+import uatool_ai_perception_evidence as _ai_perception_evidence
 
 # Smart Objects schema 7 must be composed after the existing Mass -> GAS systems
 # installers. uatool.py imports this facade before it calls build_perf.install(),
@@ -110,6 +111,7 @@ _inspect.install()
 _project_intelligence.install()
 _smartobject_evidence.install(_runtime)
 _smartobject_capture.install(_runtime)
+_ai_perception_evidence.install(_runtime)
 
 __all__ = (
     "VFX_SCHEMA_VERSION", "RAW_FILES", "create_schema", "read_manifest",
