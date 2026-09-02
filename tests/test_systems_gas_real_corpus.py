@@ -59,6 +59,12 @@ class SystemsGASRealCorpusRegressionTest(unittest.TestCase):
         self.assertIn("GASWriteGameplayCue(Blueprint", policy)
         self.assertNotIn("GASBlueprintMetadataCandidate(Asset)", policy)
 
+        # Lyra game phases use the specialized GameplayAbilityBlueprint asset
+        # class. It must enter the actual generated-class inheritance path too.
+        self.assertIn("GASIsBlueprintAsset(Asset)", policy)
+        self.assertIn("/Script/GameplayAbilities.GameplayAbilityBlueprint", policy)
+        self.assertIn("UBlueprint::StaticClass()->GetClassPathName()", policy)
+
         self.assertIn("FModuleManager::Get().GetModuleFilename", policy)
         self.assertIn("FPackageName::DoesPackageExist", policy)
         self.assertIn("IsInsideDirectory(OwnerFilename, ProjectDir)", policy)
