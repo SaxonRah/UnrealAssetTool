@@ -6,6 +6,7 @@ import tempfile
 import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
@@ -13,6 +14,7 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 import uatool_systems_schema6_accept as schema6
+import uatool_systems_only_derive_deferred as deferred
 
 
 def write_json(path: Path, value: dict) -> None:
@@ -117,6 +119,37 @@ class SystemsOnlyDerivePolicyTest(unittest.TestCase):
                 json.loads((root / "manifest.json").read_text(encoding="utf-8")),
                 original,
             )
+
+    def test_deferred_hook_patches_final_public_composition_and_core_entrypoint(self) -> None:
+        calls = {}
+        public = self._runtime(calls)
+        public.__file__ = str(SCRIPTS / "uatool.py")
+        original = public.derive_output
+        core = types.SimpleNamespace(derive_output=original)
+
+        self.assertTrue(
+            deferred.apply_public_policy(
+                modules=[public],
+                core_module=core,
+                schema6_module=schema6,
+            )
+        )
+        self.assertTrue(public._systems_only_derive_policy_installed)
+        self.assertIs(core.derive_output, public.derive_output)
+        self.assertIsNot(public.derive_output, original)
+
+    def test_runtime_dispatch_applies_deferred_policy_before_original_main(self) -> None:
+        calls = []
+        runtime = types.SimpleNamespace(main=lambda: calls.append("main") or 7)
+        with mock.patch.object(deferred, "apply_public_policy", side_effect=lambda: calls.append("policy") or True):
+            deferred.install(runtime)
+            self.assertEqual(runtime.main(), 7)
+        self.assertEqual(calls, ["policy", "main"])
+
+    def test_vfx_facade_installs_deferred_public_hook(self) -> None:
+        text = (SCRIPTS / "uatool_vfx.py").read_text(encoding="utf-8")
+        self.assertIn("import uatool_systems_only_derive_deferred", text)
+        self.assertIn("_systems_only_derive_deferred.install()", text)
 
 
 if __name__ == "__main__":
