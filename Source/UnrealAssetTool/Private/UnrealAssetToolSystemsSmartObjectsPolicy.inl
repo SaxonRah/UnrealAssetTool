@@ -1,8 +1,3 @@
-static bool GSmartObjectSchema7ScanAttempted = false;
-static bool GSmartObjectSchema7ExitHookRegistered = false;
-
-static void FinalizeSmartObjectSchema7Manifest();
-
 static FString SmartObjectSystemsOutputDir()
 {
     FString OutputDir;
@@ -30,19 +25,7 @@ static bool ScanGASAndSmartObjectProjectModels(
     TSet<FString>& SeenStateOwners,
     FString& OutError)
 {
-    GSmartObjectSchema7ScanAttempted = true;
     GSmartObjectCounts = FSmartObjectCounts();
-
-    // Register shutdown work only after the engine is initialized. UE 5.8
-    // tightened delegate initialization ordering, and translation-unit static
-    // registration can be lost before the engine loop owns these delegates.
-    if (!GSmartObjectSchema7ExitHookRegistered)
-    {
-        FCoreDelegates::OnEnginePreExit.AddStatic(&FinalizeSmartObjectSchema7Manifest);
-        FCoreDelegates::OnPreExit.AddStatic(&FinalizeSmartObjectSchema7Manifest);
-        FCoreDelegates::OnExit.AddStatic(&FinalizeSmartObjectSchema7Manifest);
-        GSmartObjectSchema7ExitHookRegistered = true;
-    }
 
     const FString OutputDir = SmartObjectSystemsOutputDir();
     if (!GSmartObjectWriters.Open(OutputDir))
@@ -83,15 +66,8 @@ static bool ScanGASAndSmartObjectProjectModels(
         OutError);
 }
 
-static bool UpgradeSystemsManifestToSchema7()
+static bool UpgradeSystemsManifestToSchema7(const FString& ManifestPath)
 {
-    if (!GSmartObjectSchema7ScanAttempted)
-    {
-        return true;
-    }
-
-    const FString OutputDir = SmartObjectSystemsOutputDir();
-    const FString ManifestPath = FPaths::Combine(OutputDir, TEXT("systems_manifest.json"));
     FString Text;
     if (!FFileHelper::LoadFileToString(Text, *ManifestPath))
     {
@@ -171,7 +147,7 @@ static bool UpgradeSystemsManifestToSchema7()
     UE_LOG(
         LogTemp,
         Display,
-        TEXT("UnrealAssetToolSystems: promoted systems manifest to schema 7 smartobjects definitions=%lld slots=%lld behaviors=%lld behavior_properties=%lld"),
+        TEXT("UnrealAssetToolSystems: synchronously promoted systems manifest to schema 7 smartobjects definitions=%lld slots=%lld behaviors=%lld behavior_properties=%lld"),
         GSmartObjectCounts.Definitions,
         GSmartObjectCounts.Slots,
         GSmartObjectCounts.Behaviors,
@@ -179,17 +155,31 @@ static bool UpgradeSystemsManifestToSchema7()
     return true;
 }
 
-static void FinalizeSmartObjectSchema7Manifest()
+// The shared systems driver owns the authoritative SaveSystemsManifest()
+// implementation. While that single include is compiled, UnrealAssetToolSystemsScanner.cpp
+// aliases FFileHelper to this proxy. The proxy performs the driver's real file
+// write first, then upgrades that exact completed manifest before
+// SaveSystemsManifest() returns. No delegate ordering or shutdown behavior is
+// part of the schema-7 correctness path.
+struct FSmartObjectSystemsFileHelperProxy
 {
-    static bool bFinalized = false;
-    if (bFinalized)
+    using EEncodingOptions = FFileHelper::EEncodingOptions;
+
+    static bool SaveStringToFile(
+        const FString& String,
+        const TCHAR* Filename,
+        EEncodingOptions EncodingOptions)
     {
-        return;
+        if (!FFileHelper::SaveStringToFile(String, Filename, EncodingOptions))
+        {
+            return false;
+        }
+
+        const FString Path = Filename ? FString(Filename) : FString();
+        if (!FPaths::GetCleanFilename(Path).Equals(TEXT("systems_manifest.json"), ESearchCase::IgnoreCase))
+        {
+            return true;
+        }
+        return UpgradeSystemsManifestToSchema7(Path);
     }
-    if (UpgradeSystemsManifestToSchema7())
-    {
-        bFinalized = true;
-        return;
-    }
-    UE_LOG(LogTemp, Error, TEXT("UnrealAssetToolSystems: failed promoting systems_manifest.json to schema 7"));
-}
+};
