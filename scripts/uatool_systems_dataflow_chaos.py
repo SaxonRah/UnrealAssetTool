@@ -133,9 +133,9 @@ def create_schema(conn) -> None:
     conn.executescript(_SQL)
 
 
-def _unique(rows: list[dict], fields: tuple[str, ...], label: str) -> str | None:
+def _unique(items: list[dict], fields: tuple[str, ...], label: str) -> str | None:
     seen = set()
-    for row in rows:
+    for row in items:
         key = tuple(str(row.get(field, "") or "") for field in fields)
         if any(not value for value in key):
             return f"{label} has blank identity: {key}"
@@ -145,11 +145,11 @@ def _unique(rows: list[dict], fields: tuple[str, ...], label: str) -> str | None
     return None
 
 
-def _check_property_rows(rows: list[dict], owners: set[tuple[str, str]], kind: str, label: str,
-                         allowed_roots: frozenset[str] | None = None) -> tuple[str | None, collections.Counter]:
+def _check_property_rows(items: list[dict], owners: set[tuple[str, str]], kind: str, label: str,
+                         allowed_roots: frozenset[str] | None = None):
     by_owner: dict[tuple[str, str], list[int]] = collections.defaultdict(list)
     counts = collections.Counter()
-    for row in rows:
+    for row in items:
         source = str(row.get("source_path", "") or "")
         owner = str(row.get("owner_id", "") or "")
         key = (source, owner)
@@ -167,8 +167,7 @@ def _check_property_rows(rows: list[dict], owners: set[tuple[str, str]], kind: s
             return f"{label} leaked excluded construction provenance GeometrySource: {source}", counts
         if bool(row.get("truncated", False)):
             return f"{label} canonical property is truncated: {source}::{path}", counts
-        index = int(row.get("property_index", -1))
-        by_owner[key].append(index)
+        by_owner[key].append(int(row.get("property_index", -1)))
         counts[key] += 1
     for key, indices in by_owner.items():
         if sorted(indices) != list(range(len(indices))):
@@ -176,11 +175,11 @@ def _check_property_rows(rows: list[dict], owners: set[tuple[str, str]], kind: s
     return None, counts
 
 
-def _check_references(rows: list[dict], owners: set[tuple[str, str]], kind: str, label: str,
-                      allowed_roots: frozenset[str] | None = None) -> tuple[str | None, collections.Counter]:
+def _check_references(items: list[dict], owners: set[tuple[str, str]], kind: str, label: str,
+                      allowed_roots: frozenset[str] | None = None):
     counts = collections.Counter()
     seen = set()
-    for row in rows:
+    for row in items:
         source = str(row.get("source_path", "") or "")
         owner = str(row.get("owner_id", "") or "")
         key = (source, owner)
@@ -189,12 +188,13 @@ def _check_references(rows: list[dict], owners: set[tuple[str, str]], kind: str,
         if str(row.get("owner_kind", "") or "") != kind:
             return f"{label} owner kind mismatch: {key}", counts
         root = str(row.get("root_property", "") or "")
+        path = str(row.get("property_path", "") or "")
         target = str(row.get("target_path", "") or "")
-        if not root or not str(row.get("property_path", "") or "") or not target:
+        if not root or not path or not target:
             return f"{label} has blank reference identity: {key}", counts
         if allowed_roots is not None and root not in allowed_roots:
             return f"{label} leaked non-behavior reference root: {source}::{root}", counts
-        identity = (source, owner, str(row.get("property_path", "") or ""), target)
+        identity = (source, owner, path, target)
         if identity in seen:
             return f"{label} has duplicate reference: {identity}", counts
         seen.add(identity)
@@ -205,6 +205,24 @@ def _check_references(rows: list[dict], owners: set[tuple[str, str]], kind: str,
 def validation_error(output: Path, rows=None) -> str | None:
     output = Path(output)
     rows = rows or _read_rows
+    try:
+        manifest = _read_manifest(output)
+    except RuntimeError as exc:
+        return str(exc)
+
+    manifest_version = int(manifest.get("schema_version", 0) or 0)
+    present = [name for name in DATAFLOW_CHAOS_FILES if (output / name).is_file()]
+    if manifest_version < 9:
+        # This installer is part of the public composition, so historical schema
+        # fixtures must remain valid when they contain no schema-9 specialist
+        # files. A partial specialist surface on an older manifest is never OK.
+        if present:
+            return f"Dataflow/Chaos canonical streams require systems schema >=9, got {manifest_version}"
+        return None
+    missing = [name for name in DATAFLOW_CHAOS_FILES if not (output / name).is_file()]
+    if missing:
+        return f"systems schema 9 is missing Dataflow/Chaos canonical file: {missing[0]}"
+
     graphs = list(rows(output / "dataflow_graphs.jsonl"))
     nodes = list(rows(output / "dataflow_nodes.jsonl"))
     pins = list(rows(output / "dataflow_pins.jsonl"))
@@ -213,12 +231,13 @@ def validation_error(output: Path, rows=None) -> str | None:
     asset_refs = list(rows(output / "dataflow_asset_references.jsonl"))
     node_props = list(rows(output / "dataflow_node_properties.jsonl"))
     node_refs = list(rows(output / "dataflow_node_references.jsonl"))
-    collections = list(rows(output / "geometry_collections.jsonl"))
+    geometry_collections = list(rows(output / "geometry_collections.jsonl"))
     gc_props = list(rows(output / "geometry_collection_properties.jsonl"))
     gc_refs = list(rows(output / "geometry_collection_references.jsonl"))
 
     error = _unique(graphs, ("asset_path",), "Dataflow graph")
-    if error: return error
+    if error:
+        return error
     graph_paths = {str(row.get("asset_path", "") or "") for row in graphs}
     for row in graphs:
         if str(row.get("asset_class", "") or "") != DATAFLOW_CLASS:
@@ -228,7 +247,8 @@ def validation_error(output: Path, rows=None) -> str | None:
             return f"Dataflow graph has negative count: {row.get('asset_path')}"
 
     error = _unique(nodes, ("asset_path", "node_guid"), "Dataflow node")
-    if error: return error
+    if error:
+        return error
     node_keys = set()
     node_rows = {}
     nodes_per_graph = collections.Counter()
@@ -248,7 +268,8 @@ def validation_error(output: Path, rows=None) -> str | None:
         nodes_per_graph[asset] += 1
 
     error = _unique(pins, ("asset_path", "pin_guid"), "Dataflow pin")
-    if error: return error
+    if error:
+        return error
     pin_rows = {}
     pin_indices: dict[tuple[str, str, str], list[int]] = collections.defaultdict(list)
     pins_by_node_direction = collections.Counter()
@@ -262,21 +283,21 @@ def validation_error(output: Path, rows=None) -> str | None:
         if direction not in {"input", "output"}:
             return f"Dataflow pin has invalid direction: {asset}::{pin} -> {direction}"
         pin_rows[(asset, pin)] = row
-        index_key = (asset, node, direction)
-        pin_indices[index_key].append(int(row.get("pin_index", -1)))
-        pins_by_node_direction[index_key] += 1
+        key = (asset, node, direction)
+        pin_indices[key].append(int(row.get("pin_index", -1)))
+        pins_by_node_direction[key] += 1
     for key, indices in pin_indices.items():
         if sorted(indices) != list(range(len(indices))):
             return f"Dataflow pin indices are not contiguous for {key}"
-    for key, row in node_rows.items():
-        asset, node = key
+    for (asset, node), row in node_rows.items():
         if pins_by_node_direction[(asset, node, "input")] != int(row.get("input_count", 0) or 0):
             return f"Dataflow node input count mismatch: {asset}::{node}"
         if pins_by_node_direction[(asset, node, "output")] != int(row.get("output_count", 0) or 0):
             return f"Dataflow node output count mismatch: {asset}::{node}"
 
     error = _unique(edges, ("asset_path", "source_pin_guid", "target_pin_guid"), "Dataflow edge")
-    if error: return error
+    if error:
+        return error
     edges_per_graph = collections.Counter()
     for row in edges:
         asset = str(row.get("asset_path", "") or "")
@@ -302,14 +323,17 @@ def validation_error(output: Path, rows=None) -> str | None:
 
     asset_owners = {(asset, asset) for asset in graph_paths}
     error, asset_prop_counts = _check_property_rows(asset_props, asset_owners, "dataflow_asset", "Dataflow asset property")
-    if error: return error
+    if error:
+        return error
     error, asset_ref_counts = _check_references(asset_refs, asset_owners, "dataflow_asset", "Dataflow asset reference")
-    if error: return error
-    node_owners = set(node_keys)
-    error, node_prop_counts = _check_property_rows(node_props, node_owners, "dataflow_node", "Dataflow node property")
-    if error: return error
-    error, node_ref_counts = _check_references(node_refs, node_owners, "dataflow_node", "Dataflow node reference")
-    if error: return error
+    if error:
+        return error
+    error, node_prop_counts = _check_property_rows(node_props, node_keys, "dataflow_node", "Dataflow node property")
+    if error:
+        return error
+    error, node_ref_counts = _check_references(node_refs, node_keys, "dataflow_node", "Dataflow node reference")
+    if error:
+        return error
     for row in graphs:
         asset = str(row.get("asset_path", "") or "")
         if asset_prop_counts[(asset, asset)] != int(row.get("asset_property_count", 0) or 0):
@@ -322,11 +346,12 @@ def validation_error(output: Path, rows=None) -> str | None:
         if node_ref_counts[key] != int(row.get("reference_count", 0) or 0):
             return f"Dataflow node reference count mismatch: {key}"
 
-    error = _unique(collections, ("asset_path",), "Geometry Collection")
-    if error: return error
-    gc_paths = {str(row.get("asset_path", "") or "") for row in collections}
+    error = _unique(geometry_collections, ("asset_path",), "Geometry Collection")
+    if error:
+        return error
+    gc_paths = {str(row.get("asset_path", "") or "") for row in geometry_collections}
     gc_owners = {(asset, asset) for asset in gc_paths}
-    for row in collections:
+    for row in geometry_collections:
         asset = str(row.get("asset_path", "") or "")
         if str(row.get("asset_class", "") or "") != GEOMETRY_COLLECTION_CLASS:
             return f"Geometry Collection has unexpected class: {asset} -> {row.get('asset_class')}"
@@ -336,15 +361,17 @@ def validation_error(output: Path, rows=None) -> str | None:
             return f"Geometry Collection has negative child count: {asset}"
     error, gc_prop_counts = _check_property_rows(
         gc_props, gc_owners, "geometry_collection", "Geometry Collection property", GEOMETRY_COLLECTION_BEHAVIOR_ROOTS)
-    if error: return error
+    if error:
+        return error
     error, gc_ref_counts = _check_references(
         gc_refs, gc_owners, "geometry_collection", "Geometry Collection reference", GEOMETRY_COLLECTION_BEHAVIOR_ROOTS)
-    if error: return error
+    if error:
+        return error
     gc_dataflow_refs: dict[str, list[str]] = collections.defaultdict(list)
     for row in gc_refs:
         if str(row.get("root_property", "") or "") == "DataflowAsset":
             gc_dataflow_refs[str(row.get("source_path", "") or "")].append(str(row.get("target_path", "") or ""))
-    for row in collections:
+    for row in geometry_collections:
         asset = str(row.get("asset_path", "") or "")
         if gc_prop_counts[(asset, asset)] != int(row.get("property_count", 0) or 0):
             return f"Geometry Collection property count mismatch: {asset}"
@@ -352,22 +379,15 @@ def validation_error(output: Path, rows=None) -> str | None:
             return f"Geometry Collection reference count mismatch: {asset}"
         dataflow_asset = str(row.get("dataflow_asset", "") or "")
         refs = gc_dataflow_refs.get(asset, [])
-        if dataflow_asset:
-            if refs != [dataflow_asset]:
-                return f"Geometry Collection DataflowAsset specialized/reference mismatch: {asset} -> {dataflow_asset} refs={refs}"
-        elif refs:
+        if dataflow_asset and refs != [dataflow_asset]:
+            return f"Geometry Collection DataflowAsset specialized/reference mismatch: {asset} -> {dataflow_asset} refs={refs}"
+        if not dataflow_asset and refs:
             return f"Geometry Collection has DataflowAsset reference while specialized value is null: {asset}"
 
-    try:
-        manifest = _read_manifest(output)
-    except RuntimeError as exc:
-        return str(exc)
-    if int(manifest.get("schema_version", 0) or 0) < 9:
-        return f"Dataflow/Chaos canonical streams require systems schema >=9, got {manifest.get('schema_version')}"
     counts = manifest.get("counts", {}) if isinstance(manifest.get("counts"), dict) else {}
     physical = {
         "dataflow_assets": len(graphs),
-        "geometry_collections": len(collections),
+        "geometry_collections": len(geometry_collections),
         "dataflow_graphs": len(graphs),
         "dataflow_nodes": len(nodes),
         "dataflow_pins": len(pins),
@@ -414,6 +434,11 @@ def _reference_values(row: dict) -> tuple:
 def load_database(conn, output: Path, rows=None) -> None:
     output = Path(output)
     rows = rows or _read_rows
+    # Older accepted corpora may be loaded through the current public facade.
+    # Their schema-9 tables remain empty rather than making them unreadable.
+    manifest = _read_manifest(output)
+    if int(manifest.get("schema_version", 0) or 0) < 9:
+        return
     for r in rows(output / "dataflow_graphs.jsonl"):
         conn.execute("INSERT OR REPLACE INTO dataflow_graphs VALUES(?,?,?,?,?,?,?)", (
             r.get("asset_path", ""), r.get("asset_class", ""), int(r.get("node_count", 0) or 0),
