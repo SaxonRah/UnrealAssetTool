@@ -183,10 +183,12 @@ The evidence workflow is deliberately separated from a normal expensive project 
 
 Use the one canonical launcher; do not introduce alternate public wrappers.
 
-The final exact verifier is:
+The final exact verifier takes the project as its positional argument and the accepted corpus explicitly:
 
 ```powershell
-python scripts\uatool.py gas-graph-verify "E:\Path\Lyra\.uatool"
+python scripts\uatool.py gas-graph-verify `
+    "E:\Path\Lyra\Lyra.uproject" `
+    --corpus "E:\Path\Lyra\.uatool"
 ```
 
 See [gas-evidence.md](gas-evidence.md) for the investigation/capture workflow.
