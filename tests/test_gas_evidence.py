@@ -80,7 +80,7 @@ class GASEvidenceTest(unittest.TestCase):
             {
                 "source": "/Game/DerivedOnly",
                 "relation": "references",
-                "target": "/Script/GameplayAbilities.GameplayEffect",
+                "target": "/Script/GameplayAbilities.GameplayTagResponseTable",
             }
         ])
 
@@ -110,13 +110,13 @@ class GASEvidenceTest(unittest.TestCase):
     def test_default_scan_excludes_large_derived_streams(self) -> None:
         broad = gas.build_report(self.output, rows)
         self.assertNotIn("project_edges.jsonl", broad["stream_stats"])
-        self.assertNotIn("/script/gameplayabilities", broad["marker_counts"] or {})
+        self.assertNotIn("gameplaytagresponsetable", broad["marker_counts"])
 
-        # The canonical rows already have GAS matches; when explicitly enabled,
-        # the derived stream becomes visible as an additional scanned stream.
+        # Derived streams are visible only when explicitly requested.
         broad_with_derived = gas.build_report(self.output, rows, include_derived=True)
         self.assertIn("project_edges.jsonl", broad_with_derived["stream_stats"])
         self.assertEqual(broad_with_derived["stream_stats"]["project_edges.jsonl"]["matched_rows"], 1)
+        self.assertEqual(broad_with_derived["marker_counts"]["gameplaytagresponsetable"], 1)
 
     def test_effect_component_and_attribute_details_are_ranked_high_signal(self) -> None:
         report = gas.build_focus_report(self.output, rows, focuses=("effect", "attribute"))
