@@ -9,6 +9,7 @@ import uatool_runtime as _runtime
 import uatool_systems_only_derive_deferred as _systems_only_derive_deferred
 import uatool_capabilities as _capabilities
 import uatool_smartobject_capabilities as _smartobject_capabilities
+import uatool_ai_perception_capabilities as _ai_perception_capabilities
 import uatool_inspect as _inspect
 import uatool_project_intelligence as _project_intelligence
 import uatool_smartobject_evidence as _smartobject_evidence
@@ -115,6 +116,7 @@ if not getattr(_build_perf, "_systems_schema8_composition_installed", False):
 # Install only deferred runtime dispatch hooks here; each hook waits until the
 # public composition root is complete before consulting or patching it.
 _smartobject_capabilities.install(_capabilities)
+_ai_perception_capabilities.install(_capabilities)
 _systems_only_derive_deferred.install()
 _capabilities.install()
 _inspect.install()
