@@ -11,6 +11,7 @@ SCRIPTS = ROOT / "scripts"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
+import uatool_derived_freshness as freshness
 import uatool_gas_capture as gas_capture
 
 
@@ -144,6 +145,12 @@ class GASCaptureTest(unittest.TestCase):
         self.assertIn('print("normal project scan was not run")', text)
         self.assertIn('print("derive was not run")', text)
         self.assertNotIn("derive_output(", text)
+
+    def test_capture_is_composed_and_does_not_invalidate_derived_output(self) -> None:
+        evidence = (SCRIPTS / "uatool_gas_evidence.py").read_text(encoding="utf-8")
+        self.assertIn("import uatool_gas_capture as gas_capture", evidence)
+        self.assertIn("gas_capture.install(runtime_module, core_module)", evidence)
+        self.assertIn("uatool_gas_capture.py", freshness.NON_DERIVED_SCRIPTS)
 
 
 if __name__ == "__main__":
