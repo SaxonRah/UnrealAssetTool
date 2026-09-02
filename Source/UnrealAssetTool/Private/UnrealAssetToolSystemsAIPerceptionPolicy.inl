@@ -4,6 +4,63 @@ static int64 GAIPerceptionLoadedBlueprints = 0;
 static int64 GAIPerceptionGeneratedClasses = 0;
 static int64 GAIPerceptionScannedBlueprints = 0;
 
+static void GatherAIPerceptionBlueprintCandidates(
+    const TArray<FAssetData>& ExistingAssets,
+    TArray<FAssetData>& OutAssets)
+{
+    FAssetRegistryModule& AssetRegistryModule =
+        FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry"));
+    IAssetRegistry& Registry = AssetRegistryModule.Get();
+
+    // The systems commandlet can start with a premade/filtered registry whose
+    // GetAllAssets() result omits ordinary project Blueprints. The focused
+    // AI-Perception commandlet proved the objects themselves load correctly by
+    // exact path. Force a synchronous /Game rescan here and explicitly ignore
+    // deny-list scan filters so canonical extraction does not depend on startup
+    // AssetRegistry population policy.
+    Registry.WaitForPremadeAssetRegistry();
+    TArray<FString> ProjectPaths;
+    ProjectPaths.Add(TEXT("/Game"));
+    Registry.ScanPathsSynchronous(ProjectPaths, true, true);
+    Registry.WaitForCompletion();
+
+    TArray<FAssetData> RegistryBlueprints;
+    Registry.GetAssetsByClass(
+        UBlueprint::StaticClass()->GetClassPathName(),
+        RegistryBlueprints,
+        true);
+
+    TSet<FString> Seen;
+    auto AddCandidate = [&OutAssets, &Seen](const FAssetData& Asset)
+    {
+        const FString Path = Asset.GetSoftObjectPath().ToString();
+        if (Path.IsEmpty() || Seen.Contains(Path))
+        {
+            return;
+        }
+        Seen.Add(Path);
+        OutAssets.Add(Asset);
+    };
+
+    for (const FAssetData& Asset : RegistryBlueprints)
+    {
+        AddCandidate(Asset);
+    }
+    for (const FAssetData& Asset : ExistingAssets)
+    {
+        if (Asset.AssetClassPath == UBlueprint::StaticClass()->GetClassPathName() ||
+            AIPerceptionBlueprintCandidate(Asset))
+        {
+            AddCandidate(Asset);
+        }
+    }
+
+    OutAssets.Sort([](const FAssetData& A, const FAssetData& B)
+    {
+        return A.GetSoftObjectPath().ToString() < B.GetSoftObjectPath().ToString();
+    });
+}
+
 static bool ScanAIPerceptionProjectModelExactLoad(
     const TArray<FAssetData>& Assets,
     const FString& ProjectDir,
@@ -12,16 +69,11 @@ static bool ScanAIPerceptionProjectModelExactLoad(
     const FString& ToolPluginDir,
     FString& OutError)
 {
-    for (const FAssetData& Asset : Assets)
+    TArray<FAssetData> BlueprintAssets;
+    GatherAIPerceptionBlueprintCandidates(Assets, BlueprintAssets);
+
+    for (const FAssetData& Asset : BlueprintAssets)
     {
-        const FString AssetClassPath = Asset.AssetClassPath.ToString();
-        const bool bBlueprintCandidate =
-            Asset.AssetClassPath == UBlueprint::StaticClass()->GetClassPathName() ||
-            AIPerceptionBlueprintCandidate(Asset);
-        if (!bBlueprintCandidate)
-        {
-            continue;
-        }
         ++GAIPerceptionBlueprintCandidates;
 
         FString PackageFilename;
