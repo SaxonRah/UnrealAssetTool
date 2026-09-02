@@ -1,6 +1,6 @@
 # Gameplay Ability System evidence and schema 6
 
-Gameplay Ability System coverage began as an evidence-first investigation. UE 5.8.2 Lyra now defines and **real-corpus accepts systems schema 6**. The raw/native and canonical-promotion gates are closed. Derived GAS project-graph schema 22 is implemented and synthetic-contract tested; the remaining acceptance work is one derive plus exact post-derive verification.
+Gameplay Ability System coverage began as an evidence-first investigation. UE 5.8.2 Lyra now **real-corpus accepts systems schema 6 and derived schema 22**. The raw/native, canonical-promotion, derive, and exact project-graph verification gates are all closed.
 
 ## Diagnostic evidence commands
 
@@ -211,7 +211,9 @@ Focused derived acceptance now has an explicit conservative policy:
 - normal/full corpora keep the original VFX prerequisite unchanged;
 - when an accepted focused corpus has no top `manifest.json`, derive creates a minimal commit marker with `partial_corpus=true`, `canonical_passes=["systems"]`, and `schema_version=0` rather than claiming structural/world/VFX scanner coverage that did not occur.
 
-This policy is CI-covered, including strict rejection of partial VFX data and preservation of any existing top manifest. It does not run or synthesize any missing scanner pass.
+The first implementation correctly modeled that policy but installed it too early on `uatool_runtime`, before canonical `uatool.py` had defined the final VFX gates. The public command therefore still failed. The final implementation uses a deferred public-root hook: it waits until command dispatch, finds the fully constructed canonical `uatool.py` module, patches its actual VFX prerequisites/derive wrapper, and synchronizes `uatool_core.derive_output`. Regression coverage now exercises that real composition ordering rather than only a helper module.
+
+This policy remains strict for partial VFX data and does not run or synthesize any missing scanner pass.
 
 ## Derived schema 22 GAS graph
 
@@ -219,10 +221,31 @@ The GAS graph layer is implemented from normalized exact fields only. It promote
 
 Broad exported tag-container strings are not parsed into guessed graph relations. Runtime specs, active effects, live granted ability specs, prediction state, replicated ASC runtime state, and live attributes remain outside the claim.
 
-The accepted 43-ability raw corpus implies **560 exact semantic GAS edges**. `gas-graph-verify` requires exact source/relation/target equality, `exact_semantic` edge quality, canonical stream evidence, and specialist GAS roots against derived schema 22.
+### Final Lyra derived-schema-22 acceptance
+
+The accepted systems-only Lyra corpus derived successfully through the canonical public launcher after the deferred focused-corpus policy fix. The derive explicitly reported:
+
+- `created partial canonical manifest from accepted systems schema 6`;
+- `VFX specialist pass absent: continuing accepted systems-only derive`;
+- zero Blueprint/world/animation/VFX derived rows, as expected for a systems-only corpus;
+- `project_nodes`: **8,366**;
+- `project_edges`: **12,522**;
+- `project_neighborhoods`: **1,089**.
+
+`gas-graph-verify` then verified the schema-22 GAS topology exactly:
+
+- `exact_semantic_edges`: **560**;
+- `gameplay_ability_roots`: **43**;
+- `gameplay_ability_set_roots`: **12**;
+- `gameplay_attribute_set_roots`: **4**;
+- `gameplay_cue_roots`: **24**;
+- `gameplay_effect_roots`: **42**;
+- `runtime_state_captured`: **False**.
+
+The verifier requires exact source/relation/target equality, `exact_semantic` edge quality, canonical stream evidence, and specialist GAS roots. The expected and actual GAS edge sets are identical.
+
+**Derived schema 22 GAS coverage is therefore real-corpus accepted on UE 5.8.2 Lyra. No additional Unreal GAS capture is required.**
 
 ## Semantic boundary
 
-Schema 6 is authored/default-state coverage only. It does not claim active GameplayEffect specs, current granted ability specs, prediction keys/state, replicated AbilitySystemComponent runtime state, live attribute values, or runtime activation/cooldown state. The focused corpus also did not establish exact authored GameFeatureAction_AddAbilities or tag-relationship-mapping instances strongly enough for first-class promotion.
-
-The remaining acceptance path is one derived-schema-22 derive followed by exact GAS graph verification. No additional Unreal GAS capture is required.
+Systems schema 6 and derived schema 22 are authored/default-state coverage only. They do not claim active GameplayEffect specs, current granted ability specs, prediction keys/state, replicated AbilitySystemComponent runtime state, live attribute values, or runtime activation/cooldown state. The focused corpus also did not establish exact authored GameFeatureAction_AddAbilities or tag-relationship-mapping instances strongly enough for first-class promotion.
