@@ -139,7 +139,6 @@ class DataflowChaosCaptureTest(unittest.TestCase):
 
     def test_validation_rejects_wrong_edge_direction(self) -> None:
         self._write_valid_capture()
-        edges = list(capture._rows(self.root / "dataflow_edges.jsonl"))
         pins = list(capture._rows(self.root / "dataflow_pins.jsonl"))
         pins[1]["direction"] = "input"
         write_jsonl(self.root / "dataflow_pins.jsonl", pins)
@@ -152,7 +151,8 @@ class DataflowChaosCaptureTest(unittest.TestCase):
         facade = (SCRIPTS / "uatool_vfx.py").read_text(encoding="utf-8")
         self.assertIn('#include "Dataflow/DataflowGraph.h"', source)
         self.assertIn('#include "Dataflow/DataflowNode.h"', source)
-        self.assertIn("DataflowAsset->Dataflow", source)
+        self.assertIn("DataflowAsset->GetDataflow()", source)
+        self.assertNotIn("DataflowAsset->Dataflow;", source)
         self.assertIn("Graph->GetNodes()", source)
         self.assertIn("Graph->GetConnections()", source)
         self.assertIn("Node->TypedScriptStruct()", source)
