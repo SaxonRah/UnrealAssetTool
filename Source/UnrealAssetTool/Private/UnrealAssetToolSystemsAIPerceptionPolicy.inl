@@ -80,6 +80,10 @@ static bool UpgradeSystemsManifestToSchema8(const FString& ManifestPath)
     Counts->SetNumberField(TEXT("ai_perception_stimuli_sources"), GAIPerceptionCounts.StimuliSources);
     Counts->SetNumberField(TEXT("ai_perception_registered_senses"), GAIPerceptionCounts.RegisteredSenses);
     Counts->SetNumberField(TEXT("ai_perception_properties"), GAIPerceptionCounts.Properties);
+    Counts->SetNumberField(TEXT("ai_perception_truncated_properties"), GAIPerceptionCounts.TruncatedProperties);
+    Counts->SetNumberField(TEXT("ai_perception_property_depth_limit_hits"), GAIPerceptionCounts.PropertyDepthLimitHits);
+    Counts->SetNumberField(TEXT("ai_perception_property_row_limit_hits"), GAIPerceptionCounts.PropertyRowLimitHits);
+    Counts->SetNumberField(TEXT("ai_perception_container_element_limit_hits"), GAIPerceptionCounts.ContainerElementLimitHits);
 
     TArray<TSharedPtr<FJsonValue>> Files;
     const TArray<TSharedPtr<FJsonValue>>* ExistingFiles = nullptr;
@@ -130,12 +134,16 @@ static bool UpgradeSystemsManifestToSchema8(const FString& ManifestPath)
     UE_LOG(
         LogTemp,
         Display,
-        TEXT("UnrealAssetToolSystems: synchronously promoted systems manifest to schema 8 ai_perception components=%lld configs=%lld stimuli_sources=%lld registered_senses=%lld properties=%lld"),
+        TEXT("UnrealAssetToolSystems: synchronously promoted systems manifest to schema 8 ai_perception components=%lld configs=%lld stimuli_sources=%lld registered_senses=%lld properties=%lld truncated=%lld depth_limit_hits=%lld row_limit_hits=%lld container_limit_hits=%lld"),
         GAIPerceptionCounts.Components,
         GAIPerceptionCounts.SenseConfigs,
         GAIPerceptionCounts.StimuliSources,
         GAIPerceptionCounts.RegisteredSenses,
-        GAIPerceptionCounts.Properties);
+        GAIPerceptionCounts.Properties,
+        GAIPerceptionCounts.TruncatedProperties,
+        GAIPerceptionCounts.PropertyDepthLimitHits,
+        GAIPerceptionCounts.PropertyRowLimitHits,
+        GAIPerceptionCounts.ContainerElementLimitHits);
     return true;
 }
 
