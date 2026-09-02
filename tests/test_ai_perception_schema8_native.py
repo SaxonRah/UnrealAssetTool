@@ -15,6 +15,7 @@ class AIPerceptionSchema8NativeTest(unittest.TestCase):
 
         self.assertIn('#include "UnrealAssetToolSystemsAIPerception.inl"', scanner)
         self.assertIn('#include "UnrealAssetToolSystemsAIPerceptionPolicy.inl"', scanner)
+        self.assertIn('#include "UObject/UObjectGlobals.h"', scanner)
         self.assertIn("#define ScanGASProjectModel ScanGASSmartObjectsAndAIPerceptionProjectModels", scanner)
         self.assertIn("#define FFileHelper FAIPerceptionSystemsFileHelperProxy", scanner)
         self.assertIn("#undef FFileHelper", scanner)
@@ -28,6 +29,23 @@ class AIPerceptionSchema8NativeTest(unittest.TestCase):
         self.assertIn("Property->Identical", native)
         self.assertIn("RegisterAsSourceForSenses", native)
         self.assertIn("SenseRow->SetBoolField(TEXT(\"is_null\"), Sense == nullptr)", native)
+
+        # The real ContentExamples schema-8 gate proved that FAssetData::GetAsset()
+        # in the broad systems pass did not rediscover the two already-proven
+        # Blueprint templates. The full pass now uses the exact-path loading
+        # primitive that succeeded in the focused commandlet and publishes
+        # discovery-stage counters for future diagnosis.
+        self.assertIn("ScanAIPerceptionProjectModelExactLoad", policy)
+        self.assertIn("StaticLoadObject(UObject::StaticClass(), nullptr, *BlueprintPath)", policy)
+        self.assertIn("UBlueprint::StaticClass()->GetClassPathName()", policy)
+        for counter in (
+            "ai_perception_blueprint_candidates",
+            "ai_perception_scoped_blueprint_candidates",
+            "ai_perception_loaded_blueprints",
+            "ai_perception_generated_classes",
+            "ai_perception_scanned_blueprints",
+        ):
+            self.assertIn(f'TEXT("{counter}")', policy)
 
         self.assertIn("FSmartObjectSystemsFileHelperProxy::SaveStringToFile", policy)
         self.assertIn("UpgradeSystemsManifestToSchema8", policy)
