@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """Canonical VFX schema 1 support facade for UnrealAssetTool."""
+from pathlib import Path
+
 from uatool_vfx_defs import VFX_SCHEMA_VERSION, RAW_FILES, create_schema, read_manifest
 from uatool_vfx_validate import validation_error
 from uatool_vfx_storage import load_database, query
@@ -41,6 +43,46 @@ def _install_smartobject_capture_membership() -> None:
 
         capture.configure_for_systems = configure_for_systems
         capture._smartobject_schema7_config_installed = True
+
+    # Preserve a raw archive even when a post-Unreal schema/semantic gate fails.
+    # The base capture command historically checked the manifest version before
+    # writing its ZIP; that made a complete failed capture harder to diagnose.
+    if not getattr(capture, "_smartobject_schema7_raw_archive_guard_installed", False):
+        original_capture_cli = capture._capture_cli
+
+        def capture_cli(runtime_module, core_module, systems_module, argv):
+            try:
+                return original_capture_cli(runtime_module, core_module, systems_module, argv)
+            except Exception:
+                try:
+                    project = Path(argv[0]).expanduser().resolve()
+                    output_value = None
+                    archive_value = None
+                    for index, value in enumerate(argv):
+                        if value == "--output" and index + 1 < len(argv):
+                            output_value = argv[index + 1]
+                        elif value == "--archive" and index + 1 < len(argv):
+                            archive_value = argv[index + 1]
+                    output = (
+                        Path(output_value).expanduser().resolve()
+                        if output_value
+                        else project.parent / ".uatool" / f"systems-schema{capture.CAPTURE_SCHEMA_VERSION}-capture"
+                    )
+                    archive = (
+                        Path(archive_value).expanduser().resolve()
+                        if archive_value
+                        else project.parent / ".uatool" / f"{project.stem}.systems-schema{capture.CAPTURE_SCHEMA_VERSION}-capture.zip"
+                    )
+                    if all((output / filename).is_file() for filename in capture.CAPTURE_FILES):
+                        capture._write_capture_archive(output, archive)
+                        print(f"raw systems capture archive preserved after failure: {archive}")
+                except Exception as archive_exc:
+                    print(f"note: could not preserve raw systems capture archive: {archive_exc}")
+                raise
+
+        capture._capture_cli = capture_cli
+        capture._smartobject_schema7_raw_archive_guard_installed = True
+
     capture.configure_for_systems(_systems)
 
 
