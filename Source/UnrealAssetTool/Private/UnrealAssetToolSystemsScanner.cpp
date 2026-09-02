@@ -50,6 +50,9 @@ namespace UnrealAssetToolSystems
 #include "UnrealAssetToolSystemsGameplayCameras.inl"
 #include "UnrealAssetToolSystemsMassZoneGraph.inl"
 #include "UnrealAssetToolSystemsGAS.inl"
+#include "UnrealAssetToolSystemsGASPolicy.inl"
+#define ScanGASProjectModel ScanGASProjectModelPolicy
 #include "UnrealAssetToolSystemsDriver.inl"
+#undef ScanGASProjectModel
 #include "UnrealAssetToolSystemsFinalize.inl"
 }
