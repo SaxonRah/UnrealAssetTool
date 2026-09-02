@@ -39,13 +39,13 @@ The focused capture is limited to those gaps rather than repeating hundreds of a
 --asset-prefix /Game/ExampleContent/Destruction/
 ```
 
-On the current corpus this should nominate exactly:
+On the current corpus this nominates exactly:
 
 - 9 destruction `UDataflow` assets;
 - 29 `UGeometryCollection` assets;
 - 38 total focus assets.
 
-It should exclude the three `/Game/MetaHumans/...` hair Dataflows.
+It excludes the three `/Game/MetaHumans/...` hair Dataflows.
 
 ## Dataflow graph truth
 
@@ -61,13 +61,13 @@ For every focused `UDataflow` it records:
 - top-level reflected fields on each concrete Dataflow node struct, including `DataflowInput`, `DataflowOutput`, `DataflowPassthrough` and `DataflowIntrinsic` metadata;
 - direct object/soft-object references on those fields.
 
-Node parameter values remain Unreal's own `ExportTextItem_Direct` representation in this diagnostic. Nested normalization must be designed only after the real node structs/values are inspected.
+Node parameter values remain Unreal's own `ExportTextItem_Direct` representation in this diagnostic. Nested normalization is a systems-schema design decision, not something inferred from editor text.
 
 ## Geometry Collection truth
 
 For every focused exact `/Script/GeometryCollectionEngine.GeometryCollection` asset the commandlet reflects all non-transient top-level properties against the native class default object and emits direct object/soft-object references.
 
-This is deliberately reflection-based: the focused module does not add a GeometryCollectionEngine compile-time dependency or hard-code field layouts. Important current UE 5.8 fields such as `DataflowAsset`, `DataflowInstance`, `Overrides`, `DamageThreshold`, `DamagePropagationData`, clustering/removal fields and `SizeSpecificData` can therefore be observed as authored engine state without coupling the diagnostic to a sample convention.
+This is deliberately reflection-based: the focused module does not add a GeometryCollectionEngine compile-time dependency or hard-code field layouts. Current UE 5.8 fields such as `DataflowAsset`, `DataflowInstance`, `Overrides`, `DamageThreshold`, `DamagePropagationData`, clustering/removal fields and `SizeSpecificData` are observed as authored engine state without coupling the diagnostic to a sample convention.
 
 ## Output
 
@@ -114,19 +114,51 @@ This capture does **not** record:
 - runtime Field System results;
 - Cloth, Flesh, Vehicles or Hair semantics merely because they can consume Dataflow.
 
-Those would need separately designed evidence/coverage boundaries.
+Those need separately designed evidence/coverage boundaries.
 
-## Acceptance gate before schema design
+## Accepted ContentExamples result
 
-A useful real ContentExamples result should prove:
+The real UE 5.8.2 ContentExamples pass completed successfully and loaded all 38 nominated assets:
 
-- all 38 destruction-scoped focus assets load;
-- 9 Dataflow graph rows and 29 Geometry Collection assets;
-- nonzero Dataflow nodes, pins and links;
-- every node has an exact concrete script-struct identity;
-- every link resolves to an output pin and an input pin owned by its declared endpoint nodes;
-- nonzero node property rows that expose actual authored node types/parameters;
-- Geometry Collection authored property rows, with exact `DataflowAsset` references if any are actually authored;
-- zero property truncation/row-limit loss, or explicit inspection before any normalization if a limit is hit.
+```text
+focus_assets                         38
+loaded_assets                        38
+dataflow_assets                       9
+geometry_collections                 29
+graphs                                9
+nodes                               602
+pins                               2365
+edges                               767
+dataflow_asset_properties           135
+dataflow_asset_references              9
+node_properties                    5570
+node_references                       14
+geometry_collection_properties     1508
+geometry_collection_references       75
+property_row_limit_hits                0
+```
 
-Only after the raw ZIP passes that gate should systems schema 9 and any derived graph version be designed.
+All nine graph rows reconcile with their physical node and edge rows. Node and pin GUIDs are unique within each asset. Every one of the 767 links resolves to the declared output-pin -> input-pin endpoints and every node's declared input/output count equals its emitted pin rows.
+
+The focused graph surface is nontrivial. It includes nine `GeometryCollectionTerminalDataflowNode_v2` nodes as well as fracture, clustering, convex-hull, source, material, GeometryScript, subgraph, selection and reroute families.
+
+### Negative evidence is part of the contract
+
+Every focused Geometry Collection has `DataflowAsset=None`. There are zero Geometry Collection `DataflowAsset` reference rows. The corpus therefore does **not** prove a GeometryCollection -> Dataflow asset relationship and downstream schema/graph code must not manufacture one. `DataflowInstance` does carry `DataflowTerminal="GeometryCollectionTerminal"`; that remains authored scalar/struct state unless a real asset reference is present.
+
+### GeometrySource boundary
+
+One property export hit the 65,536-character diagnostic cap:
+
+```text
+/Game/ExampleContent/Destruction/Modules/ChaosPrimitives/GC/KioskExamples/GC_Stack_SizeSpecificDataExample.GC_Stack_SizeSpecificDataExample
+  GeometrySource
+```
+
+This was inspected rather than silently accepted. `GeometrySource` is editor/construction-source provenance, not destruction behavior or runtime state. No Dataflow topology, node parameter/reference, damage/clustering/removal field, `SizeSpecificData` behavior field or `DataflowInstance` state was truncated.
+
+Systems schema 9 therefore excludes `GeometrySource` from its first-class behavioral surface. Generic asset/dependency data remains available for coarse source-asset provenance. This inspected construction-provenance truncation does not require another focused capture.
+
+## Acceptance decision
+
+The focused evidence gate is accepted. No additional focused UE run is required before systems schema 9 / derived schema 25 design.
