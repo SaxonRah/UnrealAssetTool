@@ -40,6 +40,8 @@ python scripts\uatool.py gas-capture <Project.uproject> --editor <UnrealEditor-C
 
 `gas-capture` does **not** invoke the normal scanner and does **not** run derive. It performs one AssetRegistry enumeration, filters candidates using concrete GameplayAbilities/Lyra class metadata, loads only candidate assets, and reflects authored/default state. It also enumerates already-loaded GAS-derived classes so native AttributeSets and other native subclasses can be observed even when they do not have standalone assets.
 
+Candidate asset selection is intentionally stricter than class inventory. Asset/package names cannot nominate a GAS candidate; selection is based on AssetRegistry class metadata (`AssetClassPath`, `ParentClass`, `NativeParentClass`, `GeneratedClass`). Bare terms such as `AttributeSet` are not sufficient because unrelated systems such as PCG use the same terminology.
+
 The focused output is written under `<Project>/.uatool`:
 
 - `gas-capture/gas_capture_manifest.json`
@@ -63,7 +65,20 @@ Transient/deprecated/skip-serialization properties are excluded. GameplayEffectC
 
 Lyra Starter Game is the preferred UE 5.8 acceptance corpus because it exercises GAS across abilities, effects, attributes, Gameplay Cues, Game Feature grants, Experiences and Equipment.
 
-The initial compile/runtime smoke can use another existing UE 5.8 project such as Game Animation Sample; that smoke proves only that the focused commandlet builds and runs. **It is not GAS acceptance evidence.** Real semantic promotion will wait for the focused Lyra evidence.
+Game Animation Sample was used only as the native compile/runtime smoke. The accepted confirmation run on UE 5.8.2 produced:
+
+- 13,005 assets considered;
+- 0 project GAS candidate assets after strict class-metadata filtering;
+- 75 loaded GAS-derived classes as the independent native/plugin vocabulary inventory;
+- 944 reflected class-CDO properties;
+- 2 hard references;
+- 0 truncated properties;
+- commandlet execution 0.51 s;
+- focused editor run 11.67 s;
+- total focused workflow 25.30 s;
+- no normal scan and no derive.
+
+The earlier loose selector had falsely identified five PCG assets through the bare `AttributeSet` term; the strict metadata-only selector removed all five. This smoke proves the commandlet builds/runs and that the candidate/vocabulary distinction works. **It is not GAS semantic acceptance evidence.** Real semantic promotion waits for focused Lyra evidence.
 
 ## Current semantic boundary
 
