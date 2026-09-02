@@ -8,6 +8,7 @@
 #include "Json.h"
 #include "Misc/App.h"
 #include "Misc/EngineVersion.h"
+#include "Misc/FileHelper.h"
 #include "Misc/Parse.h"
 #include "Misc/Paths.h"
 #include "Modules/ModuleManager.h"
@@ -144,30 +145,12 @@ static FString ClassifyClass(const UClass* Class)
     {
         return FString();
     }
-    if (ClassInheritsName(Class, TEXT("GameplayAbility")))
-    {
-        return TEXT("gameplay_ability");
-    }
-    if (ClassInheritsName(Class, TEXT("GameplayEffect")))
-    {
-        return TEXT("gameplay_effect");
-    }
-    if (ClassInheritsName(Class, TEXT("GameplayEffectComponent")))
-    {
-        return TEXT("gameplay_effect_component");
-    }
-    if (ClassInheritsName(Class, TEXT("AbilitySystemComponent")))
-    {
-        return TEXT("ability_system_component");
-    }
-    if (ClassInheritsName(Class, TEXT("AttributeSet")))
-    {
-        return TEXT("attribute_set");
-    }
-    if (ClassInheritsName(Class, TEXT("AbilityTask")))
-    {
-        return TEXT("ability_task");
-    }
+    if (ClassInheritsName(Class, TEXT("GameplayAbility"))) return TEXT("gameplay_ability");
+    if (ClassInheritsName(Class, TEXT("GameplayEffect"))) return TEXT("gameplay_effect");
+    if (ClassInheritsName(Class, TEXT("GameplayEffectComponent"))) return TEXT("gameplay_effect_component");
+    if (ClassInheritsName(Class, TEXT("AbilitySystemComponent"))) return TEXT("ability_system_component");
+    if (ClassInheritsName(Class, TEXT("AttributeSet"))) return TEXT("attribute_set");
+    if (ClassInheritsName(Class, TEXT("AbilityTask"))) return TEXT("ability_task");
     if (ClassInheritsName(Class, TEXT("GameplayCueNotify_Actor")) ||
         ClassInheritsName(Class, TEXT("GameplayCueNotify_Static")) ||
         ClassInheritsName(Class, TEXT("GameplayCueNotify")))
@@ -181,22 +164,10 @@ static FString ClassifyClass(const UClass* Class)
     {
         return TEXT("gameplay_effect_calculation");
     }
-    if (ClassInheritsName(Class, TEXT("LyraAbilitySet")))
-    {
-        return TEXT("ability_set");
-    }
-    if (ClassInheritsName(Class, TEXT("LyraGameplayTagRelationshipMapping")))
-    {
-        return TEXT("tag_relationship");
-    }
-    if (ClassInheritsName(Class, TEXT("GameFeatureAction_AddAbilities")))
-    {
-        return TEXT("game_feature_grant");
-    }
-    if (ClassInheritsName(Class, TEXT("GameplayTagResponseTable")))
-    {
-        return TEXT("tag_response_table");
-    }
+    if (ClassInheritsName(Class, TEXT("LyraAbilitySet"))) return TEXT("ability_set");
+    if (ClassInheritsName(Class, TEXT("LyraGameplayTagRelationshipMapping"))) return TEXT("tag_relationship");
+    if (ClassInheritsName(Class, TEXT("GameFeatureAction_AddAbilities"))) return TEXT("game_feature_grant");
+    if (ClassInheritsName(Class, TEXT("GameplayTagResponseTable"))) return TEXT("tag_response_table");
     return FString();
 }
 
@@ -222,26 +193,14 @@ static bool ContainsCandidateAnchor(const FString& Text)
 {
     const FString Lower = Text.ToLower();
     static const TCHAR* Anchors[] = {
-        TEXT("/script/gameplayabilities"),
-        TEXT("gameplayability"),
-        TEXT("abilitysystemcomponent"),
-        TEXT("attributeset"),
-        TEXT("gameplayeffect"),
-        TEXT("gameplaycuenotify"),
-        TEXT("gameplaycueset"),
-        TEXT("abilitytask"),
-        TEXT("gameplaymodmagnitudecalculation"),
-        TEXT("gameplayeffectexecutioncalculation"),
-        TEXT("gameplayeffectcustomapplicationrequirement"),
-        TEXT("gameplaytagresponsetable"),
-        TEXT("lyraabilityset"),
-        TEXT("lyragameplayability"),
-        TEXT("lyraabilitysystemcomponent"),
-        TEXT("lyraattributeset"),
-        TEXT("lyrahealthset"),
-        TEXT("lyracombatset"),
-        TEXT("lyragameplaytagrelationshipmapping"),
-        TEXT("gamefeatureaction_addabilities")
+        TEXT("/script/gameplayabilities"), TEXT("gameplayability"),
+        TEXT("abilitysystemcomponent"), TEXT("attributeset"), TEXT("gameplayeffect"),
+        TEXT("gameplaycuenotify"), TEXT("gameplaycueset"), TEXT("abilitytask"),
+        TEXT("gameplaymodmagnitudecalculation"), TEXT("gameplayeffectexecutioncalculation"),
+        TEXT("gameplayeffectcustomapplicationrequirement"), TEXT("gameplaytagresponsetable"),
+        TEXT("lyraabilityset"), TEXT("lyragameplayability"), TEXT("lyraabilitysystemcomponent"),
+        TEXT("lyraattributeset"), TEXT("lyrahealthset"), TEXT("lyracombatset"),
+        TEXT("lyragameplaytagrelationshipmapping"), TEXT("gamefeatureaction_addabilities")
     };
     for (const TCHAR* Anchor : Anchors)
     {
@@ -262,15 +221,16 @@ static FString AssetTag(const FAssetData& Asset, const TCHAR* Name)
 
 static FString CandidateText(const FAssetData& Asset)
 {
-    return FString::Join({
-        Asset.GetSoftObjectPath().ToString(),
-        Asset.PackageName.ToString(),
-        Asset.AssetName.ToString(),
-        Asset.AssetClassPath.ToString(),
-        AssetTag(Asset, TEXT("ParentClass")),
-        AssetTag(Asset, TEXT("NativeParentClass")),
-        AssetTag(Asset, TEXT("GeneratedClass"))
-    }, TEXT("\n"));
+    TArray<FString> Parts;
+    Parts.Reserve(7);
+    Parts.Add(Asset.GetSoftObjectPath().ToString());
+    Parts.Add(Asset.PackageName.ToString());
+    Parts.Add(Asset.AssetName.ToString());
+    Parts.Add(Asset.AssetClassPath.ToString());
+    Parts.Add(AssetTag(Asset, TEXT("ParentClass")));
+    Parts.Add(AssetTag(Asset, TEXT("NativeParentClass")));
+    Parts.Add(AssetTag(Asset, TEXT("GeneratedClass")));
+    return FString::Join(Parts, TEXT("\n"));
 }
 
 static FString ExportProperty(const FProperty* Property, const void* ValuePtr, UObject* Owner, bool& bTruncated)
@@ -302,7 +262,12 @@ struct FReferenceContext
     FCounts* Counts = nullptr;
 };
 
-static void EmitReference(FReferenceContext& Context, const FString& PropertyPath, const FString& ReferenceKind, const FString& TargetPath, const FString& TargetClass)
+static void EmitReference(
+    FReferenceContext& Context,
+    const FString& PropertyPath,
+    const FString& ReferenceKind,
+    const FString& TargetPath,
+    const FString& TargetClass)
 {
     if (!Context.Writers || !Context.Counts || TargetPath.IsEmpty() || Context.Rows >= MaxReferencesPerRoot)
     {
@@ -325,7 +290,12 @@ static void EmitReference(FReferenceContext& Context, const FString& PropertyPat
     }
 }
 
-static void CollectReferences(const FProperty* Property, const void* ValuePtr, const FString& PropertyPath, int32 Depth, FReferenceContext& Context)
+static void CollectReferences(
+    const FProperty* Property,
+    const void* ValuePtr,
+    const FString& PropertyPath,
+    int32 Depth,
+    FReferenceContext& Context)
 {
     if (!Property || !ValuePtr || Depth > MaxReferenceDepth || Context.Rows >= MaxReferencesPerRoot)
     {
@@ -372,7 +342,12 @@ static void CollectReferences(const FProperty* Property, const void* ValuePtr, c
         const int32 Limit = FMath::Min(Helper.Num(), 4096);
         for (int32 Index = 0; Index < Limit && Context.Rows < MaxReferencesPerRoot; ++Index)
         {
-            CollectReferences(ArrayProperty->Inner, Helper.GetRawPtr(Index), FString::Printf(TEXT("%s[%d]"), *PropertyPath, Index), Depth + 1, Context);
+            CollectReferences(
+                ArrayProperty->Inner,
+                Helper.GetRawPtr(Index),
+                FString::Printf(TEXT("%s[%d]"), *PropertyPath, Index),
+                Depth + 1,
+                Context);
         }
         return;
     }
@@ -383,7 +358,12 @@ static void CollectReferences(const FProperty* Property, const void* ValuePtr, c
         for (int32 Index = 0; Index < Helper.GetMaxIndex() && Emitted < 4096 && Context.Rows < MaxReferencesPerRoot; ++Index)
         {
             if (!Helper.IsValidIndex(Index)) continue;
-            CollectReferences(SetProperty->ElementProp, Helper.GetElementPtr(Index), FString::Printf(TEXT("%s{%d}"), *PropertyPath, Emitted++), Depth + 1, Context);
+            CollectReferences(
+                SetProperty->ElementProp,
+                Helper.GetElementPtr(Index),
+                FString::Printf(TEXT("%s{%d}"), *PropertyPath, Emitted++),
+                Depth + 1,
+                Context);
         }
         return;
     }
@@ -401,7 +381,14 @@ static void CollectReferences(const FProperty* Property, const void* ValuePtr, c
     }
 }
 
-static bool WriteState(UObject* Object, const FString& SourcePath, const FString& OwnerKind, const FString& GASKind, FWriters& Writers, FCounts& Counts, TSet<FString>& SeenOwners)
+static bool WriteState(
+    UObject* Object,
+    const FString& SourcePath,
+    const FString& OwnerKind,
+    const FString& GASKind,
+    FWriters& Writers,
+    FCounts& Counts,
+    TSet<FString>& SeenOwners)
 {
     if (!Object)
     {
@@ -426,7 +413,11 @@ static bool WriteState(UObject* Object, const FString& SourcePath, const FString
             SeenProperties.Add(PropertyKey);
 
             bool bTruncated = false;
-            const FString Value = ExportProperty(Property, Property->ContainerPtrToValuePtr<void>(Object), Object, bTruncated);
+            const FString Value = ExportProperty(
+                Property,
+                Property->ContainerPtrToValuePtr<void>(Object),
+                Object,
+                bTruncated);
             TSharedRef<FJsonObject> Row = MakeShared<FJsonObject>();
             Row->SetStringField(TEXT("source_path"), SourcePath);
             Row->SetStringField(TEXT("owner_path"), OwnerPath);
@@ -471,12 +462,26 @@ static bool ShouldCaptureNested(UObject* Object)
     return Object->GetClass()->GetName().Contains(TEXT("GameplayEffectComponent"), ESearchCase::IgnoreCase);
 }
 
-static bool WriteNestedState(UObject* Root, const FString& SourcePath, const FString& RootKind, FWriters& Writers, FCounts& Counts, TSet<FString>& SeenOwners)
+static bool WriteNestedState(
+    UObject* Root,
+    const FString& SourcePath,
+    const FString& RootKind,
+    FWriters& Writers,
+    FCounts& Counts,
+    TSet<FString>& SeenOwners)
 {
     if (!Root) return true;
     TArray<UObject*> Nested;
-    GetObjectsWithOuter(Root, Nested, EGetObjectsFlags::IncludeNestedObjects, RF_Transient, EInternalObjectFlags::Garbage);
-    Nested.Sort([](const UObject& A, const UObject& B) { return A.GetPathName() < B.GetPathName(); });
+    GetObjectsWithOuter(
+        Root,
+        Nested,
+        EGetObjectsFlags::IncludeNestedObjects,
+        RF_Transient,
+        EInternalObjectFlags::Garbage);
+    Nested.Sort([](const UObject& A, const UObject& B)
+    {
+        return A.GetPathName() < B.GetPathName();
+    });
     const int32 Limit = FMath::Min(Nested.Num(), MaxNestedObjectsPerSubject);
     for (int32 Index = 0; Index < Limit; ++Index)
     {
@@ -484,13 +489,21 @@ static bool WriteNestedState(UObject* Root, const FString& SourcePath, const FSt
         if (!ShouldCaptureNested(Object)) continue;
         FString Kind = ClassifyClass(Object->GetClass());
         if (Kind.IsEmpty()) Kind = RootKind;
+        const bool bWasSeen = SeenOwners.Contains(Object->GetPathName());
         if (!WriteState(Object, SourcePath, TEXT("nested_object"), Kind, Writers, Counts, SeenOwners)) return false;
-        ++Counts.NestedObjects;
+        if (!bWasSeen) ++Counts.NestedObjects;
     }
     return true;
 }
 
-static bool WriteAsset(const FAssetData& Asset, UObject* Object, const FString& Metadata, FWriters& Writers, FCounts& Counts, TSet<FString>& SeenOwners, FString& OutError)
+static bool WriteAsset(
+    const FAssetData& Asset,
+    UObject* Object,
+    const FString& Metadata,
+    FWriters& Writers,
+    FCounts& Counts,
+    TSet<FString>& SeenOwners,
+    FString& OutError)
 {
     const FString AssetPath = Asset.GetSoftObjectPath().ToString();
     UBlueprint* Blueprint = Cast<UBlueprint>(Object);
@@ -507,7 +520,9 @@ static bool WriteAsset(const FAssetData& Asset, UObject* Object, const FString& 
     Row->SetStringField(TEXT("native_parent_class_tag"), AssetTag(Asset, TEXT("NativeParentClass")));
     Row->SetStringField(TEXT("generated_class_tag"), AssetTag(Asset, TEXT("GeneratedClass")));
     Row->SetStringField(TEXT("loaded_object_class"), Object ? Object->GetClass()->GetPathName() : FString());
-    Row->SetStringField(TEXT("generated_class"), Blueprint && Blueprint->GeneratedClass ? Blueprint->GeneratedClass->GetPathName() : FString());
+    Row->SetStringField(
+        TEXT("generated_class"),
+        Blueprint && Blueprint->GeneratedClass ? Blueprint->GeneratedClass->GetPathName() : FString());
     Row->SetStringField(TEXT("gas_kind"), Kind);
     Row->SetBoolField(TEXT("loaded"), Object != nullptr);
     Row->SetStringField(TEXT("provenance"), TEXT("asset_registry_candidate_plus_loaded_object_reflection"));
@@ -547,7 +562,13 @@ static bool WriteAsset(const FAssetData& Asset, UObject* Object, const FString& 
     return true;
 }
 
-static bool WriteClass(UClass* Class, FWriters& Writers, FCounts& Counts, TSet<FString>& SeenClasses, TSet<FString>& SeenOwners, FString& OutError)
+static bool WriteClass(
+    UClass* Class,
+    FWriters& Writers,
+    FCounts& Counts,
+    TSet<FString>& SeenClasses,
+    TSet<FString>& SeenOwners,
+    FString& OutError)
 {
     if (!Class) return true;
     const FString ClassPath = Class->GetPathName();
@@ -584,7 +605,11 @@ static bool WriteClass(UClass* Class, FWriters& Writers, FCounts& Counts, TSet<F
     return true;
 }
 
-static bool WriteManifest(const FString& OutputDir, const FCounts& Counts, bool bSuccess, const FString& Error)
+static bool WriteManifest(
+    const FString& OutputDir,
+    const FCounts& Counts,
+    bool bSuccess,
+    const FString& Error)
 {
     TSharedRef<FJsonObject> Root = MakeShared<FJsonObject>();
     Root->SetNumberField(TEXT("schema_version"), SchemaVersion);
@@ -617,7 +642,8 @@ static bool WriteManifest(const FString& OutputDir, const FCounts& Counts, bool 
     KindNames.Sort();
     for (const FString& Kind : KindNames)
     {
-        Kinds->SetNumberField(Kind, Counts.KindCounts[Kind]);
+        const int64* Count = Counts.KindCounts.Find(Kind);
+        Kinds->SetNumberField(Kind, Count ? *Count : 0);
     }
     Root->SetObjectField(TEXT("asset_kind_counts"), Kinds);
 
@@ -727,9 +753,8 @@ int32 UUnrealAssetToolGASCommandlet::Main(const FString& Params)
         }
     }
 
-    // Close every writer synchronously before publishing the success manifest.
-    // This avoids the exact 4-KiB tail-loss failure previously found in the
-    // systems-only City Sample acceptance pass.
+    // Synchronously finalize JSONL before publishing success. This preserves the
+    // writer-lifetime invariant established during the City Sample schema-5 pass.
     if (!Writers.Close())
     {
         bSuccess = false;
@@ -741,7 +766,6 @@ int32 UUnrealAssetToolGASCommandlet::Main(const FString& Params)
         UE_LOG(LogTemp, Error, TEXT("Could not write GAS capture manifest: %s"), *OutputDir);
         return 3;
     }
-
     if (!bSuccess)
     {
         UE_LOG(LogTemp, Error, TEXT("Focused GAS capture failed: %s"), *Error);
