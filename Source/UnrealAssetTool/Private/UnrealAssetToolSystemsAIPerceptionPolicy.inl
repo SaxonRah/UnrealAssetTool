@@ -1,3 +1,69 @@
+static int64 GAIPerceptionBlueprintCandidates = 0;
+static int64 GAIPerceptionScopedBlueprintCandidates = 0;
+static int64 GAIPerceptionLoadedBlueprints = 0;
+static int64 GAIPerceptionGeneratedClasses = 0;
+static int64 GAIPerceptionScannedBlueprints = 0;
+
+static bool ScanAIPerceptionProjectModelExactLoad(
+    const TArray<FAssetData>& Assets,
+    const FString& ProjectDir,
+    bool bIncludeEngine,
+    bool bIncludeSelf,
+    const FString& ToolPluginDir,
+    FString& OutError)
+{
+    for (const FAssetData& Asset : Assets)
+    {
+        const FString AssetClassPath = Asset.AssetClassPath.ToString();
+        const bool bBlueprintCandidate =
+            Asset.AssetClassPath == UBlueprint::StaticClass()->GetClassPathName() ||
+            AIPerceptionBlueprintCandidate(Asset);
+        if (!bBlueprintCandidate)
+        {
+            continue;
+        }
+        ++GAIPerceptionBlueprintCandidates;
+
+        FString PackageFilename;
+        const bool bHasDiskPackage = FPackageName::DoesPackageExist(
+            Asset.PackageName.ToString(),
+            &PackageFilename,
+            false);
+        if (!bIncludeSelf && bHasDiskPackage && !ToolPluginDir.IsEmpty() &&
+            IsInsideDirectory(PackageFilename, ToolPluginDir))
+        {
+            continue;
+        }
+        if (!bIncludeEngine && (!bHasDiskPackage || !IsInsideDirectory(PackageFilename, ProjectDir)))
+        {
+            continue;
+        }
+        ++GAIPerceptionScopedBlueprintCandidates;
+
+        const FString BlueprintPath = Asset.GetSoftObjectPath().ToString();
+        UObject* AssetObject = StaticLoadObject(UObject::StaticClass(), nullptr, *BlueprintPath);
+        UBlueprint* Blueprint = Cast<UBlueprint>(AssetObject);
+        if (!Blueprint)
+        {
+            continue;
+        }
+        ++GAIPerceptionLoadedBlueprints;
+
+        if (!Blueprint->GeneratedClass.Get())
+        {
+            continue;
+        }
+        ++GAIPerceptionGeneratedClasses;
+
+        if (!ScanAIPerceptionBlueprint(Asset, Blueprint, OutError))
+        {
+            return false;
+        }
+        ++GAIPerceptionScannedBlueprints;
+    }
+    return true;
+}
+
 static bool ScanGASSmartObjectsAndAIPerceptionProjectModels(
     const TArray<FAssetData>& Assets,
     const FString& ProjectDir,
@@ -10,6 +76,11 @@ static bool ScanGASSmartObjectsAndAIPerceptionProjectModels(
     FString& OutError)
 {
     GAIPerceptionCounts = FAIPerceptionCounts();
+    GAIPerceptionBlueprintCandidates = 0;
+    GAIPerceptionScopedBlueprintCandidates = 0;
+    GAIPerceptionLoadedBlueprints = 0;
+    GAIPerceptionGeneratedClasses = 0;
+    GAIPerceptionScannedBlueprints = 0;
 
     const FString OutputDir = SmartObjectSystemsOutputDir();
     if (!GAIPerceptionWriters.Open(OutputDir))
@@ -19,7 +90,7 @@ static bool ScanGASSmartObjectsAndAIPerceptionProjectModels(
         return false;
     }
 
-    const bool bAIPerceptionOk = ScanAIPerceptionProjectModel(
+    const bool bAIPerceptionOk = ScanAIPerceptionProjectModelExactLoad(
         Assets,
         ProjectDir,
         bIncludeEngine,
@@ -75,6 +146,11 @@ static bool UpgradeSystemsManifestToSchema8(const FString& ManifestPath)
         Counts = MakeShared<FJsonObject>();
         Root->SetObjectField(TEXT("counts"), Counts.ToSharedRef());
     }
+    Counts->SetNumberField(TEXT("ai_perception_blueprint_candidates"), GAIPerceptionBlueprintCandidates);
+    Counts->SetNumberField(TEXT("ai_perception_scoped_blueprint_candidates"), GAIPerceptionScopedBlueprintCandidates);
+    Counts->SetNumberField(TEXT("ai_perception_loaded_blueprints"), GAIPerceptionLoadedBlueprints);
+    Counts->SetNumberField(TEXT("ai_perception_generated_classes"), GAIPerceptionGeneratedClasses);
+    Counts->SetNumberField(TEXT("ai_perception_scanned_blueprints"), GAIPerceptionScannedBlueprints);
     Counts->SetNumberField(TEXT("ai_perception_components"), GAIPerceptionCounts.Components);
     Counts->SetNumberField(TEXT("ai_perception_sense_configs"), GAIPerceptionCounts.SenseConfigs);
     Counts->SetNumberField(TEXT("ai_perception_stimuli_sources"), GAIPerceptionCounts.StimuliSources);
@@ -134,7 +210,12 @@ static bool UpgradeSystemsManifestToSchema8(const FString& ManifestPath)
     UE_LOG(
         LogTemp,
         Display,
-        TEXT("UnrealAssetToolSystems: synchronously promoted systems manifest to schema 8 ai_perception components=%lld configs=%lld stimuli_sources=%lld registered_senses=%lld properties=%lld truncated=%lld depth_limit_hits=%lld row_limit_hits=%lld container_limit_hits=%lld"),
+        TEXT("UnrealAssetToolSystems: synchronously promoted systems manifest to schema 8 ai_perception candidates=%lld scoped=%lld loaded_blueprints=%lld generated_classes=%lld scanned_blueprints=%lld components=%lld configs=%lld stimuli_sources=%lld registered_senses=%lld properties=%lld truncated=%lld depth_limit_hits=%lld row_limit_hits=%lld container_limit_hits=%lld"),
+        GAIPerceptionBlueprintCandidates,
+        GAIPerceptionScopedBlueprintCandidates,
+        GAIPerceptionLoadedBlueprints,
+        GAIPerceptionGeneratedClasses,
+        GAIPerceptionScannedBlueprints,
         GAIPerceptionCounts.Components,
         GAIPerceptionCounts.SenseConfigs,
         GAIPerceptionCounts.StimuliSources,
