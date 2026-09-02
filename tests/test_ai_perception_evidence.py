@@ -120,7 +120,7 @@ class AIPerceptionEvidenceTest(unittest.TestCase):
         text = evidence.render_report(evidence.build_report(self.output, rows, include_source=False), row_limit=2)
         self.assertIn("AI PERCEPTION EVIDENCE REPORT", text)
         self.assertIn("diagnostic_only=True semantic_promotion=False runtime_state_captured=False", text)
-        self.assertIn("schema 8", text)
+        self.assertIn("focused UE reflection capture is required", text)
 
     def test_install_wraps_runtime_without_intercepting_other_commands(self) -> None:
         fake = types.SimpleNamespace(main=lambda: 19, _rows=rows)
