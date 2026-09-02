@@ -9,6 +9,7 @@ import uatool_capabilities as _capabilities
 import uatool_inspect as _inspect
 import uatool_project_intelligence as _project_intelligence
 import uatool_smartobject_evidence as _smartobject_evidence
+import uatool_smartobject_capture as _smartobject_capture
 
 # uatool.py imports this facade before its final derive/VFX gates are defined.
 # Install only deferred runtime dispatch hooks here; each hook waits until the
@@ -18,6 +19,7 @@ _capabilities.install()
 _inspect.install()
 _project_intelligence.install()
 _smartobject_evidence.install(_runtime)
+_smartobject_capture.install(_runtime)
 
 __all__ = (
     "VFX_SCHEMA_VERSION", "RAW_FILES", "create_schema", "read_manifest",
