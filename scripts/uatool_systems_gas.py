@@ -176,6 +176,34 @@ def _reject_truncation(rows: list[dict], label: str) -> str | None:
     return None
 
 
+def _blueprint_identity_error(row: dict, root_field: str, label: str) -> str | None:
+    """Validate exact Blueprint object/class/CDO identity, not semantic naming.
+
+    Native extraction already proves GameplayAbility/GameplayEffect/GameplayCue
+    inheritance before emitting a root row. Python must not re-guess that fact
+    from English tokens in GA_*/GE_* Blueprint names or Blueprint parent names.
+    """
+    root = str(row.get(root_field, "") or "")
+    package = str(row.get("package_name", "") or "")
+    generated = str(row.get("generated_class", "") or "")
+    parent = str(row.get("parent_class", "") or "")
+    cdo = str(row.get("cdo_path", "") or "")
+    if not root or not package or not generated or not parent or not cdo:
+        return f"{label} has incomplete class identity: {root or '<blank>'}"
+    if "." not in root:
+        return f"{label} has malformed object path: {root}"
+    root_package, object_name = root.rsplit(".", 1)
+    if root_package != package:
+        return f"{label} package mismatch: {root} -> {package}"
+    expected_generated = f"{package}.{object_name}_C"
+    if generated != expected_generated:
+        return f"{label} generated class mismatch: {root} -> {generated}"
+    expected_cdo = f"{package}.Default__{object_name}_C"
+    if cdo != expected_cdo:
+        return f"{label} CDO mismatch: {root} -> {cdo}"
+    return None
+
+
 def validation_error(output: Path, rows=None) -> str | None:
     output = Path(output)
     rows = rows or _read_rows
@@ -208,25 +236,21 @@ def validation_error(output: Path, rows=None) -> str | None:
     if error: return error
 
     for row in abilities:
-        generated = str(row.get("generated_class", "") or "")
-        parent = str(row.get("parent_class", "") or "")
-        if not generated or not parent or "Ability" not in (generated + parent):
-            return f"GAS ability has unexpected class identity: {row.get('ability_path')}"
+        error = _blueprint_identity_error(row, "ability_path", "GAS ability")
+        if error: return error
         if int(row.get("trigger_count", -1)) < 0 or int(row.get("additional_cost_count", -1)) < 0:
             return f"GAS ability has negative child count: {row.get('ability_path')}"
 
     for row in effects:
-        generated = str(row.get("generated_class", "") or "")
-        parent = str(row.get("parent_class", "") or "")
-        if not generated or "GameplayEffect" not in (generated + parent):
-            return f"GAS GameplayEffect has unexpected class identity: {row.get('gameplay_effect_path')}"
+        error = _blueprint_identity_error(row, "gameplay_effect_path", "GAS GameplayEffect")
+        if error: return error
         for field in ("component_count", "modifier_count", "execution_count", "cue_count"):
             if int(row.get(field, -1)) < 0:
                 return f"GAS GameplayEffect has negative {field}: {row.get('gameplay_effect_path')}"
 
     for row in cues:
-        if "GameplayCue" not in (str(row.get("generated_class", "")) + str(row.get("parent_class", ""))):
-            return f"GAS GameplayCue has unexpected class identity: {row.get('gameplay_cue_path')}"
+        error = _blueprint_identity_error(row, "gameplay_cue_path", "GAS GameplayCue")
+        if error: return error
 
     for row in ability_sets:
         if "AbilitySet" not in str(row.get("class_path", "")):
@@ -338,9 +362,8 @@ def validation_error(output: Path, rows=None) -> str | None:
         if int(row.get("attribute_count", 0) or 0) != attribute_counts[cls]:
             return f"GAS AttributeSet attribute_count mismatch: {cls}"
 
-    # This schema is authored/default-state only. No active specs, prediction
-    # keys, live attribute values, active effects, or replicated ASC state are
-    # represented as first-class rows.
+    # Authored/default state only. No active specs, prediction keys, live
+    # attributes, active effects, or replicated ASC state are first-class rows.
     return None
 
 
@@ -357,6 +380,7 @@ def load_database(conn, output: Path, rows=None) -> None:
             r.get("target_required_tags", ""), r.get("target_blocked_tags", ""), r.get("cost_gameplay_effect_class", ""),
             r.get("cooldown_gameplay_effect_class", ""), int(r.get("trigger_count", 0) or 0),
             int(r.get("additional_cost_count", 0) or 0), _j(r)))
+
     simple_specs = (
         ("gas_ability_triggers.jsonl", "gas_ability_triggers", ("ability_path", "trigger_index", "trigger_tag", "trigger_source", "raw_value", "truncated")),
         ("gas_ability_costs.jsonl", "gas_ability_costs", ("ability_path", "cost_index", "cost_path", "cost_class", "raw_value", "truncated")),
