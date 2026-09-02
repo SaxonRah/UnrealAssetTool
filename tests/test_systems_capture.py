@@ -78,19 +78,23 @@ class SystemsCaptureTests(unittest.TestCase):
 
         direct_finalize = "Writers = FWriters();"
         specialized_finalize = "GMassZoneGraphWriters = FMassZoneGraphWriters();"
+        gas_finalize = "GGASWriters = FGASWriters();"
         success_manifest = "SaveSystemsManifest(OutputDir, Counts, true, FString())"
         self.assertIn(direct_finalize, driver)
         self.assertIn("GMoverWriters = FMoverWriters();", driver)
         self.assertIn("GGameplayCameraWriters = FGameplayCameraWriters();", driver)
         self.assertIn(specialized_finalize, driver)
+        self.assertIn(gas_finalize, driver)
         self.assertLess(driver.index(direct_finalize), driver.index(success_manifest))
         self.assertLess(driver.index(specialized_finalize), driver.index(success_manifest))
+        self.assertLess(driver.index(gas_finalize), driver.index(success_manifest))
 
         # Pre-exit remains only as a defensive fallback. Correctness no longer
         # depends on shutdown delegate ordering.
         self.assertIn('#include "UnrealAssetToolSystemsFinalize.inl"', scanner)
         self.assertIn("FCoreDelegates::OnEnginePreExit.AddStatic", finalizer)
         self.assertNotIn("GetOnPostEngineInit().AddStatic", finalizer)
+        self.assertIn(gas_finalize, finalizer)
 
     def test_canonical_composition_installs_systems_capture_command(self):
         import uatool  # noqa: F401
