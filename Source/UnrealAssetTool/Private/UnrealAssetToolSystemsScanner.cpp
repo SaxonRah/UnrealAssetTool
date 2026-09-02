@@ -52,7 +52,8 @@ namespace UnrealAssetToolSystems
 #include "UnrealAssetToolSystemsGAS.inl"
 #include "UnrealAssetToolSystemsGASPolicy.inl"
 #include "UnrealAssetToolSystemsSmartObjects.inl"
-#define ScanGASProjectModel ScanGASProjectModelPolicy
+#include "UnrealAssetToolSystemsSmartObjectsPolicy.inl"
+#define ScanGASProjectModel ScanGASAndSmartObjectProjectModels
 #include "UnrealAssetToolSystemsDriver.inl"
 #undef ScanGASProjectModel
 #include "UnrealAssetToolSystemsFinalize.inl"
