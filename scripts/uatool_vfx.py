@@ -20,6 +20,7 @@ import uatool_systems as _systems
 import uatool_systems_smartobjects as _systems_smartobjects
 import uatool_project_graph as _project_graph
 import uatool_smartobject_graph as _smartobject_graph
+import uatool_systems_schema7_accept as _systems_schema7_accept
 
 
 def _install_smartobject_capture_membership() -> None:
@@ -50,6 +51,7 @@ if not getattr(_build_perf, "_smartobject_schema7_composition_installed", False)
         _original_build_perf_install(core)
         _systems_smartobjects.install(_systems)
         _smartobject_graph.install(_project_graph)
+        _systems_schema7_accept.install(_runtime, _systems)
         _install_smartobject_capture_membership()
 
     _build_perf.install = _build_perf_install_with_smartobjects
