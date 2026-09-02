@@ -135,6 +135,8 @@ class GASCaptureTest(unittest.TestCase):
         self.assertIn("runtime_state_captured", cpp)
         self.assertIn("Writers.Close()", cpp)
         self.assertLess(cpp.index("Writers.Close()"), cpp.index("WriteManifest(OutputDir"))
+        self.assertIn("Blueprint->GeneratedClass.Get()", cpp)
+        self.assertNotIn("UClass* SubjectClass = Blueprint ? Blueprint->GeneratedClass", cpp)
         self.assertNotIn('#include "Abilities/', cpp)
         self.assertNotIn('#include "AbilitySystemComponent.h"', cpp)
         self.assertNotIn('"GameplayAbilities"', build)
