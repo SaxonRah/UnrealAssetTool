@@ -144,10 +144,6 @@ class SystemsDataflowChaosTest(unittest.TestCase):
         gc[0]["property_name"] = "GeometrySource"
         gc[0]["property_path"] = "GeometrySource"
         write_jsonl(self.output / "geometry_collection_properties.jsonl", gc)
-        with self.assertRaisesRegex(AssertionError, "never"):
-            # Keep unittest's error reporting clear if validation unexpectedly accepts it.
-            if systems.validation_error(self.output, rows) is None:
-                raise AssertionError("never accepted GeometrySource")
         self.assertIn("GeometrySource", systems.validation_error(self.output, rows) or "")
 
     def test_rejects_truncated_behavior_property(self) -> None:
@@ -172,8 +168,8 @@ class SystemsDataflowChaosTest(unittest.TestCase):
         self.assertIn("Graph->GetNodes()", native)
         self.assertIn("Graph->GetConnections()", native)
         self.assertIn("Node->TypedScriptStruct()", native)
-        self.assertIn('TEXT("GeometrySource")', native)
-        self.assertNotIn('TEXT("GeometrySource"),\n        TEXT("DataflowAsset")', native)
+        self.assertNotIn('TEXT("GeometrySource")', native)
+        self.assertNotIn("GeometrySource", systems.GEOMETRY_COLLECTION_BEHAVIOR_ROOTS)
         self.assertIn("UpgradeSystemsManifestToSchema9", policy)
         self.assertIn("FAIPerceptionSystemsFileHelperProxy::SaveStringToFile", policy)
         self.assertIn("FDataflowChaosSystemsFileHelperProxy", scanner)
