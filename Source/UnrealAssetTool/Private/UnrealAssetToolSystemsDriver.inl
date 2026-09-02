@@ -5,7 +5,7 @@ static bool SaveSystemsManifest(
     const FString& Error)
 {
     TSharedRef<FJsonObject> Root = MakeShared<FJsonObject>();
-    Root->SetNumberField(TEXT("schema_version"), 5);
+    Root->SetNumberField(TEXT("schema_version"), 6);
     Root->SetStringField(TEXT("pass"), TEXT("UnrealAssetToolSystems"));
     Root->SetStringField(TEXT("generated_utc"), FDateTime::UtcNow().ToIso8601());
     Root->SetStringField(TEXT("engine_version"), FEngineVersion::Current().ToString());
@@ -62,6 +62,22 @@ static bool SaveSystemsManifest(
     C->SetNumberField(TEXT("mass_agent_components"), GMassZoneGraphCounts.AgentComponents);
     C->SetNumberField(TEXT("zonegraph_shapes"), GMassZoneGraphCounts.ZoneShapes);
     C->SetNumberField(TEXT("zonegraph_shape_points"), GMassZoneGraphCounts.ZoneShapePoints);
+    C->SetNumberField(TEXT("gas_abilities"), GGASCounts.Abilities);
+    C->SetNumberField(TEXT("gas_ability_triggers"), GGASCounts.AbilityTriggers);
+    C->SetNumberField(TEXT("gas_ability_costs"), GGASCounts.AbilityCosts);
+    C->SetNumberField(TEXT("gas_ability_sets"), GGASCounts.AbilitySets);
+    C->SetNumberField(TEXT("gas_ability_set_abilities"), GGASCounts.AbilitySetAbilities);
+    C->SetNumberField(TEXT("gas_ability_set_effects"), GGASCounts.AbilitySetEffects);
+    C->SetNumberField(TEXT("gas_ability_set_attributes"), GGASCounts.AbilitySetAttributes);
+    C->SetNumberField(TEXT("gas_gameplay_effects"), GGASCounts.GameplayEffects);
+    C->SetNumberField(TEXT("gas_gameplay_effect_components"), GGASCounts.GameplayEffectComponents);
+    C->SetNumberField(TEXT("gas_gameplay_effect_modifiers"), GGASCounts.GameplayEffectModifiers);
+    C->SetNumberField(TEXT("gas_gameplay_effect_executions"), GGASCounts.GameplayEffectExecutions);
+    C->SetNumberField(TEXT("gas_gameplay_effect_execution_modifiers"), GGASCounts.GameplayEffectExecutionModifiers);
+    C->SetNumberField(TEXT("gas_gameplay_effect_cues"), GGASCounts.GameplayEffectCues);
+    C->SetNumberField(TEXT("gas_gameplay_cues"), GGASCounts.GameplayCues);
+    C->SetNumberField(TEXT("gas_attribute_sets"), GGASCounts.AttributeSets);
+    C->SetNumberField(TEXT("gas_attributes"), GGASCounts.Attributes);
     Root->SetObjectField(TEXT("counts"), C);
 
     static const TCHAR* Names[] = {
@@ -113,7 +129,23 @@ static bool SaveSystemsManifest(
         TEXT("mass_spawn_generator_assets.jsonl"),
         TEXT("mass_agent_components.jsonl"),
         TEXT("zonegraph_shapes.jsonl"),
-        TEXT("zonegraph_shape_points.jsonl")
+        TEXT("zonegraph_shape_points.jsonl"),
+        TEXT("gas_abilities.jsonl"),
+        TEXT("gas_ability_triggers.jsonl"),
+        TEXT("gas_ability_costs.jsonl"),
+        TEXT("gas_ability_sets.jsonl"),
+        TEXT("gas_ability_set_abilities.jsonl"),
+        TEXT("gas_ability_set_effects.jsonl"),
+        TEXT("gas_ability_set_attributes.jsonl"),
+        TEXT("gas_gameplay_effects.jsonl"),
+        TEXT("gas_gameplay_effect_components.jsonl"),
+        TEXT("gas_gameplay_effect_modifiers.jsonl"),
+        TEXT("gas_gameplay_effect_executions.jsonl"),
+        TEXT("gas_gameplay_effect_execution_modifiers.jsonl"),
+        TEXT("gas_gameplay_effect_cues.jsonl"),
+        TEXT("gas_gameplay_cues.jsonl"),
+        TEXT("gas_attribute_sets.jsonl"),
+        TEXT("gas_attributes.jsonl")
     };
     TArray<TSharedPtr<FJsonValue>> Files;
     for (const TCHAR* Name : Names)
@@ -162,12 +194,14 @@ static bool RunSystemsScan(FString& OutError)
     GMoverCounts = FMoverCounts();
     GGameplayCameraCounts = FGameplayCameraCounts();
     GMassZoneGraphCounts = FMassZoneGraphCounts();
+    GGASCounts = FGASCounts();
     FWriters Writers;
     FCounts Counts;
     if (!Writers.Open(OutputDir) ||
         !GMoverWriters.Open(OutputDir) ||
         !GGameplayCameraWriters.Open(OutputDir) ||
-        !GMassZoneGraphWriters.Open(OutputDir))
+        !GMassZoneGraphWriters.Open(OutputDir) ||
+        !GGASWriters.Open(OutputDir))
     {
         OutError = TEXT("could not create systems JSONL output files");
         SaveSystemsManifest(OutputDir, Counts, false, OutError);
@@ -355,18 +389,29 @@ static bool RunSystemsScan(FString& OutError)
         return false;
     }
 
+    if (!ScanGASProjectModel(
+            Assets,
+            ProjectDir,
+            bIncludeEngine,
+            bIncludeSelf,
+            ToolPluginDir,
+            Writers,
+            Counts,
+            SeenStateOwners,
+            OutError))
+    {
+        SaveSystemsManifest(OutputDir, Counts, false, OutError);
+        return false;
+    }
+
     // All schema streams must be physically finalized before the success
-    // manifest is published. In particular, the schema-3/4/5 writer groups are
-    // static globals and otherwise retain FArchive file-writer buffers until
-    // module shutdown. City Sample proved those buffers flush in 4096-byte
-    // chunks, leaving truncated JSONL tails (and even zero-byte small streams)
-    // when systems-only mode exits immediately. Replacing every writer group
-    // here destroys the active FArchive instances synchronously, before any
-    // success manifest or RequestExit can be observed.
+    // manifest is published. Static specialized writer groups retain FArchive
+    // buffers until destruction, so destroy every group synchronously here.
     Writers = FWriters();
     GMoverWriters = FMoverWriters();
     GGameplayCameraWriters = FGameplayCameraWriters();
     GMassZoneGraphWriters = FMassZoneGraphWriters();
+    GGASWriters = FGASWriters();
     UE_LOG(LogTemp, Display, TEXT("UnrealAssetToolSystems: finalized all JSONL writers before manifest"));
 
     if (!SaveSystemsManifest(OutputDir, Counts, true, FString()))
@@ -378,7 +423,7 @@ static bool RunSystemsScan(FString& OutError)
     UE_LOG(
         LogTemp,
         Display,
-        TEXT("UnrealAssetToolSystems: assets=%lld sequences=%lld audio=%lld actions=%lld contexts=%lld mappings=%lld data_rows=%lld data_fields=%lld curve_tables=%lld curve_rows=%lld curve_keys=%lld primary_data=%lld tag_sources=%lld tag_dictionary=%lld mover_blueprints=%lld mover_components=%lld mover_modes=%lld mover_settings=%lld mover_transitions=%lld camera_assets=%lld camera_rigs=%lld camera_nodes=%lld camera_node_edges=%lld camera_transitions=%lld camera_directors=%lld camera_rig_refs=%lld mass_configs=%lld mass_traits=%lld mass_spawners=%lld mass_entity_types=%lld mass_generators=%lld mass_generator_assets=%lld mass_agents=%lld zone_shapes=%lld zone_points=%lld"),
+        TEXT("UnrealAssetToolSystems: assets=%lld sequences=%lld audio=%lld actions=%lld contexts=%lld mappings=%lld data_rows=%lld data_fields=%lld curve_tables=%lld curve_rows=%lld curve_keys=%lld primary_data=%lld tag_sources=%lld tag_dictionary=%lld mover_blueprints=%lld mover_components=%lld mover_modes=%lld mover_settings=%lld mover_transitions=%lld camera_assets=%lld camera_rigs=%lld camera_nodes=%lld camera_node_edges=%lld camera_transitions=%lld camera_directors=%lld camera_rig_refs=%lld mass_configs=%lld mass_traits=%lld mass_spawners=%lld mass_entity_types=%lld mass_generators=%lld mass_generator_assets=%lld mass_agents=%lld zone_shapes=%lld zone_points=%lld gas_abilities=%lld gas_triggers=%lld gas_costs=%lld gas_sets=%lld gas_set_abilities=%lld gas_set_effects=%lld gas_set_attributes=%lld gas_effects=%lld gas_components=%lld gas_modifiers=%lld gas_executions=%lld gas_execution_modifiers=%lld gas_effect_cues=%lld gas_cues=%lld gas_attribute_sets=%lld gas_attributes=%lld"),
         Counts.Assets,
         Counts.LevelSequences,
         Counts.AudioAssets,
@@ -413,7 +458,23 @@ static bool RunSystemsScan(FString& OutError)
         GMassZoneGraphCounts.SpawnGeneratorAssets,
         GMassZoneGraphCounts.AgentComponents,
         GMassZoneGraphCounts.ZoneShapes,
-        GMassZoneGraphCounts.ZoneShapePoints);
+        GMassZoneGraphCounts.ZoneShapePoints,
+        GGASCounts.Abilities,
+        GGASCounts.AbilityTriggers,
+        GGASCounts.AbilityCosts,
+        GGASCounts.AbilitySets,
+        GGASCounts.AbilitySetAbilities,
+        GGASCounts.AbilitySetEffects,
+        GGASCounts.AbilitySetAttributes,
+        GGASCounts.GameplayEffects,
+        GGASCounts.GameplayEffectComponents,
+        GGASCounts.GameplayEffectModifiers,
+        GGASCounts.GameplayEffectExecutions,
+        GGASCounts.GameplayEffectExecutionModifiers,
+        GGASCounts.GameplayEffectCues,
+        GGASCounts.GameplayCues,
+        GGASCounts.AttributeSets,
+        GGASCounts.Attributes);
     return true;
 }
 
