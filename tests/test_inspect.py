@@ -174,7 +174,7 @@ class InspectReportTest(unittest.TestCase):
         self.conn.commit()
         self._capabilities()
 
-        report = inspect_report.build_report(self.output, "GA_Test")
+        report = inspect_report.build_report(self.output, ability)
         self.assertTrue(report["found"])
         self.assertEqual(report["resolved_path"], ability)
         self.assertEqual(report["primary"]["node_kind"], "gameplay_ability")
@@ -216,6 +216,17 @@ class InspectReportTest(unittest.TestCase):
         self.assertTrue(report["candidates_truncated"])
         self.assertEqual(len(report["candidates"]), 1)
         self.assertEqual(report["candidates"][0]["path"], first)
+
+    def test_unambiguous_object_fragment_can_resolve(self) -> None:
+        ability = "/Game/Abilities/GA_Unique.GA_Unique"
+        package = "/Game/Abilities/GA_Unique"
+        self._node("a", "gameplay_ability", ability)
+        self._node("p", "package", package, coverage="generic_only", family="package", root=0)
+        self.conn.commit()
+
+        report = inspect_report.build_report(self.output, ".GA_Unique")
+        self.assertTrue(report["found"])
+        self.assertEqual(report["resolved_path"], ability)
 
     def test_edge_limit_does_not_change_full_relation_or_quality_counts(self) -> None:
         ability = "/Game/Abilities/GA_Limited.GA_Limited"
