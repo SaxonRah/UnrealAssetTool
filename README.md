@@ -227,7 +227,9 @@ Expensive subsystem investigations do not require a full project rescan. Systems
 The exact GAS graph verifier is available through the canonical launcher:
 
 ```powershell
-python scripts\uatool.py gas-graph-verify "E:\Path\Lyra\.uatool"
+python scripts\uatool.py gas-graph-verify `
+    "E:\Path\Lyra\Lyra.uproject" `
+    --corpus "E:\Path\Lyra\.uatool"
 ```
 
 See [docs/gas-evidence.md](docs/gas-evidence.md) and [docs/systems-schema-6.md](docs/systems-schema-6.md).
