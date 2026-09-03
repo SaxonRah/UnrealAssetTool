@@ -14,6 +14,7 @@ import uatool_ai_perception_capabilities as _ai_perception_capabilities
 import uatool_dataflow_chaos_capabilities as _dataflow_chaos_capabilities
 import uatool_uaf_capabilities as _uaf_capabilities
 import uatool_navigation_capabilities as _navigation_capabilities
+import uatool_gameplay_framework_capabilities as _gameplay_framework_capabilities
 import uatool_inspect as _inspect
 import uatool_project_intelligence as _project_intelligence
 import uatool_smartobject_evidence as _smartobject_evidence
@@ -142,6 +143,7 @@ _ai_perception_capabilities.install(_capabilities)
 _dataflow_chaos_capabilities.install(_capabilities)
 _uaf_capabilities.install(_capabilities)
 _navigation_capabilities.install(_capabilities)
+_gameplay_framework_capabilities.install(_capabilities)
 _systems_only_derive_deferred.install()
 _capabilities.install()
 _inspect.install()
