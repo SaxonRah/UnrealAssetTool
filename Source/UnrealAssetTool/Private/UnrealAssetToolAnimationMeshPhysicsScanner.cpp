@@ -1,10 +1,11 @@
+#include "UnrealAssetToolAnimationMeshPhysicsScanner.h"
+
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
 #include "Dom/JsonObject.h"
 #include "HAL/FileManager.h"
 #include "Interfaces/IPluginManager.h"
 #include "Misc/CommandLine.h"
-#include "Misc/CoreDelegates.h"
 #include "Misc/DateTime.h"
 #include "Misc/EngineVersion.h"
 #include "Misc/FileHelper.h"
@@ -676,11 +677,10 @@ static bool SaveManifest(const FString& OutputDir, const FCounts& Counts, bool b
     return FFileHelper::SaveStringToFile(Text, *FPaths::Combine(OutputDir, TEXT("animation_mesh_physics_manifest.json")), FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
 }
 
-static bool RunScan(FString& OutError)
+bool RunScan(const FString& RequestedOutputDir, FString& OutError)
 {
-    FString OutputDir;
-    FParse::Value(FCommandLine::Get(), TEXT("Output="), OutputDir);
     const FString ProjectDir = NormalizeAbsolutePath(FPaths::ProjectDir());
+    FString OutputDir = RequestedOutputDir;
     if (OutputDir.IsEmpty()) OutputDir = FPaths::Combine(ProjectDir, TEXT(".uatool"));
     else if (FPaths::IsRelative(OutputDir)) OutputDir = FPaths::Combine(ProjectDir, OutputDir);
     OutputDir = NormalizeAbsolutePath(OutputDir);
@@ -762,20 +762,4 @@ static bool RunScan(FString& OutError)
         Counts.SkeletalMeshClothingAssets, Counts.PhysicsAssets, Counts.PhysicsBodies, Counts.PhysicsBodyShapes, Counts.PhysicsConstraints);
     return true;
 }
-
-static void OnPostEngineInit()
-{
-    FString RunCommandlet;
-    FParse::Value(FCommandLine::Get(), TEXT("run="), RunCommandlet);
-    if (!RunCommandlet.Equals(TEXT("UnrealAssetToolWorld"), ESearchCase::IgnoreCase)) return;
-    FString Error;
-    if (!RunScan(Error)) UE_LOG(LogTemp, Error, TEXT("UnrealAssetToolAnimationMeshPhysics: %s"), *Error);
-}
-
-struct FBootstrap
-{
-    FBootstrap() { FCoreDelegates::GetOnPostEngineInit().AddStatic(&OnPostEngineInit); }
-};
-
-static FBootstrap GBootstrap;
 } // namespace UnrealAssetToolAnimationMeshPhysics
