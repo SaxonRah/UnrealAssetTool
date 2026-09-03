@@ -30,6 +30,7 @@ NON_DERIVED_SCRIPTS = frozenset({
     "uatool_mover_report.py",
     "uatool_semantic_quality.py",
     "uatool_semantic_report.py",
+    "uatool_staticmesh_evidence.py",
     "uatool_verify_bundle.py",
     "uatool_zonegraph_mass_evidence.py",
 })
