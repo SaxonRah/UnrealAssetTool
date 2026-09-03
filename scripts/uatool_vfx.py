@@ -19,6 +19,7 @@ import uatool_ai_perception_evidence as _ai_perception_evidence
 import uatool_ai_perception_capture as _ai_perception_capture
 import uatool_dataflow_chaos_evidence as _dataflow_chaos_evidence
 import uatool_dataflow_chaos_capture as _dataflow_chaos_capture
+import uatool_animnext_evidence as _animnext_evidence
 
 # Smart Objects schema 7, AI Perception schema 8 and Dataflow/Geometry
 # Collection schema 9 are composed after the existing Mass -> GAS systems
@@ -144,6 +145,7 @@ _ai_perception_evidence.install(_runtime)
 _ai_perception_capture.install(_runtime)
 _dataflow_chaos_evidence.install(_runtime)
 _dataflow_chaos_capture.install(_runtime)
+_animnext_evidence.install(_runtime)
 
 __all__ = (
     "VFX_SCHEMA_VERSION", "RAW_FILES", "create_schema", "read_manifest",
