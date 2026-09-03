@@ -23,8 +23,8 @@ structural=12
 world=12
 animation=1
 vfx=1
-systems=9
-derived=25
+systems=10
+derived=26
 capabilities=1
 ```
 
@@ -61,7 +61,7 @@ capabilities=1
 | IK Rig / IK Retargeter | `first_class_depth_pending` | Bones/chains/goals/solvers, rig refs, ops and poses | Solver/op-specific semantics are mostly concrete type + raw authored state |
 | Niagara | `first_class_depth_pending` | Systems, handles, emitters/versions, renderers, stages, scripts, data channels, parameter collections, effect types | Stateful module/function execution-stack semantics are not normalized |
 | Niagara Stateless | `first_class` | Stateless emitters, ordered modules/renderers and child state | Runtime simulation output not evaluated |
-| Cascade | `first_class` | System -> emitter -> LOD -> module topology and state | Runtime particle simulation not evaluated |
+| Cascade | `first_class` | System -> emitter -> LOD -> module topology and state | Runtime particle simulation output not evaluated |
 | LevelSequence / Sequencer | `first_class_depth_pending` | Bindings, tracks, sections, channels, timing/rates and reflected refs | Individual channel keys and family-specific track semantics are not normalized |
 | MetaSound | `first_class_depth_pending` | Frontend nodes and exact node/vertex edge endpoints | Vertex declarations/literals/interfaces/class registry semantics are not normalized |
 | SoundCue | `first_class_depth_pending` | Nodes, child counts, node state/references | No dedicated normalized SoundCue edge stream yet |
@@ -79,6 +79,7 @@ capabilities=1
 | AI Perception | `first_class` | Authored perception-component templates, ordered sense configs, dominant sense, sense implementations/settings, stimuli-source templates, ordered registered senses and exact schema-24 graph semantics | Live listener state, perceived actors, stimulus history, runtime registration state and sense-query results are not captured |
 | Dataflow | `first_class` | Project-wide `UDataflow` graphs, concrete node structs, ordered input/output pins, exact links, authored asset/node properties and direct object references with exact schema-25 graph semantics | Runtime graph evaluation/results are not captured; higher-level Hair/Cloth/Flesh/Vehicles semantics are not inferred merely from Dataflow use |
 | Geometry Collection / Chaos destruction | `first_class` | Authored clustering, damage, connection, mass/sleep/removal, SizeSpecificData, physics material, DataflowInstance/Overrides and nullable DataflowAsset state with exact schema-25 graph semantics | `GeometrySource` construction provenance is excluded; solver state, dynamic transforms, live break/collision/removal history, cache playback and runtime Field results are not captured |
+| AnimNext / UAF | `first_class` | Exact `UAFSystem`/`UAFAnimGraph` identity, entries, variables/defaults/bindings, authored components, runtime entry points, editor-side RigVM graphs/nodes/pins/links and exact variable-node resolution with schema-26 graph semantics | No RigVM execution, current pose/value state, ticking, runtime event execution, injection history or transient graph-instance state |
 | Typed project graph | `first_class` | Typed nodes/edges, provenance, coverage and quality classes | It reflects extractor depth; it must not imply unsupported subsystem semantics |
 | Capability contract | `first_class` | Corpus schema versions, tool/corpus coverage, canonical streams, derived relations, runtime boundaries, partial-corpus state and acceptance provenance | It describes evidence available to the corpus; it does not manufacture new semantic facts |
 
@@ -105,7 +106,6 @@ Repository scanning has no dedicated semantic model yet for these major UE 5.8 f
 
 | Family | Why it matters for gameplay understanding | Suggested priority |
 | --- | --- | --- |
-| AnimNext | New animation graph/data ecosystem not represented by animation schema 1 | **High — next evidence slice** |
 | Groom / Hair | Groom assets/bindings/physics relationships beyond the reusable Dataflow substrate | Medium for character-heavy projects |
 | Texture/RenderTarget/VirtualTexture internals | Rendering resource relationships beyond material refs | Medium-low for gameplay-focused indexing |
 | Iris/replication configuration | Important runtime networking system but mostly code/config rather than content graph | Medium-low unless networking analysis becomes a goal |
@@ -189,6 +189,16 @@ All 29 representative collections have `DataflowAsset=None`, so no Geometry Coll
 
 See [dataflow-chaos-schema9.md](dataflow-chaos-schema9.md).
 
+## 11. AnimNext / UAF boundary is authored/default, not runtime execution
+
+Systems schema 10 and derived schema 26 are accepted on the GameAnimationSample-hosted UE 5.8.2 representative UAF corpus. The normalized model covers exact `UAFSystem`/`UAFAnimGraph` identity, entries, variables, components, runtime entry points, editor-side RigVM topology and exact RigVM variable-node -> UAF declaration resolution.
+
+The real acceptance inspected 11 assets from the explicitly enabled UAF plugin roots, promoted exactly 3 loaded first-class UAF assets, emitted 6 graphs / 22 nodes / 90 pins / 19 links with zero truncated values, and verified exactly 213 specialist schema-26 edges.
+
+No VM execution, live pose/value state, ticking, runtime event execution, injection history or transient graph instances are claimed.
+
+See [animnext-uaf-schema10.md](animnext-uaf-schema10.md).
+
 ---
 
 # Issue #14 status
@@ -205,15 +215,10 @@ Gameplay Ability System (systems schema 6 / derived schema 22)
 Smart Objects (systems schema 7 / derived schema 23)
 AI Perception (systems schema 8 / derived schema 24)
 Dataflow / Geometry Collection (systems schema 9 / derived schema 25)
+AnimNext / UAF (systems schema 10 / derived schema 26)
 ```
 
-Remaining evidence-driven expansion:
-
-```text
-AnimNext
-```
-
-Gameplay Framework summary and authored Navigation are also useful follow-up normalization work, but they are better treated as project-intelligence/depth slices than as a requirement to keep the original umbrella issue open indefinitely.
+The original evidence-driven gameplay-family expansion tracked by issue #14 is complete after the AnimNext/UAF acceptance. Gameplay Framework summary and authored Navigation remain useful follow-up normalization work, but they are project-intelligence/depth slices rather than reasons to keep that umbrella expansion open indefinitely.
 
 ---
 
@@ -225,11 +230,12 @@ Gameplay Framework summary and authored Navigation are also useful follow-up nor
 | World | Yes | Yes | Yes | Yes | ContentExamples/StackOBot/City Sample + others |
 | Animation | Yes | Yes | Yes | Yes | GASP + ContentExamples |
 | VFX | Yes | Yes | Yes | Yes | ContentExamples + StackOBot/Niagara Examples |
-| Systems schema 9 | Yes | Yes | Yes | Yes | StackOBot + ContentExamples + GASP + City Sample + Lyra, with specialist corpus gates by family |
+| Systems schema 10 | Yes | Yes | Yes | Yes | StackOBot + ContentExamples + GASP + City Sample + Lyra, with specialist corpus gates by family |
 | GAS schema-6 slice | Yes | Yes | Yes | Yes, exact schema-22 contract | Lyra UE 5.8.2 |
 | Smart Objects schema-7 slice | Yes | Yes | Yes | Yes, exact schema-23 contract | City Sample UE 5.8.2 |
 | AI Perception schema-8 slice | Yes | Yes | Yes | Yes, exact schema-24 contract | ContentExamples UE 5.8.2 |
 | Dataflow / Geometry Collection schema-9 slice | Yes | Yes | Yes | Yes, exact schema-25 contract | ContentExamples UE 5.8.2 |
+| AnimNext / UAF schema-10 slice | Yes | Yes | Yes | Yes, exact 213-edge schema-26 contract | GameAnimationSample-hosted UE 5.8.2 representative UAF content |
 | Project graph/neighborhoods | Yes | Yes | Yes | n/a | StackOBot + ContentExamples + GASP + City Sample + Lyra |
 | Capability contract | Yes | n/a | `uatool capabilities` | Describes graph/canonical coverage | Synthetic regression + emitted per corpus |
 
@@ -255,6 +261,7 @@ Focused Python regression coverage includes:
 - Smart Objects systems schema-7 validation, focused capture/promotion and exact schema-23 graph verification;
 - AI Perception systems schema-8 normalization, discovery/capture regression gates, null-array preservation, capability promotion and exact schema-24 graph verification;
 - Dataflow / Geometry Collection systems schema-9 graph/cardinality validation, behavior-boundary enforcement, capability promotion and exact schema-25 graph verification;
+- AnimNext / UAF systems schema-10 identity/discovery/cardinality validation, accepted representative capture, exact variable-use resolution and exact schema-26 graph verification;
 - systems validation/SQLite/project-graph integration;
 - derived freshness, neighborhood compaction and storage invariants;
 - capability-contract full-corpus/partial-corpus/determinism/deferred-composition behavior.
@@ -265,6 +272,6 @@ Real UE corpora remain required because unit tests cannot substitute for actual 
 
 # What “complete” means now
 
-The original planned indexer roadmap plus the accepted Gameplay Tags, gameplay-data, Mover, Gameplay Cameras, Mass/authored-ZoneGraph, GAS, Smart Objects, AI Perception and Dataflow/Geometry Collection slices are implemented and corpus-validated.
+The original planned indexer roadmap plus the accepted Gameplay Tags, gameplay-data, Mover, Gameplay Cameras, Mass/authored-ZoneGraph, GAS, Smart Objects, AI Perception, Dataflow/Geometry Collection and AnimNext/UAF slices are implemented and corpus-validated.
 
 The repository is **not complete with respect to the entire Unreal Engine 5.8 content ecosystem**, and it should not claim to be. The 1.0 target is trustworthy semantic infrastructure with explicit coverage, deterministic/provenance-aware graph output, stable lifecycle commands and bounded performance—not “100% of Unreal classes.”
