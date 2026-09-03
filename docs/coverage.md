@@ -23,8 +23,8 @@ structural=12
 world=12
 animation=1
 vfx=1
-systems=8
-derived=24
+systems=9
+derived=25
 capabilities=1
 ```
 
@@ -77,6 +77,8 @@ capabilities=1
 | Gameplay Ability System | `first_class` | GameplayAbility identity/defaults/triggers/cost/cooldown; Ability Sets/grants; GameplayEffects/components/modifiers/executions/cues; Gameplay Cues; AttributeSets/attributes; exact schema-22 graph promotion | Active specs, live grants/effects, prediction, replicated ASC state, runtime cue history and live attribute values are not captured |
 | Smart Objects | `first_class` | Definition identity, ordered slots, default/slot behaviors, world-condition/selection schemas, reflected behavior properties and exact schema-23 graph semantics | Runtime occupancy, claims, reservations, subsystem handles and execution history are not captured |
 | AI Perception | `first_class` | Authored perception-component templates, ordered sense configs, dominant sense, sense implementations/settings, stimuli-source templates, ordered registered senses and exact schema-24 graph semantics | Live listener state, perceived actors, stimulus history, runtime registration state and sense-query results are not captured |
+| Dataflow | `first_class` | Project-wide `UDataflow` graphs, concrete node structs, ordered input/output pins, exact links, authored asset/node properties and direct object references with exact schema-25 graph semantics | Runtime graph evaluation/results are not captured; higher-level Hair/Cloth/Flesh/Vehicles semantics are not inferred merely from Dataflow use |
+| Geometry Collection / Chaos destruction | `first_class` | Authored clustering, damage, connection, mass/sleep/removal, SizeSpecificData, physics material, DataflowInstance/Overrides and nullable DataflowAsset state with exact schema-25 graph semantics | `GeometrySource` construction provenance is excluded; solver state, dynamic transforms, live break/collision/removal history, cache playback and runtime Field results are not captured |
 | Typed project graph | `first_class` | Typed nodes/edges, provenance, coverage and quality classes | It reflects extractor depth; it must not imply unsupported subsystem semantics |
 | Capability contract | `first_class` | Corpus schema versions, tool/corpus coverage, canonical streams, derived relations, runtime boundaries, partial-corpus state and acceptance provenance | It describes evidence available to the corpus; it does not manufacture new semantic facts |
 
@@ -103,10 +105,8 @@ Repository scanning has no dedicated semantic model yet for these major UE 5.8 f
 
 | Family | Why it matters for gameplay understanding | Suggested priority |
 | --- | --- | --- |
-| Dataflow | General-purpose node graph used by Geometry Collection/Chaos Cloth/Flesh and other authoring | **High — next evidence slice** |
-| Geometry Collection / Chaos destruction | Breakable geometry, clustering, materials and Dataflow links | High alongside Dataflow |
-| AnimNext | New animation graph/data ecosystem not represented by animation schema 1 | Medium-high for forward-looking animation projects |
-| Groom / Hair | Groom assets/bindings/physics relationships | Medium for character-heavy projects |
+| AnimNext | New animation graph/data ecosystem not represented by animation schema 1 | **High — next evidence slice** |
+| Groom / Hair | Groom assets/bindings/physics relationships beyond the reusable Dataflow substrate | Medium for character-heavy projects |
 | Texture/RenderTarget/VirtualTexture internals | Rendering resource relationships beyond material refs | Medium-low for gameplay-focused indexing |
 | Iris/replication configuration | Important runtime networking system but mostly code/config rather than content graph | Medium-low unless networking analysis becomes a goal |
 
@@ -181,6 +181,14 @@ Systems schema 8 and derived schema 24 are accepted on ContentExamples. The norm
 
 See [ai-perception-schema8.md](ai-perception-schema8.md).
 
+## 10. Dataflow / Geometry Collection boundary is authored, not evaluated Chaos state
+
+Systems schema 9 and derived schema 25 are accepted on ContentExamples. Dataflow is modeled as a reusable project-wide graph substrate; Geometry Collection is modeled as authored destruction behavior. The accepted corpus contains 12 Dataflows and 29 Geometry Collections with an exact 4,595-edge schema-25 specialist graph.
+
+All 29 representative collections have `DataflowAsset=None`, so no Geometry Collection -> Dataflow relationship is manufactured. `GeometrySource` remains excluded from the specialist behavioral surface.
+
+See [dataflow-chaos-schema9.md](dataflow-chaos-schema9.md).
+
 ---
 
 # Issue #14 status
@@ -196,12 +204,12 @@ ZoneGraph + Mass (authored schema-5 boundary)
 Gameplay Ability System (systems schema 6 / derived schema 22)
 Smart Objects (systems schema 7 / derived schema 23)
 AI Perception (systems schema 8 / derived schema 24)
+Dataflow / Geometry Collection (systems schema 9 / derived schema 25)
 ```
 
 Remaining evidence-driven expansion:
 
 ```text
-Dataflow / GeometryCollection
 AnimNext
 ```
 
@@ -217,10 +225,11 @@ Gameplay Framework summary and authored Navigation are also useful follow-up nor
 | World | Yes | Yes | Yes | Yes | ContentExamples/StackOBot/City Sample + others |
 | Animation | Yes | Yes | Yes | Yes | GASP + ContentExamples |
 | VFX | Yes | Yes | Yes | Yes | ContentExamples + StackOBot/Niagara Examples |
-| Systems schema 8 | Yes | Yes | Yes | Yes | StackOBot + ContentExamples + GASP + City Sample + Lyra, with specialist corpus gates by family |
+| Systems schema 9 | Yes | Yes | Yes | Yes | StackOBot + ContentExamples + GASP + City Sample + Lyra, with specialist corpus gates by family |
 | GAS schema-6 slice | Yes | Yes | Yes | Yes, exact schema-22 contract | Lyra UE 5.8.2 |
 | Smart Objects schema-7 slice | Yes | Yes | Yes | Yes, exact schema-23 contract | City Sample UE 5.8.2 |
 | AI Perception schema-8 slice | Yes | Yes | Yes | Yes, exact schema-24 contract | ContentExamples UE 5.8.2 |
+| Dataflow / Geometry Collection schema-9 slice | Yes | Yes | Yes | Yes, exact schema-25 contract | ContentExamples UE 5.8.2 |
 | Project graph/neighborhoods | Yes | Yes | Yes | n/a | StackOBot + ContentExamples + GASP + City Sample + Lyra |
 | Capability contract | Yes | n/a | `uatool capabilities` | Describes graph/canonical coverage | Synthetic regression + emitted per corpus |
 
@@ -245,6 +254,7 @@ Focused Python regression coverage includes:
 - GAS systems schema-6 validation, focused capture/promotion, candidate selection, exact schema-22 graph construction and real-corpus acceptance verification;
 - Smart Objects systems schema-7 validation, focused capture/promotion and exact schema-23 graph verification;
 - AI Perception systems schema-8 normalization, discovery/capture regression gates, null-array preservation, capability promotion and exact schema-24 graph verification;
+- Dataflow / Geometry Collection systems schema-9 graph/cardinality validation, behavior-boundary enforcement, capability promotion and exact schema-25 graph verification;
 - systems validation/SQLite/project-graph integration;
 - derived freshness, neighborhood compaction and storage invariants;
 - capability-contract full-corpus/partial-corpus/determinism/deferred-composition behavior.
@@ -255,10 +265,6 @@ Real UE corpora remain required because unit tests cannot substitute for actual 
 
 # What “complete” means now
 
-The original planned indexer roadmap plus the accepted Gameplay Tags, gameplay-data, Mover, Gameplay Cameras, Mass/authored-ZoneGraph, GAS, Smart Objects and AI Perception slices are implemented and corpus-validated.
+The original planned indexer roadmap plus the accepted Gameplay Tags, gameplay-data, Mover, Gameplay Cameras, Mass/authored-ZoneGraph, GAS, Smart Objects, AI Perception and Dataflow/Geometry Collection slices are implemented and corpus-validated.
 
 The repository is **not complete with respect to the entire Unreal Engine 5.8 content ecosystem**, and it should not claim to be. The 1.0 target is trustworthy semantic infrastructure with explicit coverage, deterministic/provenance-aware graph output, stable lifecycle commands and bounded performance—not “100% of Unreal classes.”
-
-Expansion remains evidence-driven: acquire a representative corpus, inspect exact reflected/serialized facts, then normalize only semantics the evidence supports.
-
-See [architecture.md](architecture.md), [schema.md](schema.md), [animation-schema-1.md](animation-schema-1.md), [vfx-schema-1.md](vfx-schema-1.md), [zonegraph-mass-schema5.md](zonegraph-mass-schema5.md), [systems-schema-6.md](systems-schema-6.md) and [ai-perception-schema8.md](ai-perception-schema8.md) for maintained technical references. Historical systems contracts remain in [systems-schema-1.md](systems-schema-1.md), [systems-schema-2.md](systems-schema-2.md) and [systems-schema-4.md](systems-schema-4.md).
