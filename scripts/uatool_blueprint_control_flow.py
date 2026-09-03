@@ -2,10 +2,14 @@
 """Derive generic semantic annotations for Blueprint execution block edges.
 
 The existing execution-block graph remains authoritative. This layer preserves a
-one-to-one row for every block edge and adds deterministic control meaning where
-the source node proves it: branch predicate/polarity, switch selector/case, and
-sequence output order. Unsupported shapes remain explicit generic flow rather
-than being guessed.
+one-to-one row for every complete block-edge endpoint identity and adds
+deterministic control meaning where the source node proves it: branch
+predicate/polarity, switch selector/case, and sequence output order. Unsupported
+shapes remain explicit generic flow rather than being guessed.
+
+Schema 2 additionally preserves target node/exec-pin identity. That distinction
+is semantically necessary when multiple paths enter different exec pins on the
+same target node/block (for example opening versus closing a Gate macro).
 
 This is an independently versioned derived layer. It is installed before the
 canonical composition root captures core globals, so it participates in derive,
@@ -20,17 +24,18 @@ import re
 import sqlite3
 from pathlib import Path
 
-CONTROL_FLOW_SCHEMA_VERSION = 1
+CONTROL_FLOW_SCHEMA_VERSION = 2
 DERIVED_FILES = ("blueprint_control_edges.jsonl",)
 
 _SQL = """
 CREATE TABLE blueprint_control_edges(
  control_edge_id TEXT PRIMARY KEY,blueprint_path TEXT NOT NULL,graph_id TEXT NOT NULL,graph_name TEXT NOT NULL,
- source_block_id TEXT NOT NULL,target_block_id TEXT NOT NULL,source_node_id TEXT NOT NULL,source_node_class TEXT NOT NULL,
- source_operation TEXT NOT NULL,source_pin_name TEXT NOT NULL,source_pin_display_name TEXT NOT NULL,
- control_kind TEXT NOT NULL,condition_dependency_id TEXT NOT NULL,condition_text TEXT NOT NULL,
- condition_polarity INTEGER,selector_dependency_id TEXT NOT NULL,selector_text TEXT NOT NULL,
- case_name TEXT NOT NULL,case_raw_name TEXT NOT NULL,sequence_index INTEGER,json TEXT NOT NULL);
+ source_block_id TEXT NOT NULL,target_block_id TEXT NOT NULL,source_node_id TEXT NOT NULL,target_node_id TEXT NOT NULL,
+ source_node_class TEXT NOT NULL,source_operation TEXT NOT NULL,source_pin_name TEXT NOT NULL,
+ source_pin_display_name TEXT NOT NULL,target_pin_name TEXT NOT NULL,control_kind TEXT NOT NULL,
+ condition_dependency_id TEXT NOT NULL,condition_text TEXT NOT NULL,condition_polarity INTEGER,
+ selector_dependency_id TEXT NOT NULL,selector_text TEXT NOT NULL,case_name TEXT NOT NULL,
+ case_raw_name TEXT NOT NULL,sequence_index INTEGER,json TEXT NOT NULL);
 CREATE INDEX bp_control_edges_graph_idx ON blueprint_control_edges(blueprint_path,graph_id,source_block_id);
 CREATE INDEX bp_control_edges_kind_idx ON blueprint_control_edges(control_kind,source_operation);
 """
@@ -129,10 +134,12 @@ def derive(output: Path, rows=None) -> list[dict]:
     result: list[dict] = []
     for edge in block_edges:
         source_node_id = str(edge.get("source_node_id", "") or "")
+        target_node_id = str(edge.get("target_node_id", "") or "")
         source_block_id = str(edge.get("source_block_id", "") or "")
         target_block_id = str(edge.get("target_block_id", "") or "")
         raw_pin = str(edge.get("source_pin_name", "") or "")
         display_pin = str(edge.get("source_pin_display_name", "") or raw_pin)
+        target_pin_name = str(edge.get("target_pin_name", "") or "")
         node_class = node_classes.get(source_node_id, "")
         graph_name = str(edge.get("graph_name", "") or "")
         if not graph_name:
@@ -174,12 +181,14 @@ def derive(output: Path, rows=None) -> list[dict]:
 
         result.append({
             "control_edge_id": _id(
-                str(edge.get("blueprint_path", "")),
-                str(edge.get("graph_id", "")),
+                str(edge.get("blueprint_path", "") or ""),
+                str(edge.get("graph_id", "") or ""),
                 source_block_id,
                 target_block_id,
                 source_node_id,
+                target_node_id,
                 raw_pin,
+                target_pin_name,
             ),
             "schema_version": CONTROL_FLOW_SCHEMA_VERSION,
             "blueprint_path": str(edge.get("blueprint_path", "") or ""),
@@ -188,10 +197,12 @@ def derive(output: Path, rows=None) -> list[dict]:
             "source_block_id": source_block_id,
             "target_block_id": target_block_id,
             "source_node_id": source_node_id,
+            "target_node_id": target_node_id,
             "source_node_class": node_class,
             "source_operation": source_operation,
             "source_pin_name": raw_pin,
             "source_pin_display_name": display_pin,
+            "target_pin_name": target_pin_name,
             "control_kind": control_kind,
             "condition_dependency_id": condition_dependency_id,
             "condition_text": condition_text,
@@ -205,7 +216,8 @@ def derive(output: Path, rows=None) -> list[dict]:
 
     result.sort(key=lambda row: (
         row["blueprint_path"], row["graph_id"], row["source_block_id"],
-        row["source_pin_name"], row["target_block_id"], row["control_edge_id"],
+        row["source_pin_name"], row["target_block_id"], row["target_node_id"],
+        row["target_pin_name"], row["control_edge_id"],
     ))
     return result
 
@@ -222,15 +234,16 @@ def validation_error(output: Path, rows=None) -> str | None:
         return (
             str(row.get("blueprint_path", "")), str(row.get("graph_id", "")),
             str(row.get("source_block_id", "")), str(row.get("target_block_id", "")),
-            str(row.get("source_node_id", "")), str(row.get("source_pin_name", "")),
+            str(row.get("source_node_id", "")), str(row.get("target_node_id", "")),
+            str(row.get("source_pin_name", "")), str(row.get("target_pin_name", "")),
         )
 
     base_keys = {key(row) for row in base}
     control_keys = {key(row) for row in control}
     if base_keys != control_keys:
-        return "Blueprint control edges do not preserve the execution-block edge set"
+        return "Blueprint control edges do not preserve the complete execution-block endpoint set"
     if len(control_keys) != len(control):
-        return "Blueprint control edges contain duplicate source/target/pin identities"
+        return "Blueprint control edges contain duplicate source/target node+pin identities"
 
     graph_names_by_block = _block_graph_names(output, rows)
     for row in control:
@@ -266,13 +279,14 @@ def load_database(conn, output: Path, rows=None) -> None:
     rows = rows or _rows
     for row in rows(Path(output) / "blueprint_control_edges.jsonl"):
         conn.execute(
-            "INSERT OR REPLACE INTO blueprint_control_edges VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT OR REPLACE INTO blueprint_control_edges VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 row.get("control_edge_id", ""), row.get("blueprint_path", ""), row.get("graph_id", ""),
                 row.get("graph_name", ""), row.get("source_block_id", ""), row.get("target_block_id", ""),
-                row.get("source_node_id", ""), row.get("source_node_class", ""), row.get("source_operation", ""),
-                row.get("source_pin_name", ""), row.get("source_pin_display_name", ""), row.get("control_kind", ""),
-                row.get("condition_dependency_id", ""), row.get("condition_text", ""),
+                row.get("source_node_id", ""), row.get("target_node_id", ""), row.get("source_node_class", ""),
+                row.get("source_operation", ""), row.get("source_pin_name", ""), row.get("source_pin_display_name", ""),
+                row.get("target_pin_name", ""), row.get("control_kind", ""), row.get("condition_dependency_id", ""),
+                row.get("condition_text", ""),
                 None if row.get("condition_polarity") is None else int(bool(row.get("condition_polarity"))),
                 row.get("selector_dependency_id", ""), row.get("selector_text", ""), row.get("case_name", ""),
                 row.get("case_raw_name", ""), row.get("sequence_index"), _j(row),
@@ -287,16 +301,17 @@ def query_table(conn, print_rows, pattern: str, limit: int) -> None:
     print_rows(
         conn.execute(
             """SELECT blueprint_path,graph_name,source_block_id,target_block_id,control_kind,
-                      source_pin_display_name,condition_text,selector_text,case_name,sequence_index
+                      source_pin_display_name,target_pin_name,condition_text,selector_text,case_name,sequence_index
                FROM blueprint_control_edges
                WHERE blueprint_path LIKE ? OR graph_name LIKE ? OR control_kind LIKE ?
+                  OR source_pin_display_name LIKE ? OR target_pin_name LIKE ?
                   OR condition_text LIKE ? OR selector_text LIKE ? OR case_name LIKE ?
                LIMIT ?""",
-            (pattern, pattern, pattern, pattern, pattern, pattern, limit),
+            (pattern, pattern, pattern, pattern, pattern, pattern, pattern, pattern, limit),
         ),
         (
             "blueprint_path", "graph_name", "source_block_id", "target_block_id", "control_kind",
-            "source_pin_display_name", "condition_text", "selector_text", "case_name", "sequence_index",
+            "source_pin_display_name", "target_pin_name", "condition_text", "selector_text", "case_name", "sequence_index",
         ),
     )
 
