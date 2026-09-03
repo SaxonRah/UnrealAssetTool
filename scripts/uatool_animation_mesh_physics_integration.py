@@ -74,7 +74,11 @@ def install(runtime_module, core_module) -> None:
     def create_schema(conn) -> None:
         ensure_animation_api()
         original_create_schema(conn)
-        mesh_physics.create_schema(conn)
+        exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='skeletal_meshes'"
+        ).fetchone()
+        if not exists:
+            mesh_physics.create_schema(conn)
 
     def derive_output(output):
         ensure_animation_api()
@@ -93,10 +97,6 @@ def install(runtime_module, core_module) -> None:
         if (output / "animation_mesh_physics_manifest.json").is_file():
             conn = sqlite3.connect(db)
             try:
-                # Historical databases may have been created before this
-                # integration's create_schema hook. CREATE IF NOT EXISTS is not
-                # used in the schema text, so only create the specialist tables
-                # when absent.
                 exists = conn.execute(
                     "SELECT 1 FROM sqlite_master WHERE type='table' AND name='skeletal_meshes'"
                 ).fetchone()
