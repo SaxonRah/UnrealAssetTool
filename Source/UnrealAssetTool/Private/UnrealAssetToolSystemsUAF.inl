@@ -285,7 +285,7 @@ static bool UAFWriteRigVMPin(const FString& AssetPath, const FString& GraphPath,
     Row->SetStringField(TEXT("cpp_type_object"), Pin->GetCPPTypeObject() ? Pin->GetCPPTypeObject()->GetPathName() : FString());
     Row->SetStringField(TEXT("default_value"), Pin->GetDefaultValue());
     Row->SetStringField(TEXT("original_default_value"), Pin->GetOriginalDefaultValue());
-    Row->SetBoolField(TEXT("hidden"), Pin->IsHidden());
+    Row->SetBoolField(TEXT("hidden"), Pin->GetDirection() == ERigVMPinDirection::Hidden);
     Row->SetNumberField(TEXT("subpin_count"), Pin->GetSubPins().Num());
     if (!GUAFWriters.RigVMPins.Write(Row)) return false;
     ++GUAFCounts.RigVMPins;
