@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Commandlets/Commandlet.h"
+#include "RigVMModel/RigVMSchema.h"
 #include "UnrealAssetToolUAFCommandlet.generated.h"
 
 UCLASS()
