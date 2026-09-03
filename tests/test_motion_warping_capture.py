@@ -78,6 +78,7 @@ class MotionWarpingCaptureTest(unittest.TestCase):
             "active_root_motion_modifiers_captured": False,
             "root_motion_evaluated": False,
             "maps_loaded": False,
+            "motion_warping_module_linked": False,
             "counts": {
                 "animation_candidates": 1,
                 "animation_assets_loaded": 1,
@@ -123,17 +124,19 @@ class MotionWarpingCaptureTest(unittest.TestCase):
             ROOT / "Source/UnrealAssetTool/Public/UnrealAssetToolMotionWarpingCommandlet.h"
         ).read_text(encoding="utf-8")
 
-        self.assertIn('"MotionWarping"', build)
+        self.assertNotIn('"MotionWarping"', build)
         self.assertIn("UUnrealAssetToolMotionWarpingCommandlet", header)
-        self.assertIn("UAnimNotifyState_MotionWarping", source)
-        self.assertIn("NotifyState->RootMotionModifier.Get()", source)
+        self.assertIn('TEXT("/Script/MotionWarping.AnimNotifyState_MotionWarping")', source)
+        self.assertIn('ObjectField(NotifyState, TEXT("RootMotionModifier"))', source)
         self.assertIn("CPF_Edit", source)
         self.assertIn("CPF_Transient", source)
-        self.assertIn("Warp->WarpTargetName", source)
-        self.assertIn("Warp->bWarpTranslation", source)
-        self.assertIn("Warp->bWarpRotation", source)
-        self.assertIn("Warp->RotationType", source)
-        self.assertIn("Warp->RotationMethod", source)
+        self.assertIn('PropertyText(Modifier, TEXT("WarpTargetName"))', source)
+        self.assertIn('TEXT("bWarpTranslation")', source)
+        self.assertIn('TEXT("bWarpRotation")', source)
+        self.assertIn('PropertyText(Modifier, TEXT("RotationType"))', source)
+        self.assertIn('PropertyText(Modifier, TEXT("RotationMethod"))', source)
+        self.assertNotIn('#include "AnimNotifyState_MotionWarping.h"', source)
+        self.assertNotIn('#include "RootMotionModifier.h"', source)
         self.assertNotIn("GetWarpTargets(", source)
         self.assertNotIn("GetModifiers(", source)
         self.assertNotIn("ProcessRootMotion(", source)
