@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import json
+import sys
+import tempfile
+import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPTS = ROOT / "scripts"
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
 
-from scripts import uatool_gameplay_framework_derive_policy as policy
+import uatool_gameplay_framework_derive_policy as policy
 
 
 def _write_json(path: Path, value: dict) -> None:
@@ -42,54 +48,64 @@ def _accepted_corpus(root: Path, *, corrupt_count: bool = False) -> None:
     })
 
 
-def test_legacy_systems_self_validation_accepts_intact_schema9(tmp_path: Path) -> None:
-    _accepted_corpus(tmp_path)
-    systems = SimpleNamespace(SYSTEMS_SCHEMA_VERSION=11)
-    assert policy._accepted_gameplay_framework_corpus(tmp_path)
-    assert policy.legacy_systems_error(tmp_path, systems) is None
+class GameplayFrameworkDerivePolicyTest(unittest.TestCase):
+    def test_legacy_systems_self_validation_accepts_intact_schema9(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            _accepted_corpus(root)
+            systems = SimpleNamespace(SYSTEMS_SCHEMA_VERSION=11)
+            self.assertTrue(policy._accepted_gameplay_framework_corpus(root))
+            self.assertIsNone(policy.legacy_systems_error(root, systems))
+
+    def test_legacy_systems_self_validation_rejects_corrupt_counts(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            _accepted_corpus(root, corrupt_count=True)
+            systems = SimpleNamespace(SYSTEMS_SCHEMA_VERSION=11)
+            self.assertIn("count mismatch", str(policy.legacy_systems_error(root, systems)))
+
+    def test_public_policy_bypasses_only_accepted_intact_legacy_corpus(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            _accepted_corpus(root)
+
+            def strict_require(_output: Path) -> None:
+                raise RuntimeError("systems scan incomplete: expected systems schema 11, got 9")
+
+            public = SimpleNamespace(
+                __file__=str(Path(policy.__file__).with_name("uatool.py")),
+                _require_systems=strict_require,
+                derive_output=lambda output: output,
+                systems=SimpleNamespace(SYSTEMS_SCHEMA_VERSION=11),
+            )
+            self.assertTrue(policy.apply_public_policy(modules=[public]))
+            self.assertIsNone(public._require_systems(root))
+
+    def test_public_policy_preserves_strict_failure_for_unaccepted_corpus(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            _write_jsonl(root / "systems_assets.jsonl", 1)
+            _write_json(root / "systems_manifest.json", {
+                "schema_version": 9,
+                "pass": "UnrealAssetToolSystems",
+                "success": True,
+                "files": ["systems_assets.jsonl"],
+                "counts": {"systems_assets": 1},
+            })
+
+            def strict_require(_output: Path) -> None:
+                raise RuntimeError("systems scan incomplete: expected systems schema 11, got 9")
+
+            public = SimpleNamespace(
+                __file__=str(Path(policy.__file__).with_name("uatool.py")),
+                _require_systems=strict_require,
+                derive_output=lambda output: output,
+                systems=SimpleNamespace(SYSTEMS_SCHEMA_VERSION=11),
+            )
+            self.assertTrue(policy.apply_public_policy(modules=[public]))
+            with self.assertRaisesRegex(RuntimeError, "expected systems schema 11"):
+                public._require_systems(root)
 
 
-def test_legacy_systems_self_validation_rejects_corrupt_counts(tmp_path: Path) -> None:
-    _accepted_corpus(tmp_path, corrupt_count=True)
-    systems = SimpleNamespace(SYSTEMS_SCHEMA_VERSION=11)
-    assert "count mismatch" in str(policy.legacy_systems_error(tmp_path, systems))
-
-
-def test_public_policy_bypasses_only_accepted_intact_legacy_corpus(tmp_path: Path) -> None:
-    _accepted_corpus(tmp_path)
-
-    def strict_require(_output: Path) -> None:
-        raise RuntimeError("systems scan incomplete: expected systems schema 11, got 9")
-
-    public = SimpleNamespace(
-        __file__=str(Path(policy.__file__).with_name("uatool.py")),
-        _require_systems=strict_require,
-        derive_output=lambda output: output,
-        systems=SimpleNamespace(SYSTEMS_SCHEMA_VERSION=11),
-    )
-    assert policy.apply_public_policy(modules=[public])
-    assert public._require_systems(tmp_path) is None
-
-
-def test_public_policy_preserves_strict_failure_for_unaccepted_corpus(tmp_path: Path) -> None:
-    _write_jsonl(tmp_path / "systems_assets.jsonl", 1)
-    _write_json(tmp_path / "systems_manifest.json", {
-        "schema_version": 9,
-        "pass": "UnrealAssetToolSystems",
-        "success": True,
-        "files": ["systems_assets.jsonl"],
-        "counts": {"systems_assets": 1},
-    })
-
-    def strict_require(_output: Path) -> None:
-        raise RuntimeError("systems scan incomplete: expected systems schema 11, got 9")
-
-    public = SimpleNamespace(
-        __file__=str(Path(policy.__file__).with_name("uatool.py")),
-        _require_systems=strict_require,
-        derive_output=lambda output: output,
-        systems=SimpleNamespace(SYSTEMS_SCHEMA_VERSION=11),
-    )
-    assert policy.apply_public_policy(modules=[public])
-    with pytest.raises(RuntimeError, match="expected systems schema 11"):
-        public._require_systems(tmp_path)
+if __name__ == "__main__":
+    unittest.main()
