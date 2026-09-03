@@ -10,6 +10,7 @@ import uatool_systems_only_derive_deferred as _systems_only_derive_deferred
 import uatool_capabilities as _capabilities
 import uatool_smartobject_capabilities as _smartobject_capabilities
 import uatool_ai_perception_capabilities as _ai_perception_capabilities
+import uatool_dataflow_chaos_capabilities as _dataflow_chaos_capabilities
 import uatool_inspect as _inspect
 import uatool_project_intelligence as _project_intelligence
 import uatool_smartobject_evidence as _smartobject_evidence
@@ -19,18 +20,22 @@ import uatool_ai_perception_capture as _ai_perception_capture
 import uatool_dataflow_chaos_evidence as _dataflow_chaos_evidence
 import uatool_dataflow_chaos_capture as _dataflow_chaos_capture
 
-# Smart Objects schema 7 and AI Perception schema 8 are composed after the
-# existing Mass -> GAS systems installers. uatool.py imports this facade before
-# it calls build_perf.install(), so extend that one canonical composition point.
+# Smart Objects schema 7, AI Perception schema 8 and Dataflow/Geometry
+# Collection schema 9 are composed after the existing Mass -> GAS systems
+# installers. uatool.py imports this facade before it calls build_perf.install(),
+# so extend that one canonical composition point.
 import uatool_build_perf as _build_perf
 import uatool_systems as _systems
 import uatool_systems_smartobjects as _systems_smartobjects
 import uatool_systems_ai_perception as _systems_ai_perception
+import uatool_systems_dataflow_chaos as _systems_dataflow_chaos
 import uatool_project_graph as _project_graph
 import uatool_smartobject_graph as _smartobject_graph
 import uatool_ai_perception_graph as _ai_perception_graph
+import uatool_dataflow_chaos_graph as _dataflow_chaos_graph
 import uatool_systems_schema7_accept as _systems_schema7_accept
 import uatool_systems_schema8_accept as _systems_schema8_accept
+import uatool_systems_schema9_accept as _systems_schema9_accept
 
 
 def _install_specialist_capture_membership() -> None:
@@ -51,6 +56,12 @@ def _install_specialist_capture_membership() -> None:
                 extra_files.extend(
                     name for name in getattr(systems_module, "JSONL_FILES", ())
                     if name.startswith("ai_perception_") and name.endswith(".jsonl")
+                )
+            if schema >= 9:
+                extra_files.extend(
+                    name for name in getattr(systems_module, "JSONL_FILES", ())
+                    if (name.startswith("dataflow_") or name.startswith("geometry_collection"))
+                    and name.endswith(".jsonl")
                 )
             capture.CAPTURE_FILES = tuple(dict.fromkeys((*capture.CAPTURE_FILES, *extra_files)))
             capture.SCHEMA_FILES = capture.CAPTURE_FILES[len(capture._BASE_CAPTURE_FILES):]
@@ -98,27 +109,31 @@ def _install_specialist_capture_membership() -> None:
     capture.configure_for_systems(_systems)
 
 
-if not getattr(_build_perf, "_systems_schema8_composition_installed", False):
+if not getattr(_build_perf, "_systems_schema9_composition_installed", False):
     _original_build_perf_install = _build_perf.install
 
-    def _build_perf_install_with_schema8(core) -> None:
+    def _build_perf_install_with_schema9(core) -> None:
         _original_build_perf_install(core)
         _systems_smartobjects.install(_systems)
         _systems_ai_perception.install(_systems)
+        _systems_dataflow_chaos.install(_systems)
         _smartobject_graph.install(_project_graph)
         _ai_perception_graph.install(_project_graph)
+        _dataflow_chaos_graph.install(_project_graph)
         _systems_schema7_accept.install(_runtime, _systems)
         _systems_schema8_accept.install(_runtime, _systems)
+        _systems_schema9_accept.install(_runtime, _systems)
         _install_specialist_capture_membership()
 
-    _build_perf.install = _build_perf_install_with_schema8
-    _build_perf._systems_schema8_composition_installed = True
+    _build_perf.install = _build_perf_install_with_schema9
+    _build_perf._systems_schema9_composition_installed = True
 
 # uatool.py imports this facade before its final derive/VFX gates are defined.
 # Install only deferred runtime dispatch hooks here; each hook waits until the
 # public composition root is complete before consulting or patching it.
 _smartobject_capabilities.install(_capabilities)
 _ai_perception_capabilities.install(_capabilities)
+_dataflow_chaos_capabilities.install(_capabilities)
 _systems_only_derive_deferred.install()
 _capabilities.install()
 _inspect.install()

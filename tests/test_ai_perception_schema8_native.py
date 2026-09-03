@@ -11,13 +11,19 @@ class AIPerceptionSchema8NativeTest(unittest.TestCase):
         scanner = (ROOT / "Source/UnrealAssetTool/Private/UnrealAssetToolSystemsScanner.cpp").read_text(encoding="utf-8")
         native = (ROOT / "Source/UnrealAssetTool/Private/UnrealAssetToolSystemsAIPerception.inl").read_text(encoding="utf-8")
         policy = (ROOT / "Source/UnrealAssetTool/Private/UnrealAssetToolSystemsAIPerceptionPolicy.inl").read_text(encoding="utf-8")
+        dataflow_policy = (ROOT / "Source/UnrealAssetTool/Private/UnrealAssetToolSystemsDataflowChaosPolicy.inl").read_text(encoding="utf-8")
         build = (ROOT / "Source/UnrealAssetTool/UnrealAssetTool.Build.cs").read_text(encoding="utf-8")
 
         self.assertIn('#include "UnrealAssetToolSystemsAIPerception.inl"', scanner)
         self.assertIn('#include "UnrealAssetToolSystemsAIPerceptionPolicy.inl"', scanner)
         self.assertIn('#include "UObject/UObjectGlobals.h"', scanner)
-        self.assertIn("#define ScanGASProjectModel ScanGASSmartObjectsAndAIPerceptionProjectModels", scanner)
-        self.assertIn("#define FFileHelper FAIPerceptionSystemsFileHelperProxy", scanner)
+        # Schema 8 remains the complete inner composition even though schema 9
+        # is now the outer driver wrapper.
+        self.assertIn("ScanGASSmartObjectsAndAIPerceptionProjectModels", policy)
+        self.assertIn("FAIPerceptionSystemsFileHelperProxy", policy)
+        self.assertIn("FAIPerceptionSystemsFileHelperProxy::SaveStringToFile", dataflow_policy)
+        self.assertIn("#define ScanGASProjectModel ScanGASSmartObjectsAIPerceptionAndDataflowChaosProjectModels", scanner)
+        self.assertIn("#define FFileHelper FDataflowChaosSystemsFileHelperProxy", scanner)
         self.assertIn("#undef FFileHelper", scanner)
         self.assertIn("#undef ScanGASProjectModel", scanner)
 
@@ -30,12 +36,6 @@ class AIPerceptionSchema8NativeTest(unittest.TestCase):
         self.assertIn("RegisterAsSourceForSenses", native)
         self.assertIn("SenseRow->SetBoolField(TEXT(\"is_null\"), Sense == nullptr)", native)
 
-        # Real ContentExamples gates proved two independent broad-pass failure
-        # modes: FAssetData::GetAsset() was not sufficient, and the commandlet's
-        # startup registry population exposed only two Blueprint candidates total.
-        # Canonical extraction now synchronously rescans /Game while ignoring
-        # deny-list scan filters, queries the Blueprint class hierarchy, then uses
-        # the exact-path load primitive already proven by the focused commandlet.
         self.assertIn("GatherAIPerceptionBlueprintCandidates", policy)
         self.assertIn("WaitForPremadeAssetRegistry", policy)
         self.assertIn("ScanPathsSynchronous(ProjectPaths, true, true)", policy)
