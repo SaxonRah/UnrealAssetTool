@@ -49,13 +49,13 @@ def _cli(core_module, systems_module, argv: list[str]) -> int:
         core_module.ensure_plugin_binary(project, editor, args.build_script, args.no_build, active_root)
         command = [
             str(editor), str(project),
-            "-UnrealAssetToolSystemsOnly",
+            "-run=UnrealAssetToolSystems",
             "-UAFEngineContent",
             "-EnablePlugins=UAF,UAFAnimGraph,UAFSharedAssets",
             f"-Output={output}",
             "-unattended", "-nop4", "-nosplash", "-nullrhi", "-nosound", "-UTF8Output",
         ]
-        print("running isolated UAF systems capture:", subprocess.list2cmdline(command))
+        print("running commandlet-backed UAF systems capture:", subprocess.list2cmdline(command))
         result = subprocess.run(command, check=False).returncode
 
     manifest_path = output / "systems_manifest.json"
@@ -73,6 +73,9 @@ def _cli(core_module, systems_module, argv: list[str]) -> int:
     error = systems_module.validation_error(output)
     if error:
         raise RuntimeError(f"UAF systems schema-10 validation failed: {error}; raw archive preserved at {archive}")
+    if result != 0:
+        raise RuntimeError(f"UAF systems commandlet returned {result} after writing a valid schema-10 capture; raw archive preserved at {archive}")
+
     counts = manifest.get("counts", {}) if isinstance(manifest.get("counts"), dict) else {}
     print("UAF systems schema 10 counts:")
     for key in (
@@ -85,8 +88,6 @@ def _cli(core_module, systems_module, argv: list[str]) -> int:
     print(f"UAF systems capture total elapsed: {time.perf_counter() - started:.2f}s")
     print("normal structural/world/animation/VFX scan was not run")
     print("derive was not run")
-    if result != 0:
-        print(f"note: editor returned {result} after writing a valid schema-10 capture; manifest/archive are authoritative")
     return 0
 
 

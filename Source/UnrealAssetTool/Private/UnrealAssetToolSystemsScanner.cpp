@@ -1,3 +1,5 @@
+#include "UnrealAssetToolSystemsScanner.h"
+
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
 #include "Components/ActorComponent.h"
@@ -76,4 +78,9 @@ namespace UnrealAssetToolSystems
 #undef FFileHelper
 #undef ScanGASProjectModel
 #include "UnrealAssetToolSystemsFinalize.inl"
+}
+
+bool UnrealAssetToolSystems::RunSystemsScanForCommandlet(FString& OutError)
+{
+    return RunSystemsScan(OutError);
 }

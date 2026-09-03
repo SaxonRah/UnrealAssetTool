@@ -112,11 +112,19 @@ class SystemsUAFTest(unittest.TestCase):
 
     def test_native_schema10_contract(self) -> None:
         scanner = (ROOT / "Source/UnrealAssetTool/Private/UnrealAssetToolSystemsScanner.cpp").read_text(encoding="utf-8")
+        scanner_header = (ROOT / "Source/UnrealAssetTool/Private/UnrealAssetToolSystemsScanner.h").read_text(encoding="utf-8")
+        commandlet = (ROOT / "Source/UnrealAssetTool/Private/UnrealAssetToolSystemsCommandlet.cpp").read_text(encoding="utf-8")
+        commandlet_header = (ROOT / "Source/UnrealAssetTool/Public/UnrealAssetToolSystemsCommandlet.h").read_text(encoding="utf-8")
         native = (ROOT / "Source/UnrealAssetTool/Private/UnrealAssetToolSystemsUAF.inl").read_text(encoding="utf-8")
         policy = (ROOT / "Source/UnrealAssetTool/Private/UnrealAssetToolSystemsUAFPolicy.inl").read_text(encoding="utf-8")
         facade = (SCRIPTS / "uatool_vfx.py").read_text(encoding="utf-8")
         capture = (SCRIPTS / "uatool_uaf_systems_capture.py").read_text(encoding="utf-8")
         self.assertIn('#include "RigVMModel/RigVMSchema.h"', scanner)
+        self.assertIn('#include "UnrealAssetToolSystemsScanner.h"', scanner)
+        self.assertIn("RunSystemsScanForCommandlet", scanner_header)
+        self.assertIn("RunSystemsScanForCommandlet", scanner)
+        self.assertIn("UUnrealAssetToolSystemsCommandlet", commandlet_header)
+        self.assertIn("RunSystemsScanForCommandlet", commandlet)
         self.assertIn("/Script/UAF.UAFSystem", native)
         self.assertIn("/Script/UAFAnimGraph.UAFAnimGraph", native)
         self.assertIn("AnimNextVariableEntry", native)
@@ -141,6 +149,8 @@ class SystemsUAFTest(unittest.TestCase):
         self.assertIn("_systems_uaf.install(_systems)", facade)
         self.assertIn("_uaf_graph.install(_project_graph)", facade)
         self.assertIn("_systems_schema10_accept.install(_runtime, _systems)", facade)
+        self.assertIn('"-run=UnrealAssetToolSystems"', capture)
+        self.assertNotIn('"-UnrealAssetToolSystemsOnly"', capture)
         self.assertIn('"-UAFEngineContent"', capture)
         self.assertIn('"-EnablePlugins=UAF,UAFAnimGraph,UAFSharedAssets"', capture)
 
