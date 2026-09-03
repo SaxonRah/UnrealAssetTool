@@ -1,5 +1,7 @@
 #include "UnrealAssetToolAnimationMeshPhysicsScanner.h"
 #include "UnrealAssetToolStaticMeshCommandlet.h"
+#include "UnrealAssetToolWorldGeometryCommandlet.h"
+#include "UnrealAssetToolWorldGeometryFoliageCommandlet.h"
 
 #include "Misc/CommandLine.h"
 #include "Misc/CoreDelegates.h"
@@ -34,6 +36,59 @@ void RunStaticMeshPass(const FString& OutputDir)
     }
 }
 
+void RunWorldGeometryPass(const FString& OutputDir)
+{
+    if (OutputDir.IsEmpty())
+    {
+        UE_LOG(LogTemp, Error, TEXT("UnrealAssetToolWorldGeometry: World commandlet did not provide -Output"));
+        return;
+    }
+
+    const FString CaptureDir = FPaths::Combine(OutputDir, TEXT("world-geometry-native-capture"));
+    const FString Params = FString::Printf(TEXT("-Output=\"%s\""), *CaptureDir);
+
+    UUnrealAssetToolWorldGeometryCommandlet* GeometryCommandlet =
+        NewObject<UUnrealAssetToolWorldGeometryCommandlet>();
+    if (!GeometryCommandlet)
+    {
+        UE_LOG(LogTemp, Error, TEXT("UnrealAssetToolWorldGeometry: could not allocate authored geometry commandlet"));
+        return;
+    }
+
+    const int32 GeometryResult = GeometryCommandlet->Main(Params);
+    if (GeometryResult != 0)
+    {
+        UE_LOG(
+            LogTemp,
+            Error,
+            TEXT("UnrealAssetToolWorldGeometry compact World-pass capture failed with exit code %d"),
+            GeometryResult);
+        return;
+    }
+
+    // AInstancedFoliageActor keeps FoliageInfos as protected native state in UE
+    // 5.8. The refinement reads only the public editor-authoring API
+    // (ForEachFoliageInfo + FFoliageInfo::Instances) into the same raw capture.
+    // It deliberately does not read HISM render-instance data or runtime state.
+    UUnrealAssetToolWorldGeometryFoliageCommandlet* FoliageCommandlet =
+        NewObject<UUnrealAssetToolWorldGeometryFoliageCommandlet>();
+    if (!FoliageCommandlet)
+    {
+        UE_LOG(LogTemp, Error, TEXT("UnrealAssetToolWorldGeometry: could not allocate native foliage refinement commandlet"));
+        return;
+    }
+
+    const int32 FoliageResult = FoliageCommandlet->Main(Params);
+    if (FoliageResult != 0)
+    {
+        UE_LOG(
+            LogTemp,
+            Error,
+            TEXT("UnrealAssetToolWorldGeometry native foliage World-pass refinement failed with exit code %d"),
+            FoliageResult);
+    }
+}
+
 void RunAnimationMeshPhysicsPass()
 {
     FString RunCommandlet;
@@ -52,9 +107,10 @@ void RunAnimationMeshPhysicsPass()
         UE_LOG(LogTemp, Error, TEXT("UnrealAssetToolAnimationMeshPhysics: %s"), *Error);
     }
 
-    // StaticMesh uses the same already-running headless World commandlet so the
-    // normal scan gains authored mesh topology without another Editor startup.
+    // Reuse this already-running headless World commandlet for specialist native
+    // authored passes; neither pass launches another editor or loads a map.
     RunStaticMeshPass(OutputDir);
+    RunWorldGeometryPass(OutputDir);
 }
 }
 
