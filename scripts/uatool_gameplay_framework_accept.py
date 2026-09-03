@@ -88,6 +88,11 @@ def _expectations(corpus: Path, rows) -> dict:
 
 def _require_contentexamples_shape(data: dict) -> None:
     counts = data["counts"]
+    # The original evidence report saw each authored WorldSettings.DefaultGameMode
+    # twice: once as a canonical property row and once as its exact reference row.
+    # Schema 28 uses world_instance_properties.jsonl as the authoritative edge
+    # source, so acceptance is based on the 70 unique WorldSettings owners/edges,
+    # not the 140 duplicated evidence rows.
     minimums = {
         "framework_blueprints": 36,
         "transitive_framework_blueprints": 4,
@@ -96,7 +101,7 @@ def _require_contentexamples_shape(data: dict) -> None:
         "player_controller_blueprints": 4,
         "ai_controller_blueprints": 1,
         "game_mode_selector_overrides": 15,
-        "world_game_mode_overrides": 140,
+        "world_game_mode_overrides": 70,
         "project_game_maps_settings": 5,
     }
     missing = [
