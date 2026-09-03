@@ -368,7 +368,7 @@ def normalize_output(output: Path) -> bool:
     if manifest is None:
         raise RuntimeError("animation_manifest.json missing while composing mesh/physics schema")
     schema = int(manifest.get("schema_version", 0) or 0)
-    if schema not in (2, PUBLIC_ANIMATION_SCHEMA_VERSION):
+    if schema != 2 and schema < PUBLIC_ANIMATION_SCHEMA_VERSION:
         raise RuntimeError(f"cannot compose mesh/physics with animation schema {schema}")
     counts = manifest.get("counts", {})
     counts = counts if isinstance(counts, dict) else {}
@@ -381,7 +381,7 @@ def normalize_output(output: Path) -> bool:
         if filename not in files:
             files.append(filename)
     manifest["files"] = files
-    manifest["schema_version"] = PUBLIC_ANIMATION_SCHEMA_VERSION
+    manifest["schema_version"] = max(schema, PUBLIC_ANIMATION_SCHEMA_VERSION)
     manifest["mesh_physics_schema_version"] = MESH_PHYSICS_SCHEMA_VERSION
     manifest["mesh_physics_pass"] = sidecar.get("pass", "UnrealAssetToolAnimationMeshPhysics")
     manifest["runtime_state_captured"] = False
@@ -483,7 +483,17 @@ def install(animation_module) -> None:
     def animation_validation_error(output) -> str | None:
         output = Path(output)
         has_sidecar = (output / "animation_mesh_physics_manifest.json").is_file()
-        expected = PUBLIC_ANIMATION_SCHEMA_VERSION if has_sidecar else 2
+        manifest = _read_json(output / "animation_manifest.json")
+        public_schema = int(manifest.get("schema_version", 0) or 0) if manifest is not None else 0
+        if has_sidecar:
+            if public_schema < PUBLIC_ANIMATION_SCHEMA_VERSION:
+                return (
+                    f"unexpected public animation schema {public_schema!r}; "
+                    f"expected at least {PUBLIC_ANIMATION_SCHEMA_VERSION}"
+                )
+            expected = public_schema
+        else:
+            expected = 2
         saved = int(getattr(animation_module, "ANIMATION_SCHEMA_VERSION", PUBLIC_ANIMATION_SCHEMA_VERSION))
         animation_module.ANIMATION_SCHEMA_VERSION = expected
         try:
@@ -492,7 +502,6 @@ def install(animation_module) -> None:
             animation_module.ANIMATION_SCHEMA_VERSION = saved
         if error:
             return error
-        manifest = _read_json(output / "animation_manifest.json")
         if manifest is not None and int(manifest.get("schema_version", 0) or 0) != expected:
             return f"unexpected public animation schema {manifest.get('schema_version')!r}; expected {expected}"
         if has_sidecar:
