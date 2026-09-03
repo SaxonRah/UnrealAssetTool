@@ -134,9 +134,11 @@ class AnimNextCaptureTest(unittest.TestCase):
 
     def test_native_contract_uses_rigvm_model_without_uaf_headers(self) -> None:
         source = (ROOT / "Source/UnrealAssetTool/Private/UnrealAssetToolUAFCommandlet.cpp").read_text(encoding="utf-8")
+        header = (ROOT / "Source/UnrealAssetTool/Public/UnrealAssetToolUAFCommandlet.h").read_text(encoding="utf-8")
         build = (ROOT / "Source/UnrealAssetTool/UnrealAssetTool.Build.cs").read_text(encoding="utf-8")
         descriptor = (ROOT / "UnrealAssetTool.uplugin").read_text(encoding="utf-8")
         self.assertIn('#include "RigVMModel/RigVMGraph.h"', source)
+        self.assertIn('#include "RigVMModel/RigVMSchema.h"', header)
         self.assertIn("GetObjectsWithOuter(Asset, Objects, EGetObjectsFlags::IncludeNestedObjects)", source)
         self.assertNotIn("GetObjectsWithOuter(Asset, Objects, true)", source)
         self.assertIn("Filter.PackagePaths.Add(FName(MountRoot))", source)
