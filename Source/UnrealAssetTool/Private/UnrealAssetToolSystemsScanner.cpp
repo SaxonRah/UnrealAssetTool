@@ -72,8 +72,10 @@ namespace UnrealAssetToolSystems
 #include "UnrealAssetToolSystemsDataflowChaosPolicy.inl"
 #include "UnrealAssetToolSystemsUAF.inl"
 #include "UnrealAssetToolSystemsUAFPolicy.inl"
-#define ScanGASProjectModel ScanGASSmartObjectsAIPerceptionDataflowChaosAndUAFProjectModels
-#define FFileHelper FUAFSystemsFileHelperProxy
+#include "UnrealAssetToolSystemsNavigation.inl"
+#include "UnrealAssetToolSystemsNavigationPolicy.inl"
+#define ScanGASProjectModel ScanGASSmartObjectsAIPerceptionDataflowChaosUAFAndNavigationProjectModels
+#define FFileHelper FNavigationSystemsFileHelperProxy
 #include "UnrealAssetToolSystemsDriver.inl"
 #undef FFileHelper
 #undef ScanGASProjectModel
