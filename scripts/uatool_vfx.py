@@ -31,6 +31,7 @@ import uatool_staticmesh_evidence as _staticmesh_evidence
 import uatool_skeletalmesh_physicsasset_capture as _skeletalmesh_physicsasset_capture
 import uatool_staticmesh_capture as _staticmesh_capture
 import uatool_animation_mesh_physics_integration as _animation_mesh_physics_integration
+import uatool_staticmesh_integration as _staticmesh_integration
 import uatool_navigation_capture as _navigation_capture
 import uatool_animnext_evidence as _animnext_evidence
 import uatool_animnext_engine_evidence as _animnext_engine_evidence
@@ -145,11 +146,12 @@ if not getattr(_build_perf, "_systems_schema11_composition_installed", False):
     _build_perf.install = _build_perf_install_with_schema11
     _build_perf._systems_schema11_composition_installed = True
 
-# Install the schema-3 integration as a deferred wrapper. The actual animation
-# API promotion happens when scan/derive/pack first executes, after the canonical
-# cleanup module has installed schema-2 compact storage. This preserves old
-# schema-2 corpus compatibility while requiring the sidecar for new scans.
+# Animation schema 3 composes authored SkeletalMesh/PhysicsAsset semantics on top
+# of the existing compact animation storage. Mesh schema 1 is independent: it
+# owns authored StaticMesh geometry/build/collision topology without changing
+# structural schema 12. Both promote the unified typed graph monotonically.
 _animation_mesh_physics_integration.install(_runtime, _core)
+_staticmesh_integration.install(_runtime, _core)
 _smartobject_capabilities.install(_capabilities)
 _ai_perception_capabilities.install(_capabilities)
 _dataflow_chaos_capabilities.install(_capabilities)
