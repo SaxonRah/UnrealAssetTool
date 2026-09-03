@@ -1,3 +1,5 @@
+#include "UnrealAssetToolSystemsScanner.h"
+
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
 #include "Components/ActorComponent.h"
@@ -32,6 +34,12 @@
 #include "Misc/Parse.h"
 #include "Misc/Paths.h"
 #include "Modules/ModuleManager.h"
+#include "RigVMModel/RigVMGraph.h"
+#include "RigVMModel/RigVMLink.h"
+#include "RigVMModel/RigVMNode.h"
+#include "RigVMModel/RigVMPin.h"
+#include "RigVMModel/RigVMSchema.h"
+#include "RigVMModel/Nodes/RigVMUnitNode.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
 #include "UObject/FindObjectFlags.h"
@@ -62,10 +70,17 @@ namespace UnrealAssetToolSystems
 #include "UnrealAssetToolSystemsAIPerceptionPolicy.inl"
 #include "UnrealAssetToolSystemsDataflowChaos.inl"
 #include "UnrealAssetToolSystemsDataflowChaosPolicy.inl"
-#define ScanGASProjectModel ScanGASSmartObjectsAIPerceptionAndDataflowChaosProjectModels
-#define FFileHelper FDataflowChaosSystemsFileHelperProxy
+#include "UnrealAssetToolSystemsUAF.inl"
+#include "UnrealAssetToolSystemsUAFPolicy.inl"
+#define ScanGASProjectModel ScanGASSmartObjectsAIPerceptionDataflowChaosAndUAFProjectModels
+#define FFileHelper FUAFSystemsFileHelperProxy
 #include "UnrealAssetToolSystemsDriver.inl"
 #undef FFileHelper
 #undef ScanGASProjectModel
 #include "UnrealAssetToolSystemsFinalize.inl"
+}
+
+bool UnrealAssetToolSystems::RunSystemsScanForCommandlet(FString& OutError)
+{
+    return RunSystemsScan(OutError);
 }

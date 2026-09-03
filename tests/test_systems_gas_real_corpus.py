@@ -74,7 +74,11 @@ class SystemsGASRealCorpusRegressionTest(unittest.TestCase):
         self.assertIn("return ScanGASProjectModelPolicy(", smart_policy)
         self.assertIn("return ScanGASAndSmartObjectProjectModels(", ai_policy)
         self.assertIn("return ScanGASSmartObjectsAndAIPerceptionProjectModels(", dataflow_policy)
-        self.assertIn("#define ScanGASProjectModel ScanGASSmartObjectsAIPerceptionAndDataflowChaosProjectModels", scanner)
+        self.assertIn("#define ScanGASProjectModel ", scanner)
+        self.assertLess(
+            scanner.index("#define ScanGASProjectModel "),
+            scanner.index('#include "UnrealAssetToolSystemsDriver.inl"'),
+        )
         self.assertIn("#undef ScanGASProjectModel", scanner)
 
     def test_final_lyra_schema6_acceptance_is_documented(self) -> None:

@@ -105,11 +105,18 @@ class SystemsSchema7AcceptanceTest(unittest.TestCase):
         dataflow_policy = (
             ROOT / "Source/UnrealAssetTool/Private/UnrealAssetToolSystemsDataflowChaosPolicy.inl"
         ).read_text(encoding="utf-8")
+        uaf_policy = (
+            ROOT / "Source/UnrealAssetTool/Private/UnrealAssetToolSystemsUAFPolicy.inl"
+        ).read_text(encoding="utf-8")
         self.assertIn("FSmartObjectSystemsFileHelperProxy", policy)
         self.assertIn("UpgradeSystemsManifestToSchema7", policy)
         self.assertIn("FSmartObjectSystemsFileHelperProxy::SaveStringToFile", ai_policy)
         self.assertIn("FAIPerceptionSystemsFileHelperProxy::SaveStringToFile", dataflow_policy)
-        self.assertIn("#define FFileHelper FDataflowChaosSystemsFileHelperProxy", scanner)
+        self.assertIn("FDataflowChaosSystemsFileHelperProxy::SaveStringToFile", uaf_policy)
+        # The outermost helper changes as newer systems schemas are composed.
+        # Schema 7 only requires that the authoritative driver write remains
+        # synchronously wrapped by the transitive proxy chain.
+        self.assertIn("#define FFileHelper ", scanner)
         self.assertIn("#undef FFileHelper", scanner)
         self.assertNotIn("GSmartObjectSchema7ExitHookRegistered", policy)
         self.assertNotIn("FCoreDelegates::OnEnginePreExit.AddStatic", policy)

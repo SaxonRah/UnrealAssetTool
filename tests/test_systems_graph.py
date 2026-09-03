@@ -128,6 +128,9 @@ class SystemsGraphSmokeTest(unittest.TestCase):
         counts["dataflow_assets"] = len(rows_by_file["dataflow_graphs.jsonl"])
         counts["dataflow_chaos_truncated_properties"] = 0
         counts["dataflow_chaos_property_row_limit_hits"] = 0
+        # Schema 10 adds one UAF non-file loss counter alongside the physical
+        # uaf_* stream counts above.
+        counts["uaf_truncated_values"] = 0
         (self.output / "systems_manifest.json").write_text(json.dumps({
             "schema_version": systems.SYSTEMS_SCHEMA_VERSION,
             "pass": "UnrealAssetToolSystems",
