@@ -28,7 +28,8 @@ class StaticMeshNormalScanTest(unittest.TestCase):
         self.assertIn('RunCommandlet.Equals(TEXT("UnrealAssetToolWorld")', source)
         self.assertIn("UUnrealAssetToolStaticMeshCommandlet", source)
         self.assertIn('TEXT("staticmesh-native-capture")', source)
-        self.assertIn("RunAnimationMeshPhysicsPass(OutputDir);", source)
+        self.assertIn("FCoreDelegates::GetOnPostEngineInit().AddStatic(&RunAnimationMeshPhysicsPass)", source)
+        self.assertIn("UnrealAssetToolAnimationMeshPhysics::RunScan(OutputDir, Error)", source)
         self.assertIn("RunStaticMeshPass(OutputDir);", source)
 
     def test_pending_capture_is_promoted_before_derived_graph(self):
