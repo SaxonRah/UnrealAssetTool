@@ -14,6 +14,7 @@
 #include "RigVMModel/RigVMPin.h"
 #include "RigVMModel/Nodes/RigVMUnitNode.h"
 #include "Serialization/JsonSerializer.h"
+#include "UObject/FindObjectFlags.h"
 #include "UObject/SoftObjectPtr.h"
 #include "UObject/UObjectGlobals.h"
 #include "UObject/UObjectHash.h"
@@ -536,7 +537,8 @@ static bool WriteGraph(
     GraphRow->SetStringField(TEXT("graph_name"), Graph->GetGraphName());
     GraphRow->SetStringField(TEXT("graph_node_path"), Graph->GetNodePath());
     GraphRow->SetStringField(TEXT("graph_class"), Graph->GetClass()->GetPathName());
-    GraphRow->SetStringField(TEXT("schema_class"), Graph->GetSchemaClass() ? Graph->GetSchemaClass()->GetPathName() : FString());
+    const TSubclassOf<URigVMSchema> SchemaClass = Graph->GetSchemaClass();
+    GraphRow->SetStringField(TEXT("schema_class"), SchemaClass ? SchemaClass.Get()->GetPathName() : FString());
     GraphRow->SetStringField(TEXT("execute_context_struct"), Graph->GetExecuteContextStruct() ? Graph->GetExecuteContextStruct()->GetPathName() : FString());
     GraphRow->SetNumberField(TEXT("node_count"), Nodes.Num());
     GraphRow->SetNumberField(TEXT("link_count"), Links.Num());
@@ -653,7 +655,7 @@ static bool WriteAsset(
     }
 
     TArray<UObject*> Objects;
-    GetObjectsWithOuter(Asset, Objects, true);
+    GetObjectsWithOuter(Asset, Objects, EGetObjectsFlags::IncludeNestedObjects);
     Objects.Sort([](const UObject& A, const UObject& B)
     {
         return A.GetPathName() < B.GetPathName();
@@ -797,7 +799,7 @@ int32 UUnrealAssetToolUAFCommandlet::Main(const FString& Params)
     for (const TCHAR* MountRoot : MountRoots)
     {
         FARFilter Filter;
-        Filter.PackagePaths.Add(*MountRoot);
+        Filter.PackagePaths.Add(FName(MountRoot));
         Filter.bRecursivePaths = true;
         TArray<FAssetData> Assets;
         Registry.GetAssets(Filter, Assets);
