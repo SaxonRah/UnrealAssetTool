@@ -56,50 +56,50 @@ static void GatherUAFCandidates(const TArray<FAssetData>& ExistingAssets, TArray
     IAssetRegistry& Registry = AssetRegistryModule.Get();
     Registry.WaitForPremadeAssetRegistry();
 
-    TArray<FString> Paths;
-    Paths.Add(TEXT("/Game"));
-    if (FParse::Param(FCommandLine::Get(), TEXT("UAFEngineContent")))
+    const bool bUAFEngineContent = FParse::Param(FCommandLine::Get(), TEXT("UAFEngineContent"));
+    TArray<FString> ScanPaths;
+    ScanPaths.Add(TEXT("/Game"));
+    TArray<FString> RepresentativePaths;
+    if (bUAFEngineContent)
     {
-        // A bare systems-only Editor process can reach OnPostEngineInit before
-        // these explicitly enabled engine-plugin content roots are mounted in
-        // the same way they are for a normal -run commandlet. Ensure only the
-        // three requested representative roots are package-mounted; do not
-        // broaden the scan to global engine content.
         EnsureUAFRepresentativeMounts();
-        Paths.Add(TEXT("/UAF"));
-        Paths.Add(TEXT("/UAFAnimGraph"));
-        Paths.Add(TEXT("/UAFSharedAssets"));
+        RepresentativePaths.Add(TEXT("/UAF"));
+        RepresentativePaths.Add(TEXT("/UAFAnimGraph"));
+        RepresentativePaths.Add(TEXT("/UAFSharedAssets"));
+        ScanPaths.Append(RepresentativePaths);
     }
-    Registry.ScanPathsSynchronous(Paths, true, true);
+    Registry.ScanPathsSynchronous(ScanPaths, true, true);
     Registry.WaitForCompletion();
 
-    // Match the already accepted focused UAF evidence path: discover authored
-    // assets by recursively enumerating the mounted roots, then enforce exact
-    // class identity below. UE 5.8's class-index query can omit mounted UAF
-    // representatives even after a synchronous path scan.
-    TArray<FAssetData> DiscoveredAssets;
-    for (const FString& Path : Paths)
+    TSet<FString> Seen;
+    auto AddCandidate = [&OutAssets, &Seen](const FAssetData& Asset, bool bRequireExactRegistryClass)
+    {
+        if (bRequireExactRegistryClass && !UAFIsExactAssetClass(Asset.AssetClassPath.ToString())) return;
+        const FString Path = Asset.GetSoftObjectPath().ToString();
+        if (Path.IsEmpty() || Seen.Contains(Path)) return;
+        Seen.Add(Path);
+        OutAssets.Add(Asset);
+    };
+
+    // The accepted focused UAF evidence deliberately discovered every asset in
+    // these three explicit mount roots, loaded each object, and only then used
+    // the exact loaded UObject class to decide whether it was first-class UAF.
+    // Do the same here. Asset Registry class identity is useful for cheap
+    // project-wide discovery, but it is not authoritative for this installed
+    // representative corpus.
+    for (const FString& Path : RepresentativePaths)
     {
         FARFilter Filter;
         Filter.PackagePaths.Add(FName(*Path));
         Filter.bRecursivePaths = true;
         TArray<FAssetData> PathAssets;
         Registry.GetAssets(Filter, PathAssets);
-        DiscoveredAssets.Append(PathAssets);
+        for (const FAssetData& Asset : PathAssets) AddCandidate(Asset, false);
     }
 
-    TSet<FString> Seen;
-    auto AddCandidate = [&OutAssets, &Seen](const FAssetData& Asset)
-    {
-        const FString ClassPath = Asset.AssetClassPath.ToString();
-        if (!UAFIsExactAssetClass(ClassPath)) return;
-        const FString Path = Asset.GetSoftObjectPath().ToString();
-        if (Path.IsEmpty() || Seen.Contains(Path)) return;
-        Seen.Add(Path);
-        OutAssets.Add(Asset);
-    };
-    for (const FAssetData& Asset : DiscoveredAssets) AddCandidate(Asset);
-    for (const FAssetData& Asset : ExistingAssets) AddCandidate(Asset);
+    // Normal project-wide discovery stays narrow. Exact first-class identity is
+    // still re-checked from Asset->GetClass() after load in UAFScanLoadedAsset.
+    for (const FAssetData& Asset : ExistingAssets) AddCandidate(Asset, true);
     OutAssets.Sort([](const FAssetData& A, const FAssetData& B)
     {
         return A.GetSoftObjectPath().ToString() < B.GetSoftObjectPath().ToString();
