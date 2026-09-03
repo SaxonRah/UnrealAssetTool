@@ -69,12 +69,12 @@ class BlueprintControlFlowTest(unittest.TestCase):
             },
         ])
         edges = [
-            (branch, "B0", "B1", "then", "then"),
-            (branch, "B0", "B2", "else", "else"),
-            (switch, "B3", "B4", "NewEnumerator2", "Aim"),
-            (switch, "B3", "B5", "Default", "Default"),
-            (sequence, "B6", "B7", "then_0", "then_0"),
-            (call, "B8", "B9", "then", "then"),
+            (branch, "B0", "B1", "then", "then", "Target1", "execute"),
+            (branch, "B0", "B2", "else", "else", "Target2", "execute"),
+            (switch, "B3", "B4", "NewEnumerator2", "Aim", "Target4", "execute"),
+            (switch, "B3", "B5", "Default", "Default", "Target5", "execute"),
+            (sequence, "B6", "B7", "then_0", "then_0", "Target7", "execute"),
+            (call, "B8", "B9", "then", "then", "Target9", "execute"),
         ]
         block_ids = sorted({item for edge in edges for item in (edge[1], edge[2])})
         write_jsonl(self.output / "blueprint_execution_blocks.jsonl", [
@@ -95,10 +95,12 @@ class BlueprintControlFlowTest(unittest.TestCase):
                 "source_block_id": source_block,
                 "target_block_id": target_block,
                 "source_node_id": node,
+                "target_node_id": target_node,
                 "source_pin_name": raw_pin,
                 "source_pin_display_name": display_pin,
+                "target_pin_name": target_pin,
             }
-            for node, source_block, target_block, raw_pin, display_pin in edges
+            for node, source_block, target_block, raw_pin, display_pin, target_node, target_pin in edges
         ])
 
     def test_derives_branch_switch_sequence_and_flow(self) -> None:
@@ -106,6 +108,7 @@ class BlueprintControlFlowTest(unittest.TestCase):
         values = control_flow.derive(self.output, rows)
         self.assertEqual(len(values), 6)
         self.assertEqual({value["graph_name"] for value in values}, {"Test"})
+        self.assertEqual({value["schema_version"] for value in values}, {2})
 
         by_kind: dict[str, list[dict]] = {}
         for value in values:
@@ -116,6 +119,8 @@ class BlueprintControlFlowTest(unittest.TestCase):
         self.assertEqual(branch[0]["source_pin_name"], "else")
         self.assertFalse(branch[0]["condition_polarity"])
         self.assertEqual(branch[0]["condition_text"], "PlayerInputState.WantsToSprint")
+        self.assertEqual(branch[0]["target_node_id"], "Target2")
+        self.assertEqual(branch[0]["target_pin_name"], "execute")
         self.assertTrue(branch[1]["condition_polarity"])
 
         case = by_kind["switch_case"][0]
@@ -132,6 +137,52 @@ class BlueprintControlFlowTest(unittest.TestCase):
         write_jsonl(self.output / "blueprint_control_edges.jsonl", values)
         self.assertIsNone(control_flow.validation_error(self.output, rows))
 
+    def test_preserves_distinct_target_exec_pins_when_paths_share_target_block(self) -> None:
+        self._write_fixture()
+        branch = self.graph + "::node::branch"
+        gate = self.graph + "::node::gate"
+        write_jsonl(self.output / "blueprint_execution_blocks.jsonl", [
+            {"block_id": "B0", "blueprint_path": self.bp, "graph_id": self.graph, "graph_name": "Test"},
+            {"block_id": "B1", "blueprint_path": self.bp, "graph_id": self.graph, "graph_name": "Test"},
+        ])
+        write_jsonl(self.output / "blueprint_execution_block_edges.jsonl", [
+            {
+                "blueprint_path": self.bp,
+                "graph_id": self.graph,
+                "source_block_id": "B0",
+                "target_block_id": "B1",
+                "source_node_id": branch,
+                "target_node_id": gate,
+                "source_pin_name": "then",
+                "target_pin_name": "Open",
+            },
+            {
+                "blueprint_path": self.bp,
+                "graph_id": self.graph,
+                "source_block_id": "B0",
+                "target_block_id": "B1",
+                "source_node_id": branch,
+                "target_node_id": gate,
+                "source_pin_name": "else",
+                "target_pin_name": "Close",
+            },
+        ])
+        values = control_flow.derive(self.output, rows)
+        self.assertEqual(len(values), 2)
+        by_polarity = {bool(row["condition_polarity"]): row for row in values}
+        self.assertEqual(by_polarity[True]["target_pin_name"], "Open")
+        self.assertEqual(by_polarity[False]["target_pin_name"], "Close")
+        self.assertNotEqual(by_polarity[True]["control_edge_id"], by_polarity[False]["control_edge_id"])
+        write_jsonl(self.output / "blueprint_control_edges.jsonl", values)
+        self.assertIsNone(control_flow.validation_error(self.output, rows))
+
+    def test_validation_rejects_dropped_target_pin_identity(self) -> None:
+        self._write_fixture()
+        values = control_flow.derive(self.output, rows)
+        values[0]["target_pin_name"] = ""
+        write_jsonl(self.output / "blueprint_control_edges.jsonl", values)
+        self.assertIn("complete execution-block endpoint set", str(control_flow.validation_error(self.output, rows)))
+
     def test_sqlite_round_trip(self) -> None:
         self._write_fixture()
         values = control_flow.derive(self.output, rows)
@@ -142,9 +193,10 @@ class BlueprintControlFlowTest(unittest.TestCase):
             control_flow.load_database(conn, self.output, rows)
             self.assertEqual(conn.execute("SELECT count(*) FROM blueprint_control_edges").fetchone()[0], 6)
             row = conn.execute(
-                "SELECT graph_name,case_raw_name,case_name,selector_text FROM blueprint_control_edges WHERE control_kind='switch_case'"
+                "SELECT graph_name,case_raw_name,case_name,selector_text,target_node_id,target_pin_name "
+                "FROM blueprint_control_edges WHERE control_kind='switch_case'"
             ).fetchone()
-            self.assertEqual(row, ("Test", "NewEnumerator2", "Aim", "RotationMode"))
+            self.assertEqual(row, ("Test", "NewEnumerator2", "Aim", "RotationMode", "Target4", "execute"))
         finally:
             conn.close()
 
