@@ -103,9 +103,14 @@ class MotionWarpingCaptureTest(unittest.TestCase):
     def test_wrong_notify_index_is_rejected_even_when_counts_match(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             out = self._fixture(Path(temp))
-            row = json.loads((out / "motion_warping_windows.jsonl").read_text(encoding="utf-8"))
-            row["notify_index"] = 3
-            write_jsonl(out / "motion_warping_windows.jsonl", [row])
+            for filename in (
+                "motion_warping_windows.jsonl",
+                "motion_warping_modifiers.jsonl",
+                "motion_warping_modifier_properties.jsonl",
+            ):
+                row = json.loads((out / filename).read_text(encoding="utf-8"))
+                row["notify_index"] = 3
+                write_jsonl(out / filename, [row])
             with self.assertRaisesRegex(RuntimeError, "native/canonical window mismatch"):
                 capture.validate_capture(out)
 
