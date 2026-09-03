@@ -2,10 +2,10 @@
 """Read-only Landscape / Foliage / HLOD authored-evidence inventory.
 
 The diagnostic measures only facts already present in a canonical corpus. Exact
-class paths nominate candidate families; asset/object names never classify an
-item. World-authored actor/component properties and references are kept separate
-from asset-owned settings and World Partition descriptor metadata so a later
-schema can preserve the correct ownership boundary.
+reflected/native class paths nominate candidate families; asset/object names
+never classify an item. World-authored actor/component properties and references
+remain separate from asset-owned settings and World Partition descriptor
+metadata so later schemas can preserve the correct ownership boundary.
 """
 from __future__ import annotations
 
@@ -43,6 +43,17 @@ GENERIC_INSTANCE_COMPONENT_CLASSES = {
     "/Script/Engine.HierarchicalInstancedStaticMeshComponent",
 }
 
+# HLOD must be an explicit semantic class, not merely a class name containing
+# the letters "hlod". In particular, /Script/Engine.SkeletalMeshLODSettings
+# contains the substring "hlod" across the "Mesh" + "LOD" boundary and must
+# never be classified as HLOD.
+HLOD_EXACT_CLASSES = {
+    "/Script/Engine.HLODLayer",
+    "/Script/Engine.WorldPartitionHLOD",
+    "/Script/Engine.LODActor",
+    "/Script/Engine.HierarchicalLODVolume",
+}
+
 DETAIL_TOKENS = {
     "landscape": (
         "landscapematerial", "landscapeholematerial", "layerinfo", "weightmap",
@@ -76,7 +87,7 @@ def _family_for_class(class_path: object) -> str | None:
         return "landscape"
     if lowered.startswith("/script/foliage."):
         return "foliage"
-    if lowered.startswith("/script/") and "hlod" in lowered:
+    if value in HLOD_EXACT_CLASSES:
         return "hlod"
     return None
 
@@ -138,9 +149,9 @@ def build_report(output: Path, iterator, *, example_limit: int = 40) -> dict:
         "components": _counter_dict(),
         "partition_descs": _counter_dict(),
     }
-    asset_paths: dict[str, set[str]] = {family: set() for family in FAMILIES}
-    actor_paths: dict[str, set[str]] = {family: set() for family in FAMILIES}
-    component_paths: dict[str, set[str]] = {family: set() for family in FAMILIES}
+    asset_paths = {family: set() for family in FAMILIES}
+    actor_paths = {family: set() for family in FAMILIES}
+    component_paths = {family: set() for family in FAMILIES}
     actor_family_by_path: dict[str, str] = {}
     component_family_by_path: dict[str, str] = {}
     asset_family_by_path: dict[str, str] = {}
@@ -148,35 +159,30 @@ def build_report(output: Path, iterator, *, example_limit: int = 40) -> dict:
     tag_keys = _counter_dict()
     tag_rows = _counter_dict()
 
-    # Exact asset identity/class evidence.
     for row in _rows(output / "assets.jsonl", iterator):
         family = _family_for_class(row.get("class_path"))
         path = str(row.get("object_path", "") or "")
         if not family or not path:
             continue
-        cls = str(row.get("class_path", ""))
+        cls = str(row.get("class_path", "") or "")
         asset_paths[family].add(path)
         asset_family_by_path[path] = family
         class_counts["assets"][family][cls] += 1
         if len(examples[family]["assets.jsonl"]) < example_limit:
             examples[family]["assets.jsonl"].append(row)
         for key, value in _tag_items(row.get("tags")):
-            lowered = key.lower()
-            if any(token in lowered for token in DETAIL_TOKENS[family]):
+            if any(token in key.lower() for token in DETAIL_TOKENS[family]):
                 tag_keys[family][key] += 1
                 tag_rows[family][f"{key}={value}"] += 1
 
-    # Exact actor classes first so generic child components can inherit only a
-    # proven owner-family association (not a name-based foliage guess).
-    actors = list(_rows(output / "world_actors.jsonl", iterator))
-    for row in actors:
+    for row in _rows(output / "world_actors.jsonl", iterator):
         family = _family_for_class(row.get("actor_class"))
         actor = str(row.get("actor_path", "") or "")
         if not family or not actor:
             continue
         actor_paths[family].add(actor)
         actor_family_by_path[actor] = family
-        class_counts["actors"][family][str(row.get("actor_class", ""))] += 1
+        class_counts["actors"][family][str(row.get("actor_class", "") or "")] += 1
         if len(examples[family]["world_actors.jsonl"]) < example_limit:
             examples[family]["world_actors.jsonl"].append(row)
 
@@ -191,8 +197,6 @@ def build_report(output: Path, iterator, *, example_limit: int = 40) -> dict:
             generic_instance_components[cls] += 1
             if actor_family_by_path.get(actor) == "foliage":
                 generic_instance_components_under_foliage_actor += 1
-        # A generic ISM/HISM component is not foliage by class. It is associated
-        # with foliage only when its exact owning actor is already proven foliage.
         if not family and actor_family_by_path.get(actor) in FAMILIES:
             family = actor_family_by_path[actor]
         if not family or not component:
@@ -203,8 +207,7 @@ def build_report(output: Path, iterator, *, example_limit: int = 40) -> dict:
         if len(examples[family]["world_components.jsonl"]) < example_limit:
             examples[family]["world_components.jsonl"].append(row)
 
-    owner_family: dict[str, str] = {}
-    owner_family.update(actor_family_by_path)
+    owner_family = dict(actor_family_by_path)
     owner_family.update(component_family_by_path)
 
     property_counts = _counter_dict()
@@ -214,8 +217,7 @@ def build_report(output: Path, iterator, *, example_limit: int = 40) -> dict:
     target_class_counts = _counter_dict()
 
     for row in _rows(output / "world_instance_properties.jsonl", iterator):
-        owner = str(row.get("owner_path", "") or "")
-        family = owner_family.get(owner)
+        family = owner_family.get(str(row.get("owner_path", "") or ""))
         if not family:
             continue
         world_property_rows[family] += 1
@@ -226,18 +228,18 @@ def build_report(output: Path, iterator, *, example_limit: int = 40) -> dict:
             examples[family]["world_instance_properties.jsonl"].append(row)
 
     for row in _rows(output / "world_references.jsonl", iterator):
-        owner = str(row.get("owner_path", "") or "")
-        family = owner_family.get(owner)
-        if family:
-            world_reference_rows[family] += 1
-            prop = _first(row, "property_path", "root_property")
-            if prop:
-                reference_property_counts[family][prop] += 1
-            target_class = str(row.get("target_class", "") or "")
-            if target_class:
-                target_class_counts[family][target_class] += 1
-            if len(examples[family]["world_references.jsonl"]) < example_limit:
-                examples[family]["world_references.jsonl"].append(row)
+        family = owner_family.get(str(row.get("owner_path", "") or ""))
+        if not family:
+            continue
+        world_reference_rows[family] += 1
+        prop = _first(row, "property_path", "root_property")
+        if prop:
+            reference_property_counts[family][prop] += 1
+        target_class = str(row.get("target_class", "") or "")
+        if target_class:
+            target_class_counts[family][target_class] += 1
+        if len(examples[family]["world_references.jsonl"]) < example_limit:
+            examples[family]["world_references.jsonl"].append(row)
 
     systems_property_rows = collections.Counter()
     systems_reference_rows = collections.Counter()
@@ -262,16 +264,14 @@ def build_report(output: Path, iterator, *, example_limit: int = 40) -> dict:
     for row in _rows(output / "world_partition_actor_descs.jsonl", iterator):
         if bool(row.get("hlod_relevant", False)):
             partition_hlod_relevant += 1
-        cls = str(row.get("native_class", "") or "")
-        family = _family_for_class(cls)
+        family = _family_for_class(row.get("native_class"))
         if not family:
             continue
+        cls = str(row.get("native_class", "") or "")
         class_counts["partition_descs"][family][cls] += 1
         if len(examples[family]["world_partition_actor_descs.jsonl"]) < example_limit:
             examples[family]["world_partition_actor_descs.jsonl"].append(row)
 
-    # Supporting rows are marker inventory only. They never establish family
-    # identity and therefore cannot promote semantics by themselves.
     support_marker_rows = _counter_dict()
     for filename in SUPPORT_STREAMS:
         for row in _rows(output / filename, iterator):
@@ -281,7 +281,7 @@ def build_report(output: Path, iterator, *, example_limit: int = 40) -> dict:
                     support_marker_rows[family][filename] += 1
 
     proof: dict[str, dict[str, int]] = {}
-    gaps: dict[str, list[str]] = {family: [] for family in FAMILIES}
+    gaps = {family: [] for family in FAMILIES}
     for family in FAMILIES:
         proof[family] = {
             "exact_asset_candidates": len(asset_paths[family]),
