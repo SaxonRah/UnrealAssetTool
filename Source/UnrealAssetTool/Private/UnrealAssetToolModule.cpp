@@ -10,29 +10,6 @@
 
 namespace
 {
-bool IsWorldCommandlet()
-{
-    FString RunCommandlet;
-    FParse::Value(FCommandLine::Get(), TEXT("run="), RunCommandlet);
-    return RunCommandlet.Equals(TEXT("UnrealAssetToolWorld"), ESearchCase::IgnoreCase);
-}
-
-FString ScanOutputDir()
-{
-    FString OutputDir;
-    FParse::Value(FCommandLine::Get(), TEXT("Output="), OutputDir);
-    return OutputDir;
-}
-
-void RunAnimationMeshPhysicsPass(const FString& OutputDir)
-{
-    FString Error;
-    if (!UnrealAssetToolAnimationMeshPhysics::RunScan(OutputDir, Error))
-    {
-        UE_LOG(LogTemp, Error, TEXT("UnrealAssetToolAnimationMeshPhysics: %s"), *Error);
-    }
-}
-
 void RunStaticMeshPass(const FString& OutputDir)
 {
     if (OutputDir.IsEmpty())
@@ -57,15 +34,26 @@ void RunStaticMeshPass(const FString& OutputDir)
     }
 }
 
-void RunCanonicalSpecialistPasses()
+void RunAnimationMeshPhysicsPass()
 {
-    if (!IsWorldCommandlet())
+    FString RunCommandlet;
+    FParse::Value(FCommandLine::Get(), TEXT("run="), RunCommandlet);
+    if (!RunCommandlet.Equals(TEXT("UnrealAssetToolWorld"), ESearchCase::IgnoreCase))
     {
         return;
     }
 
-    const FString OutputDir = ScanOutputDir();
-    RunAnimationMeshPhysicsPass(OutputDir);
+    FString OutputDir;
+    FParse::Value(FCommandLine::Get(), TEXT("Output="), OutputDir);
+
+    FString Error;
+    if (!UnrealAssetToolAnimationMeshPhysics::RunScan(OutputDir, Error))
+    {
+        UE_LOG(LogTemp, Error, TEXT("UnrealAssetToolAnimationMeshPhysics: %s"), *Error);
+    }
+
+    // StaticMesh uses the same already-running headless World commandlet so the
+    // normal scan gains authored mesh topology without another Editor startup.
     RunStaticMeshPass(OutputDir);
 }
 }
@@ -76,7 +64,7 @@ public:
     virtual void StartupModule() override
     {
         UE_LOG(LogTemp, Display, TEXT("UnrealAssetTool: editor module loaded."));
-        FCoreDelegates::GetOnPostEngineInit().AddStatic(&RunCanonicalSpecialistPasses);
+        FCoreDelegates::GetOnPostEngineInit().AddStatic(&RunAnimationMeshPhysicsPass);
     }
 };
 
