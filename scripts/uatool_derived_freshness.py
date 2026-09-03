@@ -33,6 +33,7 @@ NON_DERIVED_SCRIPTS = frozenset({
     "uatool_staticmesh_evidence.py",
     "uatool_staticmesh_capture.py",
     "uatool_world_geometry_evidence.py",
+    "uatool_world_geometry_capture.py",
     "uatool_verify_bundle.py",
     "uatool_zonegraph_mass_evidence.py",
 })
