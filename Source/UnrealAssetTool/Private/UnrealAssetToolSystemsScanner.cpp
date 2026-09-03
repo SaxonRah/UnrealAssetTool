@@ -75,6 +75,9 @@ namespace UnrealAssetToolSystems
 #include "UnrealAssetToolSystemsNavigation.inl"
 #include "UnrealAssetToolSystemsNavigationPolicy.inl"
 #define ScanGASProjectModel ScanGASSmartObjectsAIPerceptionDataflowChaosUAFAndNavigationProjectModels
+// Schema 11's outer manifest proxy composes on top of the accepted schema-10
+// FUAFSystemsFileHelperProxy, so UAF publication remains in the synchronous
+// authoritative driver write chain before Navigation promotes the manifest.
 #define FFileHelper FNavigationSystemsFileHelperProxy
 #include "UnrealAssetToolSystemsDriver.inl"
 #undef FFileHelper
