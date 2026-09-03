@@ -8,6 +8,7 @@ from pathlib import Path
 
 import uatool_animation as animation
 import uatool_animation_curve_storage as curve_storage
+import uatool_animation_property_storage as property_storage
 import uatool_animation_mesh_physics as mesh_physics
 
 
@@ -57,6 +58,85 @@ def _patch_curve_storage_for_schema3() -> None:
     curve_storage._schema3_compatible = True
 
 
+def _patch_property_storage_for_schema3() -> None:
+    """Keep schema-2 property blocks valid when the public manifest is schema 3."""
+    if getattr(property_storage, "_schema3_compatible", False):
+        return
+    original_normalize = property_storage.normalize_output
+    original_manifest_validation = property_storage.manifest_validation_error
+
+    def normalize_output(output: Path):
+        output = Path(output)
+        manifest_path = output / "animation_manifest.json"
+        manifest = property_storage._read_manifest(manifest_path)
+        if manifest is None or int(manifest.get("schema_version", 0) or 0) != mesh_physics.PUBLIC_ANIMATION_SCHEMA_VERSION:
+            return original_normalize(output)
+
+        path = output / "animation_properties.jsonl"
+        counts = manifest.get("counts", {})
+        counts = counts if isinstance(counts, dict) else {}
+        expected = None
+        if "animation_properties" in counts:
+            expected = int(counts.get("animation_properties", 0) or 0)
+
+        stats = property_storage.compact(path)
+        if expected is not None and expected != int(stats["logical_properties"]):
+            raise RuntimeError(
+                "animation property count changed during storage normalization: "
+                f"manifest={expected} logical={stats['logical_properties']}"
+            )
+
+        counts["animation_properties"] = int(stats["logical_properties"])
+        counts["animation_property_blocks"] = int(stats["blocks"])
+        manifest["counts"] = counts
+        manifest["animation_property_encoding"] = property_storage.ENCODING
+        manifest["animation_property_logical_count"] = int(stats["logical_properties"])
+        manifest["animation_property_block_count"] = int(stats["blocks"])
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8", newline="\n")
+        return stats
+
+    def manifest_validation_error(output: Path) -> str | None:
+        output = Path(output)
+        try:
+            manifest = property_storage._read_manifest(output / "animation_manifest.json")
+            if manifest is None or int(manifest.get("schema_version", 0) or 0) != mesh_physics.PUBLIC_ANIMATION_SCHEMA_VERSION:
+                return original_manifest_validation(output)
+            if manifest.get("animation_property_encoding") != property_storage.ENCODING:
+                return f"unexpected animation-property encoding {manifest.get('animation_property_encoding')!r}"
+            counts = manifest.get("counts", {})
+            counts = counts if isinstance(counts, dict) else {}
+            expected_logical = int(
+                counts.get("animation_properties", manifest.get("animation_property_logical_count", 0)) or 0
+            )
+            expected_blocks = int(
+                counts.get("animation_property_blocks", manifest.get("animation_property_block_count", 0)) or 0
+            )
+            actual_logical = actual_blocks = 0
+            path = output / "animation_properties.jsonl"
+            for line_number, row in property_storage._rows(path) or ():
+                if row.get("encoding") != property_storage.ENCODING:
+                    return "legacy row-per-property animation storage remains"
+                count, block_count = property_storage._validate_block(row, f"{path}:{line_number}")
+                actual_logical += count
+                actual_blocks += block_count
+            if actual_logical != expected_logical:
+                return f"animation-property logical count mismatch: manifest={expected_logical} actual={actual_logical}"
+            if actual_blocks != expected_blocks:
+                return f"animation-property block count mismatch: manifest={expected_blocks} actual={actual_blocks}"
+            expanded = sum(1 for _ in property_storage.iter_logical_properties(path))
+            if expanded != actual_logical:
+                return f"animation-property expansion count mismatch: blocks={actual_logical} expanded={expanded}"
+        except RuntimeError as exc:
+            return str(exc)
+        return None
+
+    property_storage.normalize_output = normalize_output
+    property_storage.manifest_validation_error = manifest_validation_error
+    property_storage._schema3_compatible = True
+
+
 def install(runtime_module, core_module) -> None:
     if getattr(runtime_module, "_mesh_physics_schema3_integration_installed", False):
         return
@@ -69,6 +149,7 @@ def install(runtime_module, core_module) -> None:
 
     def ensure_animation_api() -> None:
         _patch_curve_storage_for_schema3()
+        _patch_property_storage_for_schema3()
         mesh_physics.install(animation)
 
     def create_schema(conn) -> None:
@@ -84,8 +165,8 @@ def install(runtime_module, core_module) -> None:
         ensure_animation_api()
         output = Path(output).expanduser().resolve()
         # uatool.py applies canonical storage cleanup before delegating here.
-        # At that point curve storage is schema 2 and the authored sidecar can
-        # be composed deterministically into public animation schema 3.
+        # At that point curve/property storage is schema 2 and the authored
+        # sidecar can be composed deterministically into public animation schema 3.
         mesh_physics.normalize_output(output)
         return original_derive_output(output)
 
