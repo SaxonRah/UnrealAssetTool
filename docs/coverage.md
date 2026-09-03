@@ -23,8 +23,8 @@ structural=12
 world=12
 animation=1
 vfx=1
-systems=10
-derived=26
+systems=11
+derived=27
 capabilities=1
 ```
 
@@ -80,6 +80,7 @@ capabilities=1
 | Dataflow | `first_class` | Project-wide `UDataflow` graphs, concrete node structs, ordered input/output pins, exact links, authored asset/node properties and direct object references with exact schema-25 graph semantics | Runtime graph evaluation/results are not captured; higher-level Hair/Cloth/Flesh/Vehicles semantics are not inferred merely from Dataflow use |
 | Geometry Collection / Chaos destruction | `first_class` | Authored clustering, damage, connection, mass/sleep/removal, SizeSpecificData, physics material, DataflowInstance/Overrides and nullable DataflowAsset state with exact schema-25 graph semantics | `GeometrySource` construction provenance is excluded; solver state, dynamic transforms, live break/collision/removal history, cache playback and runtime Field results are not captured |
 | AnimNext / UAF | `first_class` | Exact `UAFSystem`/`UAFAnimGraph` identity, entries, variables/defaults/bindings, authored components, runtime entry points, editor-side RigVM graphs/nodes/pins/links and exact variable-node resolution with schema-26 graph semantics | No RigVM execution, current pose/value state, ticking, runtime event execution, injection history or transient graph-instance state |
+| Authored Navigation | `first_class` | NavArea costs/inheritance/agent masks and meta-area mappings; NavigationSystem/agent policy; simple-link/SmartLink defaults; modifier/invoker/bounds defaults; authored Recast defaults; exact schema-27 semantic relations | World schema 12 owns placed actors/components/transforms/instance overrides and world link endpoints; generated Recast instances/tiles/polys, path queries and runtime navigation state are excluded |
 | Typed project graph | `first_class` | Typed nodes/edges, provenance, coverage and quality classes | It reflects extractor depth; it must not imply unsupported subsystem semantics |
 | Capability contract | `first_class` | Corpus schema versions, tool/corpus coverage, canonical streams, derived relations, runtime boundaries, partial-corpus state and acceptance provenance | It describes evidence available to the corpus; it does not manufacture new semantic facts |
 
@@ -92,7 +93,6 @@ These systems are visible through existing generic layers, Blueprint/component s
 | Family | Current useful facts | Missing semantic model |
 | --- | --- | --- |
 | Gameplay Framework native classes | Blueprint subclasses/defaults plus placed Actor/component state | Native GameMode/GameState/PlayerState/Controller/Pawn relationship summary across project settings/maps |
-| Navigation | Nav actors/volumes/components can appear as world objects | Nav areas/costs, NavLink topology, agent settings and authored navigation project settings; generated NavMesh tile serialization is not a goal |
 | Landscape/Foliage/HLOD | World actors/components/assets are discoverable | Landscape layer/material/component topology, foliage type/instance semantics, HLOD composition |
 | SkeletalMesh / PhysicsAsset | Asset identity/references and use by animation assets can be seen | Skeleton/LOD/material/morph/cloth data and physics bodies/constraints |
 | StaticMesh | Asset identity/references/material use can be seen generically | LOD/section/socket/collision/Nanite authored topology |
@@ -157,11 +157,15 @@ Frontend nodes/edges are exact, but dedicated streams do not yet expose vertex d
 
 The project tag model is first-class. Remaining tag work is narrower: native C++ registration provenance where recoverable, restricted-tag special cases, replication/config depth and richer cross-system tag joins.
 
-## 6. Authored Navigation is the remaining core AI semantic gap
+## 6. Authored Navigation boundary is authored/default plus world-instance split ownership
 
-Behavior Tree, Blackboard, EQS, StateTree, Smart Objects and AI Perception now have maintained subsystem semantics. Authored Navigation settings/links/areas remain visible only through generic world/project facts.
+Systems schema 11 and derived schema 27 are accepted on ContentExamples UE 5.8.2. The normalized systems model covers NavArea definitions/masks/inheritance/meta mappings, NavigationSystem and configured agent policy, link/modifier/invoker/bounds class defaults and authored Recast defaults.
 
-**Recommended priority:** normalize authored navigation configuration/links/areas rather than generated NavMesh tile serialization.
+World schema 12 remains authoritative for placed Navigation actors/components, transforms, per-instance overrides and world-authored link endpoints. Generated RecastNavMesh instances/tiles/polys, path-query results, rebuild history and live path-following state are deliberate non-claims.
+
+The accepted systems corpus contains 7 NavArea definitions, 16 explicit meta-area agent mappings, 2 system rows, 1 configured agent, 2 link defaults, 2 modifier defaults, 1 invoker default, 1 bounds default and 1 Recast-default row, and verifies exactly 27 specialist schema-27 edges.
+
+See [authored-navigation-schema11.md](authored-navigation-schema11.md).
 
 ## 7. Mass/ZoneGraph boundary is authored, not generated
 
@@ -218,7 +222,7 @@ Dataflow / Geometry Collection (systems schema 9 / derived schema 25)
 AnimNext / UAF (systems schema 10 / derived schema 26)
 ```
 
-The original evidence-driven gameplay-family expansion tracked by issue #14 is complete after the AnimNext/UAF acceptance. Gameplay Framework summary and authored Navigation remain useful follow-up normalization work, but they are project-intelligence/depth slices rather than reasons to keep that umbrella expansion open indefinitely.
+The original evidence-driven gameplay-family expansion tracked by issue #14 is complete. Authored Navigation was subsequently completed as its own project-intelligence/depth slice in issue #45 with systems schema 11 / derived schema 27. Gameplay Framework summary remains useful independent normalization work rather than a reason to reopen the old umbrella.
 
 ---
 
@@ -230,12 +234,13 @@ The original evidence-driven gameplay-family expansion tracked by issue #14 is c
 | World | Yes | Yes | Yes | Yes | ContentExamples/StackOBot/City Sample + others |
 | Animation | Yes | Yes | Yes | Yes | GASP + ContentExamples |
 | VFX | Yes | Yes | Yes | Yes | ContentExamples + StackOBot/Niagara Examples |
-| Systems schema 10 | Yes | Yes | Yes | Yes | StackOBot + ContentExamples + GASP + City Sample + Lyra, with specialist corpus gates by family |
+| Systems schema 11 | Yes | Yes | Yes | Yes | StackOBot + ContentExamples + GASP + City Sample + Lyra, with specialist corpus gates by family |
 | GAS schema-6 slice | Yes | Yes | Yes | Yes, exact schema-22 contract | Lyra UE 5.8.2 |
 | Smart Objects schema-7 slice | Yes | Yes | Yes | Yes, exact schema-23 contract | City Sample UE 5.8.2 |
 | AI Perception schema-8 slice | Yes | Yes | Yes | Yes, exact schema-24 contract | ContentExamples UE 5.8.2 |
 | Dataflow / Geometry Collection schema-9 slice | Yes | Yes | Yes | Yes, exact schema-25 contract | ContentExamples UE 5.8.2 |
 | AnimNext / UAF schema-10 slice | Yes | Yes | Yes | Yes, exact 213-edge schema-26 contract | GameAnimationSample-hosted UE 5.8.2 representative UAF content |
+| Authored Navigation schema-11 slice | Yes | Yes | Yes | Yes, exact 27-edge schema-27 contract | ContentExamples UE 5.8.2 |
 | Project graph/neighborhoods | Yes | Yes | Yes | n/a | StackOBot + ContentExamples + GASP + City Sample + Lyra |
 | Capability contract | Yes | n/a | `uatool capabilities` | Describes graph/canonical coverage | Synthetic regression + emitted per corpus |
 
@@ -262,6 +267,7 @@ Focused Python regression coverage includes:
 - AI Perception systems schema-8 normalization, discovery/capture regression gates, null-array preservation, capability promotion and exact schema-24 graph verification;
 - Dataflow / Geometry Collection systems schema-9 graph/cardinality validation, behavior-boundary enforcement, capability promotion and exact schema-25 graph verification;
 - AnimNext / UAF systems schema-10 identity/discovery/cardinality validation, accepted representative capture, exact variable-use resolution and exact schema-26 graph verification;
+- Authored Navigation systems schema-11 normalization, exact class/default/config contract, split world/system ownership, agent-mask normalization, representative 16-mapping cardinality and exact schema-27 graph verification;
 - systems validation/SQLite/project-graph integration;
 - derived freshness, neighborhood compaction and storage invariants;
 - capability-contract full-corpus/partial-corpus/determinism/deferred-composition behavior.
@@ -272,6 +278,6 @@ Real UE corpora remain required because unit tests cannot substitute for actual 
 
 # What “complete” means now
 
-The original planned indexer roadmap plus the accepted Gameplay Tags, gameplay-data, Mover, Gameplay Cameras, Mass/authored-ZoneGraph, GAS, Smart Objects, AI Perception, Dataflow/Geometry Collection and AnimNext/UAF slices are implemented and corpus-validated.
+The original planned indexer roadmap plus the accepted Gameplay Tags, gameplay-data, Mover, Gameplay Cameras, Mass/authored-ZoneGraph, GAS, Smart Objects, AI Perception, Dataflow/Geometry Collection, AnimNext/UAF and authored Navigation slices are implemented and corpus-validated.
 
 The repository is **not complete with respect to the entire Unreal Engine 5.8 content ecosystem**, and it should not claim to be. The 1.0 target is trustworthy semantic infrastructure with explicit coverage, deterministic/provenance-aware graph output, stable lifecycle commands and bounded performance—not “100% of Unreal classes.”
