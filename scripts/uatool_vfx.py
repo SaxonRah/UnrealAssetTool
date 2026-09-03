@@ -28,6 +28,7 @@ import uatool_gameplay_framework_evidence as _gameplay_framework_evidence
 import uatool_semantic_quality as _semantic_quality
 import uatool_skeletalmesh_physicsasset_evidence as _skeletalmesh_physicsasset_evidence
 import uatool_staticmesh_evidence as _staticmesh_evidence
+import uatool_world_geometry_evidence as _world_geometry_evidence
 import uatool_skeletalmesh_physicsasset_capture as _skeletalmesh_physicsasset_capture
 import uatool_staticmesh_capture as _staticmesh_capture
 import uatool_animation_mesh_physics_integration as _animation_mesh_physics_integration
@@ -173,6 +174,7 @@ _gameplay_framework_evidence.install(_runtime)
 _semantic_quality.install(_runtime)
 _skeletalmesh_physicsasset_evidence.install(_runtime)
 _staticmesh_evidence.install(_runtime)
+_world_geometry_evidence.install(_runtime)
 _skeletalmesh_physicsasset_capture.install(_runtime, _core)
 _staticmesh_capture.install(_runtime, _core)
 _gameplay_framework_accept.install(_runtime)
