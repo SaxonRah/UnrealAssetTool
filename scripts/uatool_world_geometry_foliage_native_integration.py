@@ -10,6 +10,8 @@ import time
 from pathlib import Path
 
 import uatool_world_geometry_capture as capture
+import uatool_runtime as runtime
+import uatool_world_geometry_integration as canonical_integration
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -38,7 +40,14 @@ def _native_counts(output: Path) -> tuple[int, int]:
 
 def install(core_module) -> None:
     if getattr(capture, "_world_geometry_native_foliage_installed", False):
+        canonical_integration.install(runtime, core_module)
         return
+
+    # The focused native Foliage gate is also the composition point for the
+    # durable world-geometry schema. This module is imported before uatool.py's
+    # build_perf.install(core), so derived schema 31 participates in the same
+    # monotonic composition order as animation29/staticmesh30.
+    canonical_integration.install(runtime, core_module)
 
     original_report = capture.semantic_report
 
