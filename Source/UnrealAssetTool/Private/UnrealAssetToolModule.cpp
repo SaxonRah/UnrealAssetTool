@@ -1,4 +1,5 @@
 #include "UnrealAssetToolAnimationMeshPhysicsScanner.h"
+#include "UnrealAssetToolMotionWarpingCommandlet.h"
 #include "UnrealAssetToolStaticMeshCommandlet.h"
 #include "UnrealAssetToolWorldGeometryCommandlet.h"
 #include "UnrealAssetToolWorldGeometryFoliageCommandlet.h"
@@ -89,6 +90,35 @@ void RunWorldGeometryPass(const FString& OutputDir)
     }
 }
 
+void RunMotionWarpingPass(const FString& OutputDir)
+{
+    if (OutputDir.IsEmpty())
+    {
+        UE_LOG(LogTemp, Error, TEXT("UnrealAssetToolMotionWarping: World commandlet did not provide -Output"));
+        return;
+    }
+
+    const FString CaptureDir = FPaths::Combine(OutputDir, TEXT("motion-warping-native-capture"));
+    UUnrealAssetToolMotionWarpingCommandlet* Commandlet =
+        NewObject<UUnrealAssetToolMotionWarpingCommandlet>();
+    if (!Commandlet)
+    {
+        UE_LOG(LogTemp, Error, TEXT("UnrealAssetToolMotionWarping: could not allocate authored capture commandlet"));
+        return;
+    }
+
+    const FString Params = FString::Printf(TEXT("-Output=\"%s\""), *CaptureDir);
+    const int32 Result = Commandlet->Main(Params);
+    if (Result != 0)
+    {
+        UE_LOG(
+            LogTemp,
+            Error,
+            TEXT("UnrealAssetToolMotionWarping compact World-pass capture failed with exit code %d"),
+            Result);
+    }
+}
+
 void RunAnimationMeshPhysicsPass()
 {
     FString RunCommandlet;
@@ -111,6 +141,7 @@ void RunAnimationMeshPhysicsPass()
     // authored passes; neither pass launches another editor or loads a map.
     RunStaticMeshPass(OutputDir);
     RunWorldGeometryPass(OutputDir);
+    RunMotionWarpingPass(OutputDir);
 }
 }
 
