@@ -109,6 +109,8 @@ class NavigationCaptureTest(unittest.TestCase):
         self.assertIn('LoadModule(TEXT("NavigationSystem"))', native)
         self.assertIn('LoadModule(TEXT("AIModule"))', native)
         self.assertIn("GetDerivedClasses(NavAreaBase, DerivedAreas, true)", native)
+        self.assertIn("FCString::Strcmp(*A, *B) < 0", native)
+        self.assertNotIn("ClassPaths.Sort();", native)
         self.assertIn('TEXT("/Script/NavigationSystem.NavigationSystemV1")', native)
         self.assertIn('TEXT("/Script/NavigationSystem.NavigationInvokerComponent")', native)
         self.assertIn('TEXT("/Script/NavigationSystem.NavModifierVolume")', native)

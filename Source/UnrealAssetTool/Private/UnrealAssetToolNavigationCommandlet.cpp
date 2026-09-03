@@ -426,7 +426,10 @@ int32 UUnrealAssetToolNavigationCommandlet::Main(const FString& Params)
 
     TArray<FString> ClassPaths;
     Classes.GetKeys(ClassPaths);
-    ClassPaths.Sort();
+    ClassPaths.Sort([](const FString& A, const FString& B)
+    {
+        return FCString::Strcmp(*A, *B) < 0;
+    });
     for (const FString& ClassPath : ClassPaths)
     {
         if (!WriteClass(Classes[ClassPath], NavAreaBase, Writers, Counts))
