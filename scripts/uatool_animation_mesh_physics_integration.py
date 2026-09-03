@@ -141,6 +141,14 @@ def install(runtime_module, core_module) -> None:
     if getattr(runtime_module, "_mesh_physics_schema3_integration_installed", False):
         return
 
+    # uatool.py imports this integration before importing canonical_cleanup.
+    # Patch inherited schema-2 storage immediately so cleanup can consume an
+    # already-promoted public schema-3 manifest before any wrapped core entrypoint
+    # has a chance to call ensure_animation_api(). Schema-1/2 corpora still
+    # delegate unchanged to the original storage functions.
+    _patch_curve_storage_for_schema3()
+    _patch_property_storage_for_schema3()
+
     original_create_schema = core_module.create_schema
     original_derive_output = core_module.derive_output
     original_build_database = core_module.build_database
