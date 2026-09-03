@@ -154,9 +154,13 @@ class SystemsDataflowChaosTest(unittest.TestCase):
 
     def test_rejects_edge_direction_mismatch(self) -> None:
         pins = list(rows(self.output / "dataflow_pins.jsonl"))
+        # Swap the two source-node pin directions. This preserves the node's
+        # declared 1-in/1-out cardinality and contiguous per-direction indices,
+        # so validation reaches the semantic edge-direction invariant itself.
+        pins[0]["direction"] = "output"
         pins[1]["direction"] = "input"
         write_jsonl(self.output / "dataflow_pins.jsonl", pins)
-        self.assertIn("direction", systems.validation_error(self.output, rows) or "")
+        self.assertIn("direction mismatch", systems.validation_error(self.output, rows) or "")
 
     def test_native_schema9_contract(self) -> None:
         scanner = (ROOT / "Source/UnrealAssetTool/Private/UnrealAssetToolSystemsScanner.cpp").read_text(encoding="utf-8")
