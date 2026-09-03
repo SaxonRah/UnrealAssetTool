@@ -102,10 +102,14 @@ class SystemsSchema7AcceptanceTest(unittest.TestCase):
         ai_policy = (
             ROOT / "Source/UnrealAssetTool/Private/UnrealAssetToolSystemsAIPerceptionPolicy.inl"
         ).read_text(encoding="utf-8")
+        dataflow_policy = (
+            ROOT / "Source/UnrealAssetTool/Private/UnrealAssetToolSystemsDataflowChaosPolicy.inl"
+        ).read_text(encoding="utf-8")
         self.assertIn("FSmartObjectSystemsFileHelperProxy", policy)
         self.assertIn("UpgradeSystemsManifestToSchema7", policy)
         self.assertIn("FSmartObjectSystemsFileHelperProxy::SaveStringToFile", ai_policy)
-        self.assertIn("#define FFileHelper FAIPerceptionSystemsFileHelperProxy", scanner)
+        self.assertIn("FAIPerceptionSystemsFileHelperProxy::SaveStringToFile", dataflow_policy)
+        self.assertIn("#define FFileHelper FDataflowChaosSystemsFileHelperProxy", scanner)
         self.assertIn("#undef FFileHelper", scanner)
         self.assertNotIn("GSmartObjectSchema7ExitHookRegistered", policy)
         self.assertNotIn("FCoreDelegates::OnEnginePreExit.AddStatic", policy)
