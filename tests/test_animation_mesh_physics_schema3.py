@@ -160,6 +160,7 @@ class AnimationMeshPhysicsSchema3Test(unittest.TestCase):
 
     def test_native_scanner_boundary_and_wiring(self) -> None:
         source = (ROOT / "Source/UnrealAssetTool/Private/UnrealAssetToolAnimationMeshPhysicsScanner.cpp").read_text(encoding="utf-8")
+        module = (ROOT / "Source/UnrealAssetTool/Private/UnrealAssetToolModule.cpp").read_text(encoding="utf-8")
         facade = (SCRIPTS / "uatool_vfx.py").read_text(encoding="utf-8")
         integration = (SCRIPTS / "uatool_animation_mesh_physics_integration.py").read_text(encoding="utf-8")
         self.assertIn('TEXT("/Script/Engine.SkeletalMesh")', source)
@@ -170,6 +171,12 @@ class AnimationMeshPhysicsSchema3Test(unittest.TestCase):
         self.assertIn('TEXT("MeshClothingAssets")', source)
         self.assertIn('TEXT("MorphTargets")', source)
         self.assertIn('TEXT("Materials")', source)
+        self.assertIn("bool RunScan(const FString& RequestedOutputDir, FString& OutError)", source)
+        self.assertNotIn("struct FBootstrap", source)
+        self.assertNotIn("GetOnPostEngineInit", source)
+        self.assertIn('#include "UnrealAssetToolAnimationMeshPhysicsScanner.h"', module)
+        self.assertIn("FCoreDelegates::GetOnPostEngineInit().AddStatic(&RunAnimationMeshPhysicsPass)", module)
+        self.assertIn("UnrealAssetToolAnimationMeshPhysics::RunScan(OutputDir, Error)", module)
         for forbidden in ("GetResourceForRendering", "GetSkeletalMeshRenderData", "StartSimulation", "CreatePhysicsState", "LoadMap("):
             self.assertNotIn(forbidden, source)
         self.assertIn("uatool_animation_mesh_physics_integration", facade)
