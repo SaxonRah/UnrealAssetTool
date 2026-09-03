@@ -9,6 +9,12 @@
   "EnabledByDefault": true,
   "CanContainContent": false,
   "IsBetaVersion": false,
+  "Plugins": [
+    {
+      "Name": "RigVM",
+      "Enabled": true
+    }
+  ],
   "Modules": [
     {
       "Name": "UnrealAssetTool",
