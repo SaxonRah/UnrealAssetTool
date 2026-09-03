@@ -92,6 +92,17 @@ def _unique(rows: list[dict], fields: tuple[str, ...], label: str) -> None:
         seen.add(key)
 
 
+def _validate_unreal_path_order(paths: list[str]) -> None:
+    """Validate the case-insensitive ordering used by Unreal object/package paths."""
+    if not paths or any(not path for path in paths):
+        raise RuntimeError("StaticMesh asset rows must be non-empty")
+    folded = [path.casefold() for path in paths]
+    if len(set(folded)) != len(folded):
+        raise RuntimeError("StaticMesh asset rows contain duplicate case-insensitive object paths")
+    if folded != sorted(folded):
+        raise RuntimeError("StaticMesh asset rows are not in Unreal case-insensitive path order")
+
+
 def validate_capture(output: Path) -> dict:
     output = Path(output)
     manifest = _manifest(output)
@@ -116,8 +127,7 @@ def validate_capture(output: Path) -> dict:
     properties = list(_rows(output / "staticmesh_properties.jsonl"))
 
     paths = [str(row.get("static_mesh_path", "") or "") for row in assets]
-    if not paths or paths != sorted(set(paths)):
-        raise RuntimeError("StaticMesh asset rows must be non-empty, unique and sorted")
+    _validate_unreal_path_order(paths)
     asset_set = set(paths)
     for row in assets:
         if str(row.get("class_path", "") or "") != STATIC_MESH_CLASS:
@@ -325,6 +335,35 @@ def _capture_cli(core_module, argv: list[str]) -> int:
     return 0
 
 
+def _report_cli(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="uatool staticmesh-capture-report",
+        description="validate and report an existing focused StaticMesh capture without launching Unreal",
+    )
+    parser.add_argument("output", help="existing staticmesh-native-capture directory")
+    parser.add_argument("--report", help="report output path")
+    parser.add_argument("--archive", help="optionally rebuild the raw capture ZIP")
+    args = parser.parse_args(argv)
+
+    output = Path(args.output).expanduser().resolve()
+    if not output.is_dir():
+        raise FileNotFoundError(f"StaticMesh capture directory does not exist: {output}")
+    manifest = validate_capture(output)
+    report = semantic_report(output, manifest)
+    report_path = Path(args.report).expanduser().resolve() if args.report else output.parent / "StaticMesh.native-capture.txt"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(report, encoding="utf-8", newline="\n")
+    if args.archive:
+        archive = Path(args.archive).expanduser().resolve()
+        _write_archive(output, archive)
+        print(f"focused StaticMesh raw archive: {archive}")
+    print(report, end="")
+    print(f"focused StaticMesh report: {report_path}")
+    print("Unreal was not launched")
+    print("derive was not run")
+    return 0
+
+
 def install(runtime_module=None, core_module=None) -> None:
     if runtime_module is None:
         import uatool_runtime as runtime_module
@@ -338,6 +377,12 @@ def install(runtime_module=None, core_module=None) -> None:
         if len(sys.argv) > 1 and sys.argv[1] == "staticmesh-capture":
             try:
                 return _capture_cli(core_module, sys.argv[2:])
+            except Exception as exc:
+                print(f"ERROR: {exc}", file=sys.stderr)
+                return 63
+        if len(sys.argv) > 1 and sys.argv[1] == "staticmesh-capture-report":
+            try:
+                return _report_cli(sys.argv[2:])
             except Exception as exc:
                 print(f"ERROR: {exc}", file=sys.stderr)
                 return 63
