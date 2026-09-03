@@ -1,6 +1,6 @@
 #include "UnrealAssetToolMotionWarpingCommandlet.h"
 
-#include "AnimNotifyState_MotionWarping.h"
+#include "Animation/AnimNotifies/AnimNotifyState.h"
 #include "Animation/AnimSequenceBase.h"
 #include "AssetRegistry/AssetData.h"
 #include "AssetRegistry/AssetRegistryModule.h"
@@ -13,7 +13,6 @@
 #include "Misc/Parse.h"
 #include "Misc/Paths.h"
 #include "Modules/ModuleManager.h"
-#include "RootMotionModifier.h"
 #include "Serialization/JsonSerializer.h"
 #include "UObject/UnrealType.h"
 
@@ -143,8 +142,38 @@ static FString ExportProperty(const FProperty* Property, const void* ValuePtr, U
     return Value;
 }
 
+static UObject* ObjectField(UObject* Object, const TCHAR* Name)
+{
+    if (!Object) return nullptr;
+    const FObjectPropertyBase* Property =
+        CastField<FObjectPropertyBase>(Object->GetClass()->FindPropertyByName(FName(Name)));
+    if (!Property) return nullptr;
+    const void* ValuePtr = Property->ContainerPtrToValuePtr<void>(Object);
+    return ValuePtr ? Property->GetObjectPropertyValue(ValuePtr) : nullptr;
+}
+
+static FString PropertyText(UObject* Object, const TCHAR* Name)
+{
+    if (!Object) return FString();
+    const FProperty* Property = Object->GetClass()->FindPropertyByName(FName(Name));
+    if (!Property) return FString();
+    return ExportProperty(Property, Property->ContainerPtrToValuePtr<void>(Object), Object);
+}
+
+static bool PropertyBool(UObject* Object, const TCHAR* Name, bool& OutValue)
+{
+    if (!Object) return false;
+    const FBoolProperty* Property =
+        CastField<FBoolProperty>(Object->GetClass()->FindPropertyByName(FName(Name)));
+    if (!Property) return false;
+    const void* ValuePtr = Property->ContainerPtrToValuePtr<void>(Object);
+    if (!ValuePtr) return false;
+    OutValue = Property->GetPropertyValue(ValuePtr);
+    return true;
+}
+
 static bool WriteModifierProperties(
-    URootMotionModifier* Modifier,
+    UObject* Modifier,
     const FString& AssetPath,
     int32 NotifyIndex,
     const FString& NotifyStatePath,
@@ -191,17 +220,65 @@ static bool WriteModifierProperties(
     return true;
 }
 
+static void AddKnownWarpFields(UObject* Modifier, const TSharedRef<FJsonObject>& Row)
+{
+    if (!Modifier) return;
+
+    Row->SetStringField(TEXT("warp_target_name"), PropertyText(Modifier, TEXT("WarpTargetName")));
+    Row->SetStringField(TEXT("warp_point_anim_provider"), PropertyText(Modifier, TEXT("WarpPointAnimProvider")));
+    Row->SetStringField(TEXT("warp_point_anim_bone_name"), PropertyText(Modifier, TEXT("WarpPointAnimBoneName")));
+    Row->SetStringField(TEXT("warp_point_anim_transform"), PropertyText(Modifier, TEXT("WarpPointAnimTransform")));
+    Row->SetStringField(TEXT("rotation_type"), PropertyText(Modifier, TEXT("RotationType")));
+    Row->SetStringField(TEXT("rotation_method"), PropertyText(Modifier, TEXT("RotationMethod")));
+    Row->SetStringField(TEXT("warp_rotation_time_multiplier"), PropertyText(Modifier, TEXT("WarpRotationTimeMultiplier")));
+    Row->SetStringField(TEXT("warp_max_rotation_rate"), PropertyText(Modifier, TEXT("WarpMaxRotationRate")));
+    Row->SetStringField(TEXT("additional_rotation_offset"), PropertyText(Modifier, TEXT("AdditionalRotationOffset")));
+    Row->SetStringField(TEXT("add_translation_easing_func"), PropertyText(Modifier, TEXT("AddTranslationEasingFunc")));
+
+    if (UObject* Curve = ObjectField(Modifier, TEXT("AddTranslationEasingCurve")))
+    {
+        Row->SetStringField(TEXT("add_translation_easing_curve"), Curve->GetPathName());
+        Row->SetStringField(TEXT("add_translation_easing_curve_class"), Curve->GetClass()->GetPathName());
+    }
+    else
+    {
+        Row->SetStringField(TEXT("add_translation_easing_curve"), FString());
+        Row->SetStringField(TEXT("add_translation_easing_curve_class"), FString());
+    }
+
+    struct FBoolField
+    {
+        const TCHAR* PropertyName;
+        const TCHAR* JsonName;
+    };
+    static const FBoolField BoolFields[] = {
+        { TEXT("bWarpTranslation"), TEXT("warp_translation") },
+        { TEXT("bIgnoreZAxis"), TEXT("ignore_z_axis") },
+        { TEXT("bWarpRotation"), TEXT("warp_rotation") },
+        { TEXT("bWarpToFeetLocation"), TEXT("warp_to_feet_location") },
+        { TEXT("bSubtractRemainingRootMotion"), TEXT("subtract_remaining_root_motion") },
+    };
+    for (const FBoolField& Field : BoolFields)
+    {
+        bool Value = false;
+        if (PropertyBool(Modifier, Field.PropertyName, Value))
+        {
+            Row->SetBoolField(Field.JsonName, Value);
+        }
+    }
+}
+
 static bool WriteWindow(
     UAnimSequenceBase* Sequence,
     const FAssetData& Asset,
     int32 NotifyIndex,
     const FAnimNotifyEvent& Event,
-    UAnimNotifyState_MotionWarping* NotifyState,
+    UAnimNotifyState* NotifyState,
     FWriters& Writers,
     FCounts& Counts)
 {
     const FString AssetPath = Asset.GetSoftObjectPath().ToString();
-    URootMotionModifier* Modifier = NotifyState ? NotifyState->RootMotionModifier.Get() : nullptr;
+    UObject* Modifier = ObjectField(NotifyState, TEXT("RootMotionModifier"));
 
     TSharedRef<FJsonObject> Window = MakeShared<FJsonObject>();
     Window->SetStringField(TEXT("asset_path"), AssetPath);
@@ -235,28 +312,7 @@ static bool WriteWindow(
     ModifierRow->SetStringField(TEXT("outer_path"), Modifier->GetOuter() ? Modifier->GetOuter()->GetPathName() : FString());
     ModifierRow->SetStringField(TEXT("outer_class"), Modifier->GetOuter() ? Modifier->GetOuter()->GetClass()->GetPathName() : FString());
     ModifierRow->SetBoolField(TEXT("is_template"), true);
-
-    if (URootMotionModifier_Warp* Warp = Cast<URootMotionModifier_Warp>(Modifier))
-    {
-        ModifierRow->SetStringField(TEXT("warp_target_name"), Warp->WarpTargetName.ToString());
-        ModifierRow->SetBoolField(TEXT("warp_translation"), Warp->bWarpTranslation);
-        ModifierRow->SetBoolField(TEXT("ignore_z_axis"), Warp->bIgnoreZAxis);
-        ModifierRow->SetBoolField(TEXT("warp_rotation"), Warp->bWarpRotation);
-        ModifierRow->SetBoolField(TEXT("warp_to_feet_location"), Warp->bWarpToFeetLocation);
-        ModifierRow->SetBoolField(TEXT("subtract_remaining_root_motion"), Warp->bSubtractRemainingRootMotion);
-        ModifierRow->SetNumberField(TEXT("warp_point_anim_provider"), static_cast<int32>(Warp->WarpPointAnimProvider));
-        ModifierRow->SetStringField(TEXT("warp_point_anim_bone_name"), Warp->WarpPointAnimBoneName.ToString());
-        ModifierRow->SetStringField(TEXT("warp_point_anim_transform"), Warp->WarpPointAnimTransform.ToString());
-        ModifierRow->SetNumberField(TEXT("rotation_type"), static_cast<int32>(Warp->RotationType));
-        ModifierRow->SetNumberField(TEXT("rotation_method"), static_cast<int32>(Warp->RotationMethod));
-        ModifierRow->SetNumberField(TEXT("warp_rotation_time_multiplier"), Warp->WarpRotationTimeMultiplier);
-        ModifierRow->SetNumberField(TEXT("warp_max_rotation_rate"), Warp->WarpMaxRotationRate);
-        ModifierRow->SetStringField(TEXT("additional_rotation_offset"), Warp->AdditionalRotationOffset.ToString());
-        ModifierRow->SetNumberField(TEXT("add_translation_easing_func"), static_cast<int32>(Warp->AddTranslationEasingFunc));
-        ModifierRow->SetStringField(
-            TEXT("add_translation_easing_curve"),
-            Warp->AddTranslationEasingCurve ? Warp->AddTranslationEasingCurve->GetPathName() : FString());
-    }
+    AddKnownWarpFields(Modifier, ModifierRow);
 
     if (!Writers.Modifiers.Write(ModifierRow)) return false;
     ++Counts.Modifiers;
@@ -284,6 +340,7 @@ static bool WriteManifest(
     Root->SetBoolField(TEXT("active_root_motion_modifiers_captured"), false);
     Root->SetBoolField(TEXT("root_motion_evaluated"), false);
     Root->SetBoolField(TEXT("maps_loaded"), false);
+    Root->SetBoolField(TEXT("motion_warping_module_linked"), false);
 
     TSharedRef<FJsonObject> CountJson = MakeShared<FJsonObject>();
     CountJson->SetNumberField(TEXT("animation_candidates"), Counts.AnimationCandidates);
@@ -352,23 +409,13 @@ static bool RunCapture(
         for (int32 NotifyIndex = 0; NotifyIndex < Sequence->Notifies.Num(); ++NotifyIndex)
         {
             const FAnimNotifyEvent& Event = Sequence->Notifies[NotifyIndex];
-            UAnimNotifyState* RawState = Event.NotifyStateClass.Get();
-            if (!RawState || RawState->GetClass()->GetPathName() != MotionWarpingNotifyClassPath)
+            UAnimNotifyState* NotifyState = Event.NotifyStateClass.Get();
+            if (!NotifyState || NotifyState->GetClass()->GetPathName() != MotionWarpingNotifyClassPath)
             {
                 continue;
             }
 
-            UAnimNotifyState_MotionWarping* MotionState = Cast<UAnimNotifyState_MotionWarping>(RawState);
-            if (!MotionState)
-            {
-                Error = FString::Printf(
-                    TEXT("exact Motion Warping notify class failed native cast: %s notify %d"),
-                    *Asset.GetSoftObjectPath().ToString(),
-                    NotifyIndex);
-                Writers.Close();
-                return false;
-            }
-            if (!WriteWindow(Sequence, Asset, NotifyIndex, Event, MotionState, Writers, Counts))
+            if (!WriteWindow(Sequence, Asset, NotifyIndex, Event, NotifyState, Writers, Counts))
             {
                 Error = FString::Printf(
                     TEXT("failed writing Motion Warping window: %s notify %d"),
