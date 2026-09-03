@@ -120,6 +120,7 @@ def validate_capture(output: Path) -> dict:
         "active_root_motion_modifiers_captured",
         "root_motion_evaluated",
         "maps_loaded",
+        "motion_warping_module_linked",
     ):
         if bool(manifest.get(key, True)):
             raise RuntimeError(f"Motion Warping authored-only contract requires {key}=false")
@@ -207,7 +208,7 @@ def semantic_report(output: Path, manifest: dict) -> str:
         "=== MOTION WARPING NATIVE AUTHORED CAPTURE ===",
         str(output),
         "diagnostic_only=True semantic_promotion=False schema_promotion=False",
-        "runtime_state_captured=False live_warp_targets_captured=False active_root_motion_modifiers_captured=False root_motion_evaluated=False maps_loaded=False",
+        "runtime_state_captured=False live_warp_targets_captured=False active_root_motion_modifiers_captured=False root_motion_evaluated=False maps_loaded=False motion_warping_module_linked=False",
         "",
         "[Counts]",
     ]
