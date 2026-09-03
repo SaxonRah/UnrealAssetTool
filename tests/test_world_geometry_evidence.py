@@ -51,6 +51,11 @@ class WorldGeometryEvidenceTest(unittest.TestCase):
                 "tags": {},
             },
             {
+                "object_path": "/Game/Characters/Character_LodSettings.Character_LodSettings",
+                "class_path": "/Script/Engine.SkeletalMeshLODSettings",
+                "tags": {},
+            },
+            {
                 "object_path": "/Game/Foliage/SM_FoliageNamed.SM_FoliageNamed",
                 "class_path": "/Script/Engine.StaticMesh",
                 "tags": {"NameLooksLike": "Foliage"},
@@ -167,6 +172,11 @@ class WorldGeometryEvidenceTest(unittest.TestCase):
         # never becomes a foliage candidate.
         self.assertEqual(report["class_counts"]["assets"]["foliage"]["/Script/Engine.StaticMesh"], 0)
         self.assertEqual(report["class_counts"]["actors"]["foliage"]["/Script/Engine.Actor"], 0)
+
+        # Likewise, SkeletalMeshLODSettings contains the character sequence
+        # "hlod" across Mesh+LOD but is not an HLOD asset.
+        self.assertIsNone(evidence._family_for_class("/Script/Engine.SkeletalMeshLODSettings"))
+        self.assertEqual(report["class_counts"]["assets"]["hlod"]["/Script/Engine.SkeletalMeshLODSettings"], 0)
 
         # Both HISM components are visible globally, but only the one owned by the
         # exact /Script/Foliage actor receives foliage association.
