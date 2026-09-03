@@ -21,6 +21,7 @@ import uatool_ai_perception_evidence as _ai_perception_evidence
 import uatool_ai_perception_capture as _ai_perception_capture
 import uatool_dataflow_chaos_evidence as _dataflow_chaos_evidence
 import uatool_dataflow_chaos_capture as _dataflow_chaos_capture
+import uatool_navigation_evidence as _navigation_evidence
 import uatool_animnext_evidence as _animnext_evidence
 import uatool_animnext_engine_evidence as _animnext_engine_evidence
 import uatool_animnext_capture as _animnext_capture
@@ -134,6 +135,7 @@ _ai_perception_evidence.install(_runtime)
 _ai_perception_capture.install(_runtime)
 _dataflow_chaos_evidence.install(_runtime)
 _dataflow_chaos_capture.install(_runtime)
+_navigation_evidence.install(_runtime)
 _animnext_evidence.install(_runtime)
 _animnext_engine_evidence.install(_runtime)
 _animnext_capture.install(_runtime)
