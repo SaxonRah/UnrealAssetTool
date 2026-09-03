@@ -32,7 +32,6 @@ public class UnrealAssetTool : ModuleRules
             "Foliage",
             "GameplayTags",
             "Json",
-            "MotionWarping",
             "Projects",
             "RigVM",
             "RigVMDeveloper",
