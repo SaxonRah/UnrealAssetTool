@@ -30,6 +30,7 @@ import uatool_skeletalmesh_physicsasset_evidence as _skeletalmesh_physicsasset_e
 import uatool_staticmesh_evidence as _staticmesh_evidence
 import uatool_world_geometry_evidence as _world_geometry_evidence
 import uatool_motion_warping_evidence as _motion_warping_evidence
+import uatool_motion_warping_capture as _motion_warping_capture
 import uatool_world_geometry_capture as _world_geometry_capture
 import uatool_world_geometry_foliage_native_integration as _world_geometry_foliage_native_integration
 import uatool_skeletalmesh_physicsasset_capture as _skeletalmesh_physicsasset_capture
@@ -179,6 +180,7 @@ _skeletalmesh_physicsasset_evidence.install(_runtime)
 _staticmesh_evidence.install(_runtime)
 _world_geometry_evidence.install(_runtime)
 _motion_warping_evidence.install(_runtime)
+_motion_warping_capture.install(_runtime, _core)
 _world_geometry_capture.install(_runtime, _core)
 _world_geometry_foliage_native_integration.install(_core)
 _skeletalmesh_physicsasset_capture.install(_runtime, _core)
