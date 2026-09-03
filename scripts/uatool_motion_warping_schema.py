@@ -533,7 +533,7 @@ def load_database(conn, output: Path, rows) -> None:
         )
     for row in rows(output / "motion_warping_modifiers.jsonl"):
         conn.execute(
-            "INSERT OR REPLACE INTO motion_warping_modifiers VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT OR REPLACE INTO motion_warping_modifiers VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 row.get("asset_path", ""),
                 int(row.get("notify_index", 0) or 0),
