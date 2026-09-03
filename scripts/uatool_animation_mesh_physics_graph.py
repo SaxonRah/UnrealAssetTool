@@ -56,6 +56,30 @@ def _augment(output: Path, rows, nodes: list[dict], edges: list[dict], graph_mod
                 node["family"] = "animation_mesh_physics"
         return node
 
+    # Seed authoritative roots directly from their canonical identity streams.
+    # Referencing the same mesh later as a preview mesh, or the same PhysicsAsset
+    # from clothing, must never downgrade root/class/package metadata.
+    for row in rows(Path(output) / "skeletal_meshes.jsonl"):
+        register({
+            "path": str(row.get("skeletal_mesh_path", "")),
+            "kind": "skeletal_mesh",
+            "coverage": "first_class",
+            "class_path": str(row.get("class_path", "")),
+            "package_name": str(row.get("package_name", "")),
+            "family": "animation_mesh_physics",
+            "root": True,
+        })
+    for row in rows(Path(output) / "physics_assets.jsonl"):
+        register({
+            "path": str(row.get("physics_asset_path", "")),
+            "kind": "physics_asset",
+            "coverage": "first_class",
+            "class_path": str(row.get("class_path", "")),
+            "package_name": str(row.get("package_name", "")),
+            "family": "animation_mesh_physics",
+            "root": True,
+        })
+
     for spec in data["nodes"]:
         register(spec)
 
