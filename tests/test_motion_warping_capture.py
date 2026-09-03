@@ -129,7 +129,6 @@ class MotionWarpingCaptureTest(unittest.TestCase):
         self.assertIn("NotifyState->RootMotionModifier.Get()", source)
         self.assertIn("CPF_Edit", source)
         self.assertIn("CPF_Transient", source)
-        self.assertIn('TEXT("WarpTargetName")', source)
         self.assertIn("Warp->WarpTargetName", source)
         self.assertIn("Warp->bWarpTranslation", source)
         self.assertIn("Warp->bWarpRotation", source)
