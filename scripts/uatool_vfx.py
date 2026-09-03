@@ -13,6 +13,7 @@ import uatool_smartobject_capabilities as _smartobject_capabilities
 import uatool_ai_perception_capabilities as _ai_perception_capabilities
 import uatool_dataflow_chaos_capabilities as _dataflow_chaos_capabilities
 import uatool_uaf_capabilities as _uaf_capabilities
+import uatool_navigation_capabilities as _navigation_capabilities
 import uatool_inspect as _inspect
 import uatool_project_intelligence as _project_intelligence
 import uatool_smartobject_evidence as _smartobject_evidence
@@ -30,22 +31,25 @@ import uatool_uaf_systems_capture as _uaf_systems_capture
 
 # Specialist systems schemas are composed after the existing Mass -> GAS
 # installers. uatool.py imports this facade before build_perf.install(), so
-# extend that one canonical composition point monotonically through schema 10.
+# extend that one canonical composition point monotonically through schema 11.
 import uatool_build_perf as _build_perf
 import uatool_systems as _systems
 import uatool_systems_smartobjects as _systems_smartobjects
 import uatool_systems_ai_perception as _systems_ai_perception
 import uatool_systems_dataflow_chaos as _systems_dataflow_chaos
 import uatool_systems_uaf as _systems_uaf
+import uatool_systems_navigation as _systems_navigation
 import uatool_project_graph as _project_graph
 import uatool_smartobject_graph as _smartobject_graph
 import uatool_ai_perception_graph as _ai_perception_graph
 import uatool_dataflow_chaos_graph as _dataflow_chaos_graph
 import uatool_uaf_graph as _uaf_graph
+import uatool_navigation_graph as _navigation_graph
 import uatool_systems_schema7_accept as _systems_schema7_accept
 import uatool_systems_schema8_accept as _systems_schema8_accept
 import uatool_systems_schema9_accept as _systems_schema9_accept
 import uatool_systems_schema10_accept as _systems_schema10_accept
+import uatool_systems_schema11_accept as _systems_schema11_accept
 
 
 def _install_specialist_capture_membership() -> None:
@@ -65,6 +69,8 @@ def _install_specialist_capture_membership() -> None:
                 extra_files.extend(name for name in getattr(systems_module, "JSONL_FILES", ()) if (name.startswith("dataflow_") or name.startswith("geometry_collection")) and name.endswith(".jsonl"))
             if schema >= 10:
                 extra_files.extend(name for name in getattr(systems_module, "JSONL_FILES", ()) if name.startswith("uaf_") and name.endswith(".jsonl"))
+            if schema >= 11:
+                extra_files.extend(name for name in getattr(systems_module, "JSONL_FILES", ()) if name.startswith("navigation_") and name.endswith(".jsonl"))
             capture.CAPTURE_FILES = tuple(dict.fromkeys((*capture.CAPTURE_FILES, *extra_files)))
             capture.SCHEMA_FILES = capture.CAPTURE_FILES[len(capture._BASE_CAPTURE_FILES):]
 
@@ -100,32 +106,36 @@ def _install_specialist_capture_membership() -> None:
     capture.configure_for_systems(_systems)
 
 
-if not getattr(_build_perf, "_systems_schema10_composition_installed", False):
+if not getattr(_build_perf, "_systems_schema11_composition_installed", False):
     _original_build_perf_install = _build_perf.install
 
-    def _build_perf_install_with_schema10(core) -> None:
+    def _build_perf_install_with_schema11(core) -> None:
         _original_build_perf_install(core)
         _systems_smartobjects.install(_systems)
         _systems_ai_perception.install(_systems)
         _systems_dataflow_chaos.install(_systems)
         _systems_uaf.install(_systems)
+        _systems_navigation.install(_systems)
         _smartobject_graph.install(_project_graph)
         _ai_perception_graph.install(_project_graph)
         _dataflow_chaos_graph.install(_project_graph)
         _uaf_graph.install(_project_graph)
+        _navigation_graph.install(_project_graph)
         _systems_schema7_accept.install(_runtime, _systems)
         _systems_schema8_accept.install(_runtime, _systems)
         _systems_schema9_accept.install(_runtime, _systems)
         _systems_schema10_accept.install(_runtime, _systems)
+        _systems_schema11_accept.install(_runtime, _systems)
         _install_specialist_capture_membership()
 
-    _build_perf.install = _build_perf_install_with_schema10
-    _build_perf._systems_schema10_composition_installed = True
+    _build_perf.install = _build_perf_install_with_schema11
+    _build_perf._systems_schema11_composition_installed = True
 
 _smartobject_capabilities.install(_capabilities)
 _ai_perception_capabilities.install(_capabilities)
 _dataflow_chaos_capabilities.install(_capabilities)
 _uaf_capabilities.install(_capabilities)
+_navigation_capabilities.install(_capabilities)
 _systems_only_derive_deferred.install()
 _capabilities.install()
 _inspect.install()
