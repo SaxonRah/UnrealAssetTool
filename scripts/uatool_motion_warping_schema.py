@@ -626,9 +626,12 @@ def install(animation_module) -> None:
     def animation_validation_error(output) -> str | None:
         output = Path(output)
         has_motion = (output / MANIFEST_FILE).is_file()
-        expected = PUBLIC_ANIMATION_SCHEMA_VERSION if has_motion else MIN_BASE_ANIMATION_SCHEMA_VERSION
+        manifest = _read_json(output / "animation_manifest.json")
+        current = int(manifest.get("schema_version", 0) or 0) if manifest is not None else 0
+        expected = PUBLIC_ANIMATION_SCHEMA_VERSION if has_motion else current
         saved = int(getattr(animation_module, "ANIMATION_SCHEMA_VERSION", PUBLIC_ANIMATION_SCHEMA_VERSION))
-        animation_module.ANIMATION_SCHEMA_VERSION = expected
+        if expected:
+            animation_module.ANIMATION_SCHEMA_VERSION = expected
         try:
             error = previous_validation(output)
         finally:
