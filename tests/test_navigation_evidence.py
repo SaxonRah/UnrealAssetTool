@@ -90,6 +90,15 @@ class NavigationEvidenceTest(unittest.TestCase):
                     "value": "5000.0",
                 },
             ])
+            write_jsonl(root / "systems_properties.jsonl", [
+                {
+                    "owner_path": "/Script/NavigationSystem.Default__NavigationSystemV1",
+                    "owner_class": "/Script/NavigationSystem.NavigationSystemV1",
+                    "property_name": "SupportedAgents",
+                    "property_path": "SupportedAgents",
+                    "value": "((Name=Default,AgentRadius=42.0,AgentHeight=192.0))",
+                },
+            ])
             write_jsonl(root / "source_chunks.jsonl", [
                 {
                     "path": "Config/DefaultEngine.ini",
@@ -115,6 +124,7 @@ class NavigationEvidenceTest(unittest.TestCase):
             self.assertEqual(proof["link_topology_owners"], 1)
             self.assertEqual(proof["invoker_setting_owners"], 1)
             self.assertGreaterEqual(proof["supported_agent_owners"], 1)
+            self.assertGreaterEqual(proof["navigation_system_setting_owners"], 1)
             self.assertTrue(any("Generated Recast/NavMesh evidence" in gap for gap in report["gaps"]))
             self.assertFalse(any("Navigation modifiers are proven" in gap for gap in report["gaps"]))
             self.assertFalse(any("NavLinkProxy actors are proven" in gap for gap in report["gaps"]))
