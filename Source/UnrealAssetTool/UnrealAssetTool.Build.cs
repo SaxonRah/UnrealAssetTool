@@ -32,6 +32,8 @@ public class UnrealAssetTool : ModuleRules
             "GameplayTags",
             "Json",
             "Projects",
+            "RigVM",
+            "RigVMDeveloper",
             "UnrealEd"
         });
     }
