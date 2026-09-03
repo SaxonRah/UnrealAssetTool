@@ -16,12 +16,20 @@ static void GatherUAFCandidates(const TArray<FAssetData>& ExistingAssets, TArray
     Registry.ScanPathsSynchronous(Paths, true, true);
     Registry.WaitForCompletion();
 
-    const FTopLevelAssetPath SystemClass(TEXT("/Script/UAF"), TEXT("UAFSystem"));
-    const FTopLevelAssetPath AnimGraphClass(TEXT("/Script/UAFAnimGraph"), TEXT("UAFAnimGraph"));
-    TArray<FAssetData> Systems;
-    TArray<FAssetData> AnimGraphs;
-    Registry.GetAssetsByClass(SystemClass, Systems, false);
-    Registry.GetAssetsByClass(AnimGraphClass, AnimGraphs, false);
+    // Match the already accepted focused UAF evidence path: discover authored
+    // assets by recursively enumerating the mounted roots, then enforce exact
+    // class identity below. UE 5.8's class-index query can omit mounted UAF
+    // representatives even after a synchronous path scan.
+    TArray<FAssetData> DiscoveredAssets;
+    for (const FString& Path : Paths)
+    {
+        FARFilter Filter;
+        Filter.PackagePaths.Add(FName(*Path));
+        Filter.bRecursivePaths = true;
+        TArray<FAssetData> PathAssets;
+        Registry.GetAssets(Filter, PathAssets);
+        DiscoveredAssets.Append(PathAssets);
+    }
 
     TSet<FString> Seen;
     auto AddCandidate = [&OutAssets, &Seen](const FAssetData& Asset)
@@ -33,8 +41,7 @@ static void GatherUAFCandidates(const TArray<FAssetData>& ExistingAssets, TArray
         Seen.Add(Path);
         OutAssets.Add(Asset);
     };
-    for (const FAssetData& Asset : Systems) AddCandidate(Asset);
-    for (const FAssetData& Asset : AnimGraphs) AddCandidate(Asset);
+    for (const FAssetData& Asset : DiscoveredAssets) AddCandidate(Asset);
     for (const FAssetData& Asset : ExistingAssets) AddCandidate(Asset);
     OutAssets.Sort([](const FAssetData& A, const FAssetData& B)
     {
@@ -63,7 +70,9 @@ static bool ScanUAFProjectModelExactLoad(
 
         const FString ObjectPath = Asset.GetSoftObjectPath().ToString();
         const bool bRepresentativeEngineAsset = bUAFEngineContent &&
-            (ObjectPath.StartsWith(TEXT("/UAF/")) || ObjectPath.StartsWith(TEXT("/UAFAnimGraph/")));
+            (ObjectPath.StartsWith(TEXT("/UAF/")) ||
+             ObjectPath.StartsWith(TEXT("/UAFAnimGraph/")) ||
+             ObjectPath.StartsWith(TEXT("/UAFSharedAssets/")));
         if (!bIncludeEngine && !bRepresentativeEngineAsset &&
             (!bHasDiskPackage || !IsInsideDirectory(PackageFilename, ProjectDir)))
         {
