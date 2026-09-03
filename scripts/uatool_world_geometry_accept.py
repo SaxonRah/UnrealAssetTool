@@ -10,6 +10,7 @@ import uatool_world_geometry_model as model
 ACCEPTANCE_MANIFEST="world_geometry_schema1_acceptance.json"
 GRAPH_EXPECTATIONS_MANIFEST="world_geometry_schema1_graph_expectations.json"
 GRAPH_VERIFICATION_MANIFEST="world_geometry_schema1_graph_verification.json"
+CONTENTEXAMPLES_EXPECTED_EXACT_EDGES=1015
 CONTENTEXAMPLES_EXACT_COUNTS={
  "world_geometry_landscapes":75,"world_geometry_landscape_components":100,"world_geometry_landscape_weightmaps":100,
  "world_geometry_landscape_layer_allocations":256,"world_geometry_landscape_layer_infos":5,"world_geometry_grass_types":1,
@@ -48,12 +49,17 @@ def _require_shape(corpus,rows):
 def promote(corpus,capture_dir): return schema.promote_capture(corpus,capture_dir)
 def accept(corpus,rows):
     counts=_require_shape(corpus,rows); expectations=_expectations(corpus,rows)
-    result={"acceptance_schema_version":1,"world_geometry_schema_version":schema.WORLD_GEOMETRY_SCHEMA_VERSION,"target_derived_schema_version":graph.TARGET_DERIVED_SCHEMA_VERSION,"representative_content":"ContentExamples UE 5.8.2 authored Landscape/Foliage/HLOD topology","canonical_pass":schema.CANONICAL_PASS,"runtime_state_captured":False,"generated_geometry_captured":False,"render_resources_captured":False,"world_runtime_streaming_state_captured":False,"maps_loaded":False,"counts":counts,"expected_relation_counts":expectations["expected_relation_counts"],"expected_exact_semantic_edge_count":expectations["expected_exact_semantic_edge_count"]}
+    actual_edge_count=int(expectations["expected_exact_semantic_edge_count"])
+    if actual_edge_count!=CONTENTEXAMPLES_EXPECTED_EXACT_EDGES:
+        raise RuntimeError(f"ContentExamples world-geometry exact graph contract mismatch: expected={CONTENTEXAMPLES_EXPECTED_EXACT_EDGES} actual={actual_edge_count}")
+    result={"acceptance_schema_version":1,"world_geometry_schema_version":schema.WORLD_GEOMETRY_SCHEMA_VERSION,"target_derived_schema_version":graph.TARGET_DERIVED_SCHEMA_VERSION,"representative_content":"ContentExamples UE 5.8.2 authored Landscape/Foliage/HLOD topology","canonical_pass":schema.CANONICAL_PASS,"runtime_state_captured":False,"generated_geometry_captured":False,"render_resources_captured":False,"world_runtime_streaming_state_captured":False,"maps_loaded":False,"counts":counts,"expected_relation_counts":expectations["expected_relation_counts"],"expected_exact_semantic_edge_count":actual_edge_count}
     _write(corpus/ACCEPTANCE_MANIFEST,result); _write(corpus/GRAPH_EXPECTATIONS_MANIFEST,expectations); return result
 def verify(corpus,rows):
     expectations=_read(corpus/GRAPH_EXPECTATIONS_MANIFEST); top=_read(corpus/"manifest.json"); actual_version=int(top.get("derived_schema_version",0) or 0)
     if actual_version!=graph.TARGET_DERIVED_SCHEMA_VERSION: raise RuntimeError(f"world-geometry graph verification requires derived schema {graph.TARGET_DERIVED_SCHEMA_VERSION}; got {actual_version}")
-    expected=model.expected_edge_keys(corpus,rows); actual_rows=[r for r in rows(corpus/"project_edges.jsonl") if str(r.get("relation","")) in model.RELATIONS]
+    expected=model.expected_edge_keys(corpus,rows)
+    if len(expected)!=CONTENTEXAMPLES_EXPECTED_EXACT_EDGES: raise RuntimeError(f"world-geometry graph expectation count drifted: expected={CONTENTEXAMPLES_EXPECTED_EXACT_EDGES} actual={len(expected)}")
+    actual_rows=[r for r in rows(corpus/"project_edges.jsonl") if str(r.get("relation","")) in model.RELATIONS]
     actual={(str(r.get("source","")),str(r.get("relation","")),str(r.get("target",""))) for r in actual_rows}
     if actual!=expected:
         missing=sorted(expected-actual); extra=sorted(actual-expected); parts=[]
