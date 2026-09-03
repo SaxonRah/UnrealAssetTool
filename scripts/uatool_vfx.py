@@ -27,6 +27,7 @@ import uatool_navigation_evidence as _navigation_evidence
 import uatool_gameplay_framework_evidence as _gameplay_framework_evidence
 import uatool_semantic_quality as _semantic_quality
 import uatool_skeletalmesh_physicsasset_evidence as _skeletalmesh_physicsasset_evidence
+import uatool_skeletalmesh_physicsasset_capture as _skeletalmesh_physicsasset_capture
 import uatool_navigation_capture as _navigation_capture
 import uatool_animnext_evidence as _animnext_evidence
 import uatool_animnext_engine_evidence as _animnext_engine_evidence
@@ -161,6 +162,7 @@ _navigation_evidence.install(_runtime)
 _gameplay_framework_evidence.install(_runtime)
 _semantic_quality.install(_runtime)
 _skeletalmesh_physicsasset_evidence.install(_runtime)
+_skeletalmesh_physicsasset_capture.install(_runtime, _core)
 _gameplay_framework_accept.install(_runtime)
 _gameplay_framework_derive_policy.install(_runtime)
 _navigation_capture.install(_runtime, _core)
