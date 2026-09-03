@@ -14,6 +14,7 @@ import uatool_ai_perception_capabilities as _ai_perception_capabilities
 import uatool_dataflow_chaos_capabilities as _dataflow_chaos_capabilities
 import uatool_uaf_capabilities as _uaf_capabilities
 import uatool_navigation_capabilities as _navigation_capabilities
+import uatool_gameplay_framework_capabilities as _gameplay_framework_capabilities
 import uatool_inspect as _inspect
 import uatool_project_intelligence as _project_intelligence
 import uatool_smartobject_evidence as _smartobject_evidence
@@ -29,10 +30,14 @@ import uatool_animnext_evidence as _animnext_evidence
 import uatool_animnext_engine_evidence as _animnext_engine_evidence
 import uatool_animnext_capture as _animnext_capture
 import uatool_uaf_systems_capture as _uaf_systems_capture
+import uatool_gameplay_framework_accept as _gameplay_framework_accept
+import uatool_gameplay_framework_derive_policy as _gameplay_framework_derive_policy
 
 # Specialist systems schemas are composed after the existing Mass -> GAS
 # installers. uatool.py imports this facade before build_perf.install(), so
 # extend that one canonical composition point monotonically through schema 11.
+# Gameplay Framework does not add a systems schema; it is a derived-schema-28
+# join over already-canonical structural/world/source evidence.
 import uatool_build_perf as _build_perf
 import uatool_systems as _systems
 import uatool_systems_smartobjects as _systems_smartobjects
@@ -46,6 +51,7 @@ import uatool_ai_perception_graph as _ai_perception_graph
 import uatool_dataflow_chaos_graph as _dataflow_chaos_graph
 import uatool_uaf_graph as _uaf_graph
 import uatool_navigation_graph as _navigation_graph
+import uatool_gameplay_framework_graph as _gameplay_framework_graph
 import uatool_systems_schema7_accept as _systems_schema7_accept
 import uatool_systems_schema8_accept as _systems_schema8_accept
 import uatool_systems_schema9_accept as _systems_schema9_accept
@@ -122,6 +128,7 @@ if not getattr(_build_perf, "_systems_schema11_composition_installed", False):
         _dataflow_chaos_graph.install(_project_graph)
         _uaf_graph.install(_project_graph)
         _navigation_graph.install(_project_graph)
+        _gameplay_framework_graph.install(_project_graph)
         _systems_schema7_accept.install(_runtime, _systems)
         _systems_schema8_accept.install(_runtime, _systems)
         _systems_schema9_accept.install(_runtime, _systems)
@@ -137,6 +144,7 @@ _ai_perception_capabilities.install(_capabilities)
 _dataflow_chaos_capabilities.install(_capabilities)
 _uaf_capabilities.install(_capabilities)
 _navigation_capabilities.install(_capabilities)
+_gameplay_framework_capabilities.install(_capabilities)
 _systems_only_derive_deferred.install()
 _capabilities.install()
 _inspect.install()
@@ -149,6 +157,8 @@ _dataflow_chaos_evidence.install(_runtime)
 _dataflow_chaos_capture.install(_runtime)
 _navigation_evidence.install(_runtime)
 _gameplay_framework_evidence.install(_runtime)
+_gameplay_framework_accept.install(_runtime)
+_gameplay_framework_derive_policy.install(_runtime)
 _navigation_capture.install(_runtime, _core)
 _animnext_evidence.install(_runtime)
 _animnext_engine_evidence.install(_runtime)

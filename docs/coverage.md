@@ -24,7 +24,7 @@ world=12
 animation=1
 vfx=1
 systems=11
-derived=27
+derived=28
 capabilities=1
 ```
 
@@ -81,6 +81,7 @@ capabilities=1
 | Geometry Collection / Chaos destruction | `first_class` | Authored clustering, damage, connection, mass/sleep/removal, SizeSpecificData, physics material, DataflowInstance/Overrides and nullable DataflowAsset state with exact schema-25 graph semantics | `GeometrySource` construction provenance is excluded; solver state, dynamic transforms, live break/collision/removal history, cache playback and runtime Field results are not captured |
 | AnimNext / UAF | `first_class` | Exact `UAFSystem`/`UAFAnimGraph` identity, entries, variables/defaults/bindings, authored components, runtime entry points, editor-side RigVM graphs/nodes/pins/links and exact variable-node resolution with schema-26 graph semantics | No RigVM execution, current pose/value state, ticking, runtime event execution, injection history or transient graph-instance state |
 | Authored Navigation | `first_class` | NavArea costs/inheritance/agent masks and meta-area mappings; NavigationSystem/agent policy; simple-link/SmartLink defaults; modifier/invoker/bounds defaults; authored Recast defaults; exact schema-27 semantic relations | World schema 12 owns placed actors/components/transforms/instance overrides and world link endpoints; generated Recast instances/tiles/polys, path queries and runtime navigation state are excluded |
+| Gameplay Framework | `first_class` | Exact/transitive Blueprint framework identity, explicit GameMode class selectors, per-world `DefaultGameMode`, project `GameMapsSettings`, Pawn/Character -> AIController class joins and exact schema-28 graph semantics | No runtime possession/spawn/GameMode simulation; inherited native selector values absent from authored rows are not invented; systems stays independently versioned |
 | Typed project graph | `first_class` | Typed nodes/edges, provenance, coverage and quality classes | It reflects extractor depth; it must not imply unsupported subsystem semantics |
 | Capability contract | `first_class` | Corpus schema versions, tool/corpus coverage, canonical streams, derived relations, runtime boundaries, partial-corpus state and acceptance provenance | It describes evidence available to the corpus; it does not manufacture new semantic facts |
 
@@ -92,7 +93,6 @@ These systems are visible through existing generic layers, Blueprint/component s
 
 | Family | Current useful facts | Missing semantic model |
 | --- | --- | --- |
-| Gameplay Framework native classes | Blueprint subclasses/defaults plus placed Actor/component state | Native GameMode/GameState/PlayerState/Controller/Pawn relationship summary across project settings/maps |
 | Landscape/Foliage/HLOD | World actors/components/assets are discoverable | Landscape layer/material/component topology, foliage type/instance semantics, HLOD composition |
 | SkeletalMesh / PhysicsAsset | Asset identity/references and use by animation assets can be seen | Skeleton/LOD/material/morph/cloth data and physics bodies/constraints |
 | StaticMesh | Asset identity/references/material use can be seen generically | LOD/section/socket/collision/Nanite authored topology |
@@ -203,6 +203,18 @@ No VM execution, live pose/value state, ticking, runtime event execution, inject
 
 See [animnext-uaf-schema10.md](animnext-uaf-schema10.md).
 
+## 12. Gameplay Framework is a derived join, not another systems pass
+
+Derived schema 28 is accepted on the full ContentExamples UE 5.8.2 corpus. It joins structural schema 12 Blueprint/CDO facts, world schema 12 WorldSettings facts, and exact `GameMapsSettings` config assignments into a deterministic Gameplay Framework relationship layer.
+
+The accepted corpus contains 36 framework Blueprints with 4 transitive framework inheritance cases, 15 explicit GameMode selector overrides, 70 unique world `DefaultGameMode` overrides, 5 non-null project `GameMapsSettings` assignments, and verifies exactly 187 schema-28 edges.
+
+The representative full corpus truthfully remains systems schema 9 because it predates later UAF and Navigation systems captures. The derived-28 compatibility policy may reuse that older successful systems pass only after Gameplay Framework acceptance and only when every manifest-declared stream/count self-validates. It does not claim missing systems-10/11 content.
+
+Runtime spawn/possession/GameMode state and inherited native selector values absent from authored rows remain explicit non-claims.
+
+See [gameplay-framework-derived28.md](gameplay-framework-derived28.md).
+
 ---
 
 # Issue #14 status
@@ -222,7 +234,7 @@ Dataflow / Geometry Collection (systems schema 9 / derived schema 25)
 AnimNext / UAF (systems schema 10 / derived schema 26)
 ```
 
-The original evidence-driven gameplay-family expansion tracked by issue #14 is complete. Authored Navigation was subsequently completed as its own project-intelligence/depth slice in issue #45 with systems schema 11 / derived schema 27. Gameplay Framework summary remains useful independent normalization work rather than a reason to reopen the old umbrella.
+The original evidence-driven gameplay-family expansion tracked by issue #14 is complete. Authored Navigation was subsequently completed as issue #45 with systems schema 11 / derived schema 27, and Gameplay Framework was subsequently completed as issue #49 with derived schema 28 while leaving systems independently versioned.
 
 ---
 
@@ -241,6 +253,7 @@ The original evidence-driven gameplay-family expansion tracked by issue #14 is c
 | Dataflow / Geometry Collection schema-9 slice | Yes | Yes | Yes | Yes, exact schema-25 contract | ContentExamples UE 5.8.2 |
 | AnimNext / UAF schema-10 slice | Yes | Yes | Yes | Yes, exact 213-edge schema-26 contract | GameAnimationSample-hosted UE 5.8.2 representative UAF content |
 | Authored Navigation schema-11 slice | Yes | Yes | Yes | Yes, exact 27-edge schema-27 contract | ContentExamples UE 5.8.2 |
+| Gameplay Framework derived-28 slice | Existing canonical structural/world/config validation | n/a new tables | Project graph/capability surface | Yes, exact 187-edge schema-28 contract | ContentExamples UE 5.8.2 |
 | Project graph/neighborhoods | Yes | Yes | Yes | n/a | StackOBot + ContentExamples + GASP + City Sample + Lyra |
 | Capability contract | Yes | n/a | `uatool capabilities` | Describes graph/canonical coverage | Synthetic regression + emitted per corpus |
 
@@ -268,6 +281,7 @@ Focused Python regression coverage includes:
 - Dataflow / Geometry Collection systems schema-9 graph/cardinality validation, behavior-boundary enforcement, capability promotion and exact schema-25 graph verification;
 - AnimNext / UAF systems schema-10 identity/discovery/cardinality validation, accepted representative capture, exact variable-use resolution and exact schema-26 graph verification;
 - Authored Navigation systems schema-11 normalization, exact class/default/config contract, split world/system ownership, agent-mask normalization, representative 16-mapping cardinality and exact schema-27 graph verification;
+- Gameplay Framework exact/transitive class identity, GameMode selector/config/world joins, rejection of name-only inference, mixed-version systems self-validation and exact schema-28 graph verification;
 - systems validation/SQLite/project-graph integration;
 - derived freshness, neighborhood compaction and storage invariants;
 - capability-contract full-corpus/partial-corpus/determinism/deferred-composition behavior.
@@ -278,6 +292,6 @@ Real UE corpora remain required because unit tests cannot substitute for actual 
 
 # What “complete” means now
 
-The original planned indexer roadmap plus the accepted Gameplay Tags, gameplay-data, Mover, Gameplay Cameras, Mass/authored-ZoneGraph, GAS, Smart Objects, AI Perception, Dataflow/Geometry Collection, AnimNext/UAF and authored Navigation slices are implemented and corpus-validated.
+The original planned indexer roadmap plus the accepted Gameplay Tags, gameplay-data, Mover, Gameplay Cameras, Mass/authored-ZoneGraph, GAS, Smart Objects, AI Perception, Dataflow/Geometry Collection, AnimNext/UAF, authored Navigation and Gameplay Framework slices are implemented and corpus-validated.
 
 The repository is **not complete with respect to the entire Unreal Engine 5.8 content ecosystem**, and it should not claim to be. The 1.0 target is trustworthy semantic infrastructure with explicit coverage, deterministic/provenance-aware graph output, stable lifecycle commands and bounded performance—not “100% of Unreal classes.”
