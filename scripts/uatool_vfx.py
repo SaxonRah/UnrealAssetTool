@@ -31,6 +31,7 @@ import uatool_animnext_engine_evidence as _animnext_engine_evidence
 import uatool_animnext_capture as _animnext_capture
 import uatool_uaf_systems_capture as _uaf_systems_capture
 import uatool_gameplay_framework_accept as _gameplay_framework_accept
+import uatool_gameplay_framework_derive_policy as _gameplay_framework_derive_policy
 
 # Specialist systems schemas are composed after the existing Mass -> GAS
 # installers. uatool.py imports this facade before build_perf.install(), so
@@ -157,6 +158,7 @@ _dataflow_chaos_capture.install(_runtime)
 _navigation_evidence.install(_runtime)
 _gameplay_framework_evidence.install(_runtime)
 _gameplay_framework_accept.install(_runtime)
+_gameplay_framework_derive_policy.install(_runtime)
 _navigation_capture.install(_runtime, _core)
 _animnext_evidence.install(_runtime)
 _animnext_engine_evidence.install(_runtime)
