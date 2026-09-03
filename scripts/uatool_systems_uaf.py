@@ -109,7 +109,10 @@ def create_schema(conn) -> None:
 def _unique(rows: list[dict], fields: tuple[str, ...], label: str) -> str | None:
     seen = set()
     for row in rows:
-        key = tuple(str(row.get(field, "") or "") for field in fields)
+        key = tuple(
+            "" if row.get(field, "") is None else str(row.get(field, ""))
+            for field in fields
+        )
         if any(not item for item in key):
             return f"{label} has blank identity: {key}"
         if key in seen:

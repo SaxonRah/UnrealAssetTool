@@ -17,13 +17,16 @@ class AIPerceptionSchema8NativeTest(unittest.TestCase):
         self.assertIn('#include "UnrealAssetToolSystemsAIPerception.inl"', scanner)
         self.assertIn('#include "UnrealAssetToolSystemsAIPerceptionPolicy.inl"', scanner)
         self.assertIn('#include "UObject/UObjectGlobals.h"', scanner)
-        # Schema 8 remains the complete inner composition even though schema 9
-        # is now the outer driver wrapper.
+        # Schema 8 remains the complete inner composition. Later systems
+        # schemas may replace the outer driver wrapper, so verify the stable
+        # transitive policy chain rather than a particular outer proxy name.
         self.assertIn("ScanGASSmartObjectsAndAIPerceptionProjectModels", policy)
         self.assertIn("FAIPerceptionSystemsFileHelperProxy", policy)
         self.assertIn("FAIPerceptionSystemsFileHelperProxy::SaveStringToFile", dataflow_policy)
-        self.assertIn("#define ScanGASProjectModel ScanGASSmartObjectsAIPerceptionAndDataflowChaosProjectModels", scanner)
-        self.assertIn("#define FFileHelper FDataflowChaosSystemsFileHelperProxy", scanner)
+        self.assertIn("return ScanGASSmartObjectsAndAIPerceptionProjectModels(", dataflow_policy)
+        self.assertIn('#include "UnrealAssetToolSystemsDataflowChaosPolicy.inl"', scanner)
+        self.assertIn("#define ScanGASProjectModel ", scanner)
+        self.assertIn("#define FFileHelper ", scanner)
         self.assertIn("#undef FFileHelper", scanner)
         self.assertIn("#undef ScanGASProjectModel", scanner)
 

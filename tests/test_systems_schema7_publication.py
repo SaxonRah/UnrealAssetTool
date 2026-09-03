@@ -14,6 +14,7 @@ class SystemsSchema7PublicationTest(unittest.TestCase):
         policy = (PRIVATE / "UnrealAssetToolSystemsSmartObjectsPolicy.inl").read_text(encoding="utf-8")
         ai_policy = (PRIVATE / "UnrealAssetToolSystemsAIPerceptionPolicy.inl").read_text(encoding="utf-8")
         dataflow_policy = (PRIVATE / "UnrealAssetToolSystemsDataflowChaosPolicy.inl").read_text(encoding="utf-8")
+        uaf_policy = (PRIVATE / "UnrealAssetToolSystemsUAFPolicy.inl").read_text(encoding="utf-8")
 
         self.assertIn('SaveSystemsManifest(OutputDir, Counts, true, FString())', driver)
         self.assertIn('FFileHelper::SaveStringToFile', driver)
@@ -21,9 +22,10 @@ class SystemsSchema7PublicationTest(unittest.TestCase):
         self.assertIn('UpgradeSystemsManifestToSchema7(Path)', policy)
         self.assertIn('FSmartObjectSystemsFileHelperProxy::SaveStringToFile', ai_policy)
         self.assertIn('FAIPerceptionSystemsFileHelperProxy::SaveStringToFile', dataflow_policy)
-        self.assertIn('#define FFileHelper FDataflowChaosSystemsFileHelperProxy', scanner)
+        self.assertIn('FDataflowChaosSystemsFileHelperProxy::SaveStringToFile', uaf_policy)
+        self.assertIn('#define FFileHelper ', scanner)
         self.assertLess(
-            scanner.index('#define FFileHelper FDataflowChaosSystemsFileHelperProxy'),
+            scanner.index('#define FFileHelper '),
             scanner.index('#include "UnrealAssetToolSystemsDriver.inl"'),
         )
         self.assertLess(
@@ -35,10 +37,12 @@ class SystemsSchema7PublicationTest(unittest.TestCase):
         policy = (PRIVATE / "UnrealAssetToolSystemsSmartObjectsPolicy.inl").read_text(encoding="utf-8")
         ai_policy = (PRIVATE / "UnrealAssetToolSystemsAIPerceptionPolicy.inl").read_text(encoding="utf-8")
         dataflow_policy = (PRIVATE / "UnrealAssetToolSystemsDataflowChaosPolicy.inl").read_text(encoding="utf-8")
+        uaf_policy = (PRIVATE / "UnrealAssetToolSystemsUAFPolicy.inl").read_text(encoding="utf-8")
         for text in ('GetOnPostEngineInit().AddStatic', 'OnEnginePreExit.AddStatic', 'OnPreExit.AddStatic', 'OnExit.AddStatic'):
             self.assertNotIn(text, policy)
             self.assertNotIn(text, ai_policy)
             self.assertNotIn(text, dataflow_policy)
+            self.assertNotIn(text, uaf_policy)
 
 
 if __name__ == "__main__":
