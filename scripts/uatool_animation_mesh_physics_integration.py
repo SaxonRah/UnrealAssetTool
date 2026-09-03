@@ -10,6 +10,11 @@ import uatool_animation as animation
 import uatool_animation_curve_storage as curve_storage
 import uatool_animation_property_storage as property_storage
 import uatool_animation_mesh_physics as mesh_physics
+import uatool_project_graph as project_graph
+import uatool_capabilities as capabilities
+import uatool_animation_mesh_physics_graph as mesh_physics_graph
+import uatool_animation_mesh_physics_accept as mesh_physics_accept
+import uatool_animation_mesh_physics_capabilities as mesh_physics_capabilities
 
 
 def _patch_curve_storage_for_schema3() -> None:
@@ -139,6 +144,7 @@ def _patch_property_storage_for_schema3() -> None:
 
 def install(runtime_module, core_module) -> None:
     if getattr(runtime_module, "_mesh_physics_schema3_integration_installed", False):
+        mesh_physics_graph.promote_public_derived_version(project_graph, core_module, runtime_module)
         return
 
     # uatool.py imports this integration before importing canonical_cleanup.
@@ -148,6 +154,14 @@ def install(runtime_module, core_module) -> None:
     # delegate unchanged to the original storage functions.
     _patch_curve_storage_for_schema3()
     _patch_property_storage_for_schema3()
+
+    # Schema 3 owns a first-class cross-family graph contract. Install its graph,
+    # acceptance CLI and capability manifest at composition time; the public
+    # derived version is promoted again from each entrypoint because uatool.py's
+    # FINAL_DERIVED_SCHEMA_VERSION is initialized after this module is imported.
+    mesh_physics_graph.install(project_graph, core_module, runtime_module)
+    mesh_physics_accept.install(runtime_module)
+    mesh_physics_capabilities.install(capabilities)
 
     original_create_schema = core_module.create_schema
     original_derive_output = core_module.derive_output
@@ -159,6 +173,7 @@ def install(runtime_module, core_module) -> None:
         _patch_curve_storage_for_schema3()
         _patch_property_storage_for_schema3()
         mesh_physics.install(animation)
+        mesh_physics_graph.promote_public_derived_version(project_graph, core_module, runtime_module)
 
     def create_schema(conn) -> None:
         ensure_animation_api()
@@ -198,6 +213,7 @@ def install(runtime_module, core_module) -> None:
         return db
 
     def query(args):
+        ensure_animation_api()
         result = int(original_query(args))
         root = Path(args.output).expanduser().resolve()
         db = root if root.suffix.lower() == ".db" else root / core_module.DB_NAME
