@@ -12,12 +12,22 @@ static void GatherDataflowChaosCandidates(
     Registry.ScanPathsSynchronous(ProjectPaths, true, true);
     Registry.WaitForCompletion();
 
-    TArray<FAssetData> RegistryAssets;
-    Registry.GetAssetsByClass(UDataflow::StaticClass()->GetClassPathName(), RegistryAssets, false);
+    // Keep the class queries independent. AssetRegistry query implementations
+    // are not part of our semantic contract, so canonical extraction must not
+    // depend on whether an OutAssetData array is appended to or reset internally.
+    TArray<FAssetData> RegistryDataflows;
+    Registry.GetAssetsByClass(
+        UDataflow::StaticClass()->GetClassPathName(),
+        RegistryDataflows,
+        false);
     const FTopLevelAssetPath GeometryCollectionClassPath(
         TEXT("/Script/GeometryCollectionEngine"),
         TEXT("GeometryCollection"));
-    Registry.GetAssetsByClass(GeometryCollectionClassPath, RegistryAssets, false);
+    TArray<FAssetData> RegistryGeometryCollections;
+    Registry.GetAssetsByClass(
+        GeometryCollectionClassPath,
+        RegistryGeometryCollections,
+        false);
 
     TSet<FString> Seen;
     auto AddCandidate = [&OutAssets, &Seen](const FAssetData& Asset)
@@ -34,7 +44,8 @@ static void GatherDataflowChaosCandidates(
         OutAssets.Add(Asset);
     };
 
-    for (const FAssetData& Asset : RegistryAssets) AddCandidate(Asset);
+    for (const FAssetData& Asset : RegistryDataflows) AddCandidate(Asset);
+    for (const FAssetData& Asset : RegistryGeometryCollections) AddCandidate(Asset);
     for (const FAssetData& Asset : ExistingAssets) AddCandidate(Asset);
 
     OutAssets.Sort([](const FAssetData& A, const FAssetData& B)
