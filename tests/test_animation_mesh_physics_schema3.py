@@ -13,6 +13,8 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 import uatool_animation_mesh_physics as mesh_physics
+import uatool_animation_mesh_physics_integration as mesh_physics_integration
+import uatool_animation_property_storage as property_storage
 
 
 def write_jsonl(path: Path, rows: list[dict]) -> None:
@@ -146,6 +148,37 @@ class AnimationMeshPhysicsSchema3Test(unittest.TestCase):
         self.assertEqual(manifest["counts"]["skeletal_meshes"], 1)
         self.assertIn("physics_constraints.jsonl", manifest["files"])
 
+    def test_schema3_retains_animation_property_block_storage(self) -> None:
+        self._write_valid()
+        write_jsonl(self.output / "animation_properties.jsonl", [{
+            "asset_path": "/Game/Test/A_Test.A_Test",
+            "owner_path": "/Game/Test/A_Test.A_Test",
+            "owner_kind": "asset",
+            "owner_class": "/Script/Engine.AnimSequence",
+            "declaring_type": "/Script/Engine.AnimationAsset",
+            "property_name": "RateScale",
+            "property_type": "FloatProperty",
+            "cpp_type": "float",
+            "value": "1.000000",
+            "truncated": False,
+        }])
+        (self.output / "animation_manifest.json").write_text(json.dumps({
+            "schema_version": 2,
+            "pass": "UnrealAssetToolAnimation",
+            "counts": {"animation_properties": 1},
+            "files": ["animation_properties.jsonl"],
+        }), encoding="utf-8")
+        self.assertTrue(mesh_physics.normalize_output(self.output))
+        mesh_physics_integration._patch_property_storage_for_schema3()
+        stats = property_storage.normalize_output(self.output)
+        self.assertEqual(stats["logical_properties"], 1)
+        manifest = json.loads((self.output / "animation_manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["schema_version"], 3)
+        self.assertEqual(manifest["animation_property_encoding"], property_storage.ENCODING)
+        self.assertEqual(manifest["animation_property_logical_count"], 1)
+        self.assertEqual(manifest["animation_property_block_count"], 1)
+        self.assertIsNone(property_storage.manifest_validation_error(self.output))
+
     def test_sqlite_round_trip(self) -> None:
         self._write_valid()
         conn = sqlite3.connect(":memory:")
@@ -181,6 +214,7 @@ class AnimationMeshPhysicsSchema3Test(unittest.TestCase):
             self.assertNotIn(forbidden, source)
         self.assertIn("uatool_animation_mesh_physics_integration", facade)
         self.assertIn("_animation_mesh_physics_integration.install(_runtime, _core)", facade)
+        self.assertIn("_patch_property_storage_for_schema3", integration)
         self.assertIn("require_present=True", integration)
         self.assertIn("PUBLIC_ANIMATION_SCHEMA_VERSION = 3", (SCRIPTS / "uatool_animation_mesh_physics.py").read_text(encoding="utf-8"))
 
