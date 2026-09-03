@@ -116,10 +116,14 @@ class SemanticQualityTest(unittest.TestCase):
         control = [
             {
                 "blueprint_path": bp, "graph_name": "EventGraph", "source_block_id": "b0", "target_block_id": "b1",
+                "source_node_id": "branch", "target_node_id": "call", "source_pin_name": "then",
+                "source_pin_display_name": "then", "target_pin_name": "execute",
                 "control_kind": "branch", "condition_text": "IsReady", "condition_polarity": True,
             },
             {
                 "blueprint_path": bp, "graph_name": "EventGraph", "source_block_id": "b0", "target_block_id": "b2",
+                "source_node_id": "branch", "target_node_id": "set", "source_pin_name": "else",
+                "source_pin_display_name": "else", "target_pin_name": "execute",
                 "control_kind": "branch", "condition_text": "IsReady", "condition_polarity": False,
             },
         ]
@@ -148,11 +152,13 @@ class SemanticQualityTest(unittest.TestCase):
             self.assertTrue(report["structural_quality_ok"])
             self.assertEqual(report["defect_counts"]["fallback_nodes"], 0)
             self.assertEqual(report["defect_counts"]["missing_statement_nodes"], 0)
+            self.assertEqual(report["defect_counts"]["control_identity_mismatch"], 0)
             self.assertEqual(report["counts"]["control_edges"], 2)
             self.assertEqual(report["endpoint_relation_counts"], {"calls": 1, "writes": 1})
             rendered = quality.render_case(report)
             self.assertIn("if IsReady", rendered)
             self.assertIn("DoThing(Value=Health)", rendered)
+            self.assertIn("b1.execute", rendered)
             self.assertIn("runtime_state_captured=False", rendered)
             self.assertIn("human_semantic_review_required=True", rendered)
 
@@ -163,6 +169,39 @@ class SemanticQualityTest(unittest.TestCase):
             report = quality.quality_case(root, rows, bp)
             self.assertFalse(report["structural_quality_ok"])
             self.assertEqual(report["defect_counts"]["missing_call_identity"], 1)
+
+    def test_dropped_target_pin_is_a_machine_quality_defect(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            bp, _ = self._fixture(root)
+            control = list(rows(root / "blueprint_control_edges.jsonl"))
+            control[0]["target_pin_name"] = ""
+            write_jsonl(root / "blueprint_control_edges.jsonl", control)
+            report = quality.quality_case(root, rows, bp)
+            self.assertFalse(report["structural_quality_ok"])
+            self.assertEqual(report["defect_counts"]["control_identity_mismatch"], 1)
+
+    def test_enhanced_input_event_is_high_signal_for_review(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            bp, _ = self._fixture(root)
+            semantic_nodes = list(rows(root / "blueprint_semantic_nodes.jsonl"))
+            semantic_nodes.append({
+                "node_id": "input", "blueprint_path": bp, "graph_name": "EventGraph",
+                "operation": "enhanced_input_event", "semantic_kind": "event", "has_exec_flow": True, "opaque": False,
+            })
+            write_jsonl(root / "blueprint_semantic_nodes.jsonl", semantic_nodes)
+            statements = list(rows(root / "blueprint_semantic_statements.jsonl"))
+            statements.append({
+                "node_id": "input", "blueprint_path": bp, "graph_name": "EventGraph", "block_id": "b0",
+                "block_position": 2, "operation": "enhanced_input_event", "semantic_kind": "event", "primary_effect": "event",
+                "symbol": "IA_Test", "target": "", "dependency_count": 0, "literal_count": 0,
+                "inputs": [], "text": "input IA_Test",
+            })
+            write_jsonl(root / "blueprint_semantic_statements.jsonl", statements)
+            report = quality.quality_case(root, rows, bp)
+            high_signal_ops = {row["operation"] for row in report["high_signal_statements"]}
+            self.assertIn("enhanced_input_event", high_signal_ops)
 
     def test_candidates_rank_control_and_dependency_rich_blueprint_first(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

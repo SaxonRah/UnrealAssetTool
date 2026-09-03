@@ -43,6 +43,12 @@ HIGH_SIGNAL_OPERATIONS = {
     "macro_instance",
     "event",
     "custom_event",
+    "enhanced_input_event",
+    "input_key",
+    "input_debug_key",
+    "delegate_bind",
+    "delegate_assign",
+    "timeline",
 }
 CALL_OPERATIONS = {"function_call"}
 WRITE_OPERATIONS = {"variable_set", "set_fields_in_struct"}
@@ -241,6 +247,17 @@ def _node_should_have_statement(node: dict) -> bool:
     return bool(node.get("has_exec_flow", False)) or str(node.get("operation", "") or "") in BOUNDARY_OPERATIONS
 
 
+def _control_endpoint_key(row: dict) -> tuple[str, ...]:
+    return (
+        str(row.get("source_block_id", "") or ""),
+        str(row.get("target_block_id", "") or ""),
+        str(row.get("source_node_id", "") or ""),
+        str(row.get("target_node_id", "") or ""),
+        str(row.get("source_pin_name", "") or ""),
+        str(row.get("target_pin_name", "") or ""),
+    )
+
+
 def quality_case(output: Path, rows, blueprint_path: str, *, example_limit: int = 40) -> dict:
     if example_limit < 1:
         raise ValueError("example_limit must be >= 1")
@@ -298,10 +315,14 @@ def quality_case(output: Path, rows, blueprint_path: str, *, example_limit: int 
         if source not in block_ids or target not in block_ids:
             missing_control_blocks.append({"source": source, "target": target})
 
-    # blueprint_control_edges is intended as a one-to-one semantic decoration of
-    # execution block edges. Historical derives may lack it; a present-but-
-    # cardinality-mismatched stream is a quality defect.
+    # blueprint_control_edges is a one-to-one semantic decoration of the
+    # authoritative execution-block edge set. Cardinality alone is insufficient:
+    # schema 2 also requires exact source/target node+exec-pin endpoint identity.
     control_cardinality_mismatch = bool(control_edges) and len(control_edges) != len(block_edges)
+    control_identity_mismatch = bool(control_edges) and (
+        {_control_endpoint_key(row) for row in control_edges}
+        != {_control_endpoint_key(row) for row in block_edges}
+    )
 
     missing_call_identity = []
     missing_write_identity = []
@@ -341,6 +362,7 @@ def quality_case(output: Path, rows, blueprint_path: str, *, example_limit: int 
         "orphan_statement_nodes": len(orphan_statement_nodes),
         "missing_control_blocks": len(missing_control_blocks),
         "control_cardinality_mismatch": int(control_cardinality_mismatch),
+        "control_identity_mismatch": int(control_identity_mismatch),
         "missing_call_identity": len(missing_call_identity),
         "missing_write_identity": len(missing_write_identity),
         "dependency_render_gaps": len(dependency_render_gaps),
@@ -373,6 +395,7 @@ def quality_case(output: Path, rows, blueprint_path: str, *, example_limit: int 
         str(row.get("control_kind", "") or ""),
         str(row.get("case_name", "") or row.get("source_pin_name", "") or ""),
         str(row.get("target_block_id", "") or ""),
+        str(row.get("target_pin_name", "") or ""),
     ))
 
     aggregate = _aggregate(output, rows).get(blueprint_path, {})
@@ -513,8 +536,15 @@ def render_case(report: dict) -> str:
                 )
             elif kind == "sequence":
                 detail = f" index={row.get('sequence_index')}"
+            target_pin = _meaningful(row.get("target_pin_name"))
+            target = str(row.get("target_block_id", "") or "")
+            if target_pin:
+                target += f".{target_pin}"
+            source_pin = _meaningful(row.get("source_pin_display_name") or row.get("source_pin_name"))
+            if source_pin and kind == "flow":
+                detail += f" source_pin={source_pin}"
             print(
-                f"  {row.get('graph_name','')} {row.get('source_block_id','')} -> {row.get('target_block_id','')} "
+                f"  {row.get('graph_name','')} {row.get('source_block_id','')} -> {target} "
                 f"[{kind}]{detail}"
             )
 
