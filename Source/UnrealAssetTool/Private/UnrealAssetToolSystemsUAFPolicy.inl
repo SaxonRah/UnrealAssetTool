@@ -1,3 +1,54 @@
+static void EnsureUAFRepresentativeMounts()
+{
+    struct FMountSpec
+    {
+        const TCHAR* PluginName;
+        const TCHAR* RootPath;
+    };
+    static const FMountSpec MountSpecs[] = {
+        { TEXT("UAF"), TEXT("/UAF/") },
+        { TEXT("UAFAnimGraph"), TEXT("/UAFAnimGraph/") },
+        { TEXT("UAFSharedAssets"), TEXT("/UAFSharedAssets/") },
+    };
+
+    for (const FMountSpec& Spec : MountSpecs)
+    {
+        const TSharedPtr<IPlugin> Plugin = IPluginManager::Get().FindPlugin(Spec.PluginName);
+        if (!Plugin.IsValid())
+        {
+            UE_LOG(LogTemp, Warning,
+                TEXT("UnrealAssetToolSystems: requested UAF representative plugin is unavailable: %s"),
+                Spec.PluginName);
+            continue;
+        }
+
+        FString RootPath = Plugin->GetMountedAssetPath();
+        if (RootPath.IsEmpty()) RootPath = Spec.RootPath;
+        if (!RootPath.EndsWith(TEXT("/"))) RootPath += TEXT("/");
+
+        bool bPackageMounted = FPackageName::MountPointExists(RootPath);
+        UE_LOG(LogTemp, Display,
+            TEXT("UnrealAssetToolSystems: UAF mount status plugin=%s enabled=%d plugin_mounted=%d package_mounted=%d root=%s content=%s"),
+            Spec.PluginName,
+            Plugin->IsEnabled() ? 1 : 0,
+            Plugin->IsMounted() ? 1 : 0,
+            bPackageMounted ? 1 : 0,
+            *RootPath,
+            *Plugin->GetContentDir());
+
+        if (!bPackageMounted)
+        {
+            FPackageName::RegisterMountPoint(RootPath, Plugin->GetContentDir());
+            bPackageMounted = FPackageName::MountPointExists(RootPath);
+            UE_LOG(LogTemp, Display,
+                TEXT("UnrealAssetToolSystems: registered UAF representative mount plugin=%s mounted=%d root=%s"),
+                Spec.PluginName,
+                bPackageMounted ? 1 : 0,
+                *RootPath);
+        }
+    }
+}
+
 static void GatherUAFCandidates(const TArray<FAssetData>& ExistingAssets, TArray<FAssetData>& OutAssets)
 {
     FAssetRegistryModule& AssetRegistryModule =
@@ -9,6 +60,12 @@ static void GatherUAFCandidates(const TArray<FAssetData>& ExistingAssets, TArray
     Paths.Add(TEXT("/Game"));
     if (FParse::Param(FCommandLine::Get(), TEXT("UAFEngineContent")))
     {
+        // A bare systems-only Editor process can reach OnPostEngineInit before
+        // these explicitly enabled engine-plugin content roots are mounted in
+        // the same way they are for a normal -run commandlet. Ensure only the
+        // three requested representative roots are package-mounted; do not
+        // broaden the scan to global engine content.
+        EnsureUAFRepresentativeMounts();
         Paths.Add(TEXT("/UAF"));
         Paths.Add(TEXT("/UAFAnimGraph"));
         Paths.Add(TEXT("/UAFSharedAssets"));
