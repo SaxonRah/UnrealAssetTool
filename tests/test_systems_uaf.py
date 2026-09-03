@@ -121,6 +121,8 @@ class SystemsUAFTest(unittest.TestCase):
         self.assertIn("/Script/UAFAnimGraph.UAFAnimGraph", native)
         self.assertIn("AnimNextVariableEntry", native)
         self.assertIn("Pin->GetName() == TEXT(\"Variable\")", native)
+        self.assertIn("Pin->GetDirection() == ERigVMPinDirection::Hidden", native)
+        self.assertNotIn("Pin->IsHidden()", native)
         self.assertIn("UpgradeSystemsManifestToSchema10", policy)
         self.assertIn("FDataflowChaosSystemsFileHelperProxy::SaveStringToFile", policy)
         self.assertIn("FUAFSystemsFileHelperProxy", scanner)
