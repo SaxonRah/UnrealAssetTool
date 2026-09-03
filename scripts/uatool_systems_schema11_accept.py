@@ -82,7 +82,7 @@ def accept_schema11(systems_module, project: Path, capture: Path, corpus: Path) 
         )
     required_minimums = {
         "navigation_areas": 7,
-        "navigation_area_agent_mappings": 1,
+        "navigation_area_agent_mappings": 16,
         "navigation_systems": 2,
         "navigation_agents": 1,
         "navigation_link_defaults": 2,
