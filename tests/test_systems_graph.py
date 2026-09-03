@@ -123,6 +123,11 @@ class SystemsGraphSmokeTest(unittest.TestCase):
             name.removesuffix(".jsonl"): len(rows_by_file[name])
             for name in systems.JSONL_FILES
         }
+        # Schema 9 publishes loss counters that are not themselves JSONL files.
+        # The generic composed-schema fixture claims schema 9, so it must state
+        # those counters explicitly even though this fixture has no Dataflow data.
+        counts["dataflow_chaos_truncated_properties"] = 0
+        counts["dataflow_chaos_property_row_limit_hits"] = 0
         (self.output / "systems_manifest.json").write_text(json.dumps({
             "schema_version": systems.SYSTEMS_SCHEMA_VERSION,
             "pass": "UnrealAssetToolSystems",
