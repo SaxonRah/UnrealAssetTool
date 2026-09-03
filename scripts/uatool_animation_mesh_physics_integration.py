@@ -12,6 +12,7 @@ import uatool_animation_property_storage as property_storage
 import uatool_animation_mesh_physics as mesh_physics
 import uatool_project_graph as project_graph
 import uatool_capabilities as capabilities
+import uatool_build_perf as build_perf
 import uatool_animation_mesh_physics_graph as mesh_physics_graph
 import uatool_animation_mesh_physics_accept as mesh_physics_accept
 import uatool_animation_mesh_physics_capabilities as mesh_physics_capabilities
@@ -156,12 +157,26 @@ def install(runtime_module, core_module) -> None:
     _patch_property_storage_for_schema3()
 
     # Schema 3 owns a first-class cross-family graph contract. Install its graph,
-    # acceptance CLI and capability manifest at composition time; the public
-    # derived version is promoted again from each entrypoint because uatool.py's
-    # FINAL_DERIVED_SCHEMA_VERSION is initialized after this module is imported.
+    # acceptance CLI and capability manifest at composition time.
     mesh_physics_graph.install(project_graph, core_module, runtime_module)
     mesh_physics_accept.install(runtime_module)
     mesh_physics_capabilities.install(capabilities)
+
+    # uatool.py defines FINAL_DERIVED_SCHEMA_VERSION only after importing the VFX
+    # facade that installs this module, then calls build_perf.install(). Wrap that
+    # canonical composition point so Gameplay Framework schema 28 installs first
+    # and schema 29 is promoted immediately afterward, before freshness checks or
+    # the public derive wrappers are captured.
+    if not getattr(build_perf, "_animation_schema29_composition_installed", False):
+        original_build_perf_install = build_perf.install
+
+        def build_perf_install_with_schema29(core) -> None:
+            original_build_perf_install(core)
+            mesh_physics_graph.install(project_graph, core, runtime_module)
+            mesh_physics_graph.promote_public_derived_version(project_graph, core, runtime_module)
+
+        build_perf.install = build_perf_install_with_schema29
+        build_perf._animation_schema29_composition_installed = True
 
     original_create_schema = core_module.create_schema
     original_derive_output = core_module.derive_output
