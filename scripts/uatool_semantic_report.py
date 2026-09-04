@@ -533,6 +533,12 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
     interprocedural_edge_path = output / "blueprint_interprocedural_execution_edges.jsonl"
     interprocedural_terminal_path = output / "blueprint_interprocedural_execution_terminals.jsonl"
     interprocedural_data_path = output / "blueprint_interprocedural_data_routes.jsonl"
+    function_interprocedural_edge_path = (
+        output / "blueprint_interprocedural_function_execution_edges.jsonl"
+    )
+    function_interprocedural_terminal_path = (
+        output / "blueprint_interprocedural_function_execution_terminals.jsonl"
+    )
     interprocedural_edges = (
         list(rows(interprocedural_edge_path)) if interprocedural_edge_path.is_file() else []
     )
@@ -541,6 +547,16 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
     )
     interprocedural_data_routes = (
         list(rows(interprocedural_data_path)) if interprocedural_data_path.is_file() else []
+    )
+    function_interprocedural_edges = (
+        list(rows(function_interprocedural_edge_path))
+        if function_interprocedural_edge_path.is_file()
+        else []
+    )
+    function_interprocedural_terminals = (
+        list(rows(function_interprocedural_terminal_path))
+        if function_interprocedural_terminal_path.is_file()
+        else []
     )
     interprocedural_data_kinds = collections.Counter(
         str(row.get("route_kind", "") or "<empty>") for row in interprocedural_data_routes
