@@ -38,6 +38,16 @@ capabilities=1
 
 Every RC record also requires tool version `1.0.0-beta.1` and validated engine `UE 5.8.2` in `capabilities.json`.
 
+The table above is the **tool-current schema contract**, not a claim that every
+representative project contains authored data for every content-dependent
+companion pass. `mesh` and `world_geometry` are optional per corpus: if the
+corresponding capability family is available, the observed schema must equal
+the current version above; if the capability family is explicitly
+`external_or_excluded` because the project has no authored candidates, the
+corpus may report schema `0`. Any other nonzero version is rejected. Core
+scanner, derived and capability schemas remain exact requirements for every RC
+record.
+
 ## Profiles
 
 ### `gasp`
