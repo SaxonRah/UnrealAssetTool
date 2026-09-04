@@ -15,6 +15,8 @@ if str(SCRIPTS) not in sys.path:
 import uatool_motion_warping_schema as schema
 import uatool_motion_warping_model as model
 import uatool_motion_warping_graph as graph
+import uatool_animation_mesh_physics as mesh_physics
+import uatool_motion_warping_integration as integration
 
 
 def write_json(path: Path, value: dict) -> None:
@@ -34,6 +36,26 @@ def rows(path: Path):
     for line in path.read_text(encoding="utf-8").splitlines():
         if line:
             yield json.loads(line)
+
+
+def write_empty_mesh_physics_sidecar(root: Path) -> None:
+    counts = {name.removesuffix(".jsonl"): 0 for name in mesh_physics.JSONL_FILES}
+    counts["mesh_physics_registry_candidates"] = 0
+    for filename in mesh_physics.JSONL_FILES:
+        write_jsonl(root / filename, [])
+    write_json(root / "animation_mesh_physics_manifest.json", {
+        "schema_version": 1,
+        "public_animation_schema_version": 3,
+        "pass": "UnrealAssetToolAnimationMeshPhysics",
+        "success": True,
+        "runtime_state_captured": False,
+        "render_buffers_captured": False,
+        "cloth_simulation_state_captured": False,
+        "chaos_runtime_state_captured": False,
+        "maps_loaded": False,
+        "counts": counts,
+        "files": list(mesh_physics.JSONL_FILES),
+    })
 
 
 class MotionWarpingSchema4Test(unittest.TestCase):
@@ -179,6 +201,25 @@ class MotionWarpingSchema4Test(unittest.TestCase):
             self.assertEqual(animation["schema_version"], 4)
             self.assertEqual(animation["motion_warping_schema_version"], 1)
             self.assertIn("motion_warping_modifiers.jsonl", animation["files"])
+            self.assertIsNone(schema.validation_error(corpus, require_present=True))
+
+    def test_normal_pending_capture_promotes_mesh_schema_before_motion_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            corpus = Path(temp)
+            capture = self._fixture(corpus)
+
+            animation = json.loads((corpus / "animation_manifest.json").read_text(encoding="utf-8"))
+            animation["schema_version"] = 2
+            animation.pop("mesh_physics_schema_version", None)
+            write_json(corpus / "animation_manifest.json", animation)
+            write_empty_mesh_physics_sidecar(corpus)
+
+            self.assertTrue(integration._promote_pending_capture(corpus))
+            promoted = json.loads((corpus / "animation_manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(promoted["schema_version"], 4)
+            self.assertEqual(promoted["mesh_physics_schema_version"], 1)
+            self.assertEqual(promoted["motion_warping_schema_version"], 1)
+            self.assertFalse(capture.exists())
             self.assertIsNone(schema.validation_error(corpus, require_present=True))
 
     def test_graph_uses_only_active_bone_provider(self) -> None:
