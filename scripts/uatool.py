@@ -369,6 +369,9 @@ def derive_output(output):
             "coverage": (classified_nodes / len(semantic_nodes)) if semantic_nodes else 1.0,
             "modeled_coverage": (modeled_nodes / len(semantic_nodes)) if semantic_nodes else 1.0,
         }
+        manifest["blueprint_call_binding_schema_version"] = (
+            core.BLUEPRINT_CALL_BINDING_SCHEMA_VERSION
+        )
         manifest["blueprint_interprocedural_schema_version"] = (
             blueprint_interprocedural.INTERPROCEDURAL_SCHEMA_VERSION
         )
