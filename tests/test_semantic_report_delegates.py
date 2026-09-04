@@ -108,10 +108,6 @@ class SemanticReportDelegateAuditTest(unittest.TestCase):
                         "delegate_owner": owner,
                         "delegate_member_guid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
                         "delegate_self_context": True,
-                        "delegate_member_guid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-                        "delegate_self_context": True,
-                        "delegate_member_guid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-                        "delegate_self_context": True,
                     },
                 },
                 {
@@ -125,6 +121,8 @@ class SemanticReportDelegateAuditTest(unittest.TestCase):
                     "semantic": {
                         "delegate_name": "OnReadyDelegate",
                         "delegate_owner": owner,
+                        "delegate_member_guid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                        "delegate_self_context": True,
                     },
                 },
                 {
@@ -138,6 +136,8 @@ class SemanticReportDelegateAuditTest(unittest.TestCase):
                     "semantic": {
                         "delegate_name": "OnReadyDelegate",
                         "delegate_owner": owner,
+                        "delegate_member_guid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                        "delegate_self_context": True,
                     },
                 },
                 {
