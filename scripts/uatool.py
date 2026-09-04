@@ -28,10 +28,10 @@ import uatool_mover_behavior as mover_behavior
 import uatool_build_perf as build_perf
 import uatool_verify_bundle as bundle_verify
 
-# Public derived schema 35 adds exact direct-internal Blueprint function
-# call/return topology on top of schema-34 macro execution/data provenance.
-# Graph-local execution blocks remain authoritative within each graph.
-FINAL_DERIVED_SCHEMA_VERSION = 35
+# Public derived schema 36 adds first-class Blueprint function data provenance
+# on top of schema-35 direct-internal function execution topology. Exact member
+# bindings and split parent projections remain explicitly distinguished.
+FINAL_DERIVED_SCHEMA_VERSION = 36
 project_graph.DERIVED_SCHEMA_VERSION = FINAL_DERIVED_SCHEMA_VERSION
 SCRIPT_DIR = Path(__file__).resolve().parent
 
@@ -276,6 +276,9 @@ def derive_output(output):
     function_interprocedural_edges, function_interprocedural_terminals, function_interprocedural_stats = (
         blueprint_interprocedural.derive_function_execution(output, runtime._rows)
     )
+    function_data_routes, function_data_route_stats = (
+        blueprint_interprocedural.derive_function_data_routes(output, runtime._rows)
+    )
     interprocedural_counts = {
         "blueprint_interprocedural_execution_edges": runtime._write(
             output / "blueprint_interprocedural_execution_edges.jsonl",
@@ -296,6 +299,10 @@ def derive_output(output):
         "blueprint_interprocedural_function_execution_terminals": runtime._write(
             output / "blueprint_interprocedural_function_execution_terminals.jsonl",
             function_interprocedural_terminals,
+        ),
+        "blueprint_interprocedural_function_data_routes": runtime._write(
+            output / "blueprint_interprocedural_function_data_routes.jsonl",
+            function_data_routes,
         ),
     }
     counts.update(interprocedural_counts)
@@ -410,6 +417,25 @@ def derive_output(output):
             "function_unreachable_callsite_count": int(
                 function_interprocedural_stats.get("excluded_unreachable_callsite", 0) or 0
             ),
+            "function_data_route_count": len(function_data_routes),
+            "function_data_argument_count": int(
+                function_data_route_stats.get("function_argument", 0) or 0
+            ),
+            "function_data_return_count": int(
+                function_data_route_stats.get("function_return", 0) or 0
+            ),
+            "function_data_boundary_ready_count": int(
+                function_data_route_stats.get("boundary_ready", 0) or 0
+            ),
+            "function_data_member_route_ready_count": int(
+                function_data_route_stats.get("member_route_ready", 0) or 0
+            ),
+            "function_data_split_projection_count": int(
+                function_data_route_stats.get("identity:split_parent_projection", 0) or 0
+            ),
+            "function_data_interface_excluded_count": int(
+                function_data_route_stats.get("excluded_interface", 0) or 0
+            ),
         }
         manifest["blueprint_statement_schema_version"] = blueprint_statements.STATEMENT_SCHEMA_VERSION
         manifest["blueprint_statement_summary"] = {
@@ -462,7 +488,10 @@ def derive_output(output):
         f"function_enters={sum(int(row.get('edge_kind') == 'function_enter') for row in function_interprocedural_edges)} "
         f"function_returns={sum(int(row.get('edge_kind') == 'function_return') for row in function_interprocedural_edges)} "
         f"function_terminals={len(function_interprocedural_terminals)} "
-        f"function_unreachable={int(function_interprocedural_stats.get('excluded_unreachable_callsite', 0) or 0)}"
+        f"function_unreachable={int(function_interprocedural_stats.get('excluded_unreachable_callsite', 0) or 0)} "
+        f"function_data_routes={len(function_data_routes)} "
+        f"function_data_boundary_ready={int(function_data_route_stats.get('boundary_ready', 0) or 0)} "
+        f"function_data_member_ready={int(function_data_route_stats.get('member_route_ready', 0) or 0)}"
     )
     print(
         "blueprint statements: "
@@ -615,7 +644,10 @@ def _combined_summary(args) -> None:
             f"function_enters={interprocedural_summary.get('function_enter_count', 0)} "
             f"function_returns={interprocedural_summary.get('function_return_count', 0)} "
             f"function_terminals={interprocedural_summary.get('function_terminal_count', 0)} "
-            f"function_unreachable={interprocedural_summary.get('function_unreachable_callsite_count', 0)}"
+            f"function_unreachable={interprocedural_summary.get('function_unreachable_callsite_count', 0)} "
+            f"function_data_routes={interprocedural_summary.get('function_data_route_count', 0)} "
+            f"function_data_boundary_ready={interprocedural_summary.get('function_data_boundary_ready_count', 0)} "
+            f"function_data_member_ready={interprocedural_summary.get('function_data_member_route_ready_count', 0)}"
         )
     if statement_summary:
         print(
@@ -636,6 +668,7 @@ def _combined_summary(args) -> None:
                 "blueprint_interprocedural_data_routes",
                 "blueprint_interprocedural_function_execution_edges",
                 "blueprint_interprocedural_function_execution_terminals",
+                "blueprint_interprocedural_function_data_routes",
                 "blueprint_semantic_statements", "blueprint_semantic_blocks",
                 "mover_transition_behaviors", "mover_transition_routes",
                 "vfx_relations", "vfx_context", "vfx_summaries",
