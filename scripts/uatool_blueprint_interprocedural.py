@@ -1028,6 +1028,46 @@ def load_database(conn, output: Path, rows) -> None:
                 row.get("authored_default_text", ""), row.get("evidence_kind", ""), _j(row),
             ),
         )
+    for row in rows(Path(output) / DERIVED_FILES[3]):
+        conn.execute(
+            "INSERT OR REPLACE INTO blueprint_interprocedural_function_execution_edges VALUES "
+            "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                row.get("function_edge_id", ""), int(row.get("schema_version", 0) or 0),
+                row.get("edge_kind", ""), row.get("call_node_id", ""),
+                row.get("target_function_id", ""), row.get("caller_blueprint_path", ""),
+                row.get("caller_graph_id", ""), row.get("caller_block_id", ""),
+                row.get("source_blueprint_path", ""), row.get("source_graph_id", ""),
+                row.get("source_block_id", ""), row.get("source_node_id", ""),
+                row.get("target_blueprint_path", ""), row.get("target_graph_id", ""),
+                row.get("target_block_id", ""), row.get("target_node_id", ""),
+                row.get("continuation_node_id", ""), row.get("continuation_pin_id", ""),
+                row.get("continuation_pin_name", ""),
+                int(row.get("return_frontier_block_count", 0) or 0),
+                int(row.get("call_binding_count", 0) or 0),
+                1 if row.get("purity_override", False) else 0,
+                row.get("evidence_kind", ""), _j(row),
+            ),
+        )
+    for row in rows(Path(output) / DERIVED_FILES[4]):
+        conn.execute(
+            "INSERT OR REPLACE INTO blueprint_interprocedural_function_execution_terminals VALUES "
+            "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                row.get("terminal_id", ""), int(row.get("schema_version", 0) or 0),
+                row.get("terminal_kind", ""), row.get("call_node_id", ""),
+                row.get("target_function_id", ""), row.get("caller_blueprint_path", ""),
+                row.get("caller_graph_id", ""), row.get("caller_block_id", ""),
+                row.get("target_blueprint_path", ""), row.get("target_graph_id", ""),
+                row.get("entry_block_id", ""), row.get("entry_node_id", ""),
+                int(row.get("return_frontier_block_count", 0) or 0),
+                _j(row.get("return_frontier_block_ids", [])),
+                int(row.get("call_binding_count", 0) or 0),
+                1 if row.get("purity_override", False) else 0,
+                int(row.get("canonical_outgoing_exec_count", 0) or 0),
+                row.get("evidence_kind", ""), _j(row),
+            ),
+        )
 
 
 def query(conn, print_rows, pattern: str, limit: int) -> None:
@@ -1085,5 +1125,40 @@ def query(conn, print_rows, pattern: str, limit: int) -> None:
             "route_kind", "caller_blueprint_path", "call_pin_name", "interface_pin_name",
             "value_kind", "caller_source_count", "body_consumer_count", "internal_source_count",
             "dependency_count", "caller_consumer_count", "bridge_ready",
+        ),
+    )
+    print("\n[Blueprint function interprocedural execution]")
+    print_rows(
+        conn.execute(
+            """SELECT edge_kind,caller_blueprint_path,call_node_id,target_function_id,
+                      source_block_id,target_block_id,return_frontier_block_count,
+                      call_binding_count,purity_override
+               FROM blueprint_interprocedural_function_execution_edges
+               WHERE caller_blueprint_path LIKE ? OR edge_kind LIKE ?
+                  OR call_node_id LIKE ? OR target_function_id LIKE ?
+               LIMIT ?""",
+            (pattern, pattern, pattern, pattern, limit),
+        ),
+        (
+            "edge_kind", "caller_blueprint_path", "call_node_id", "target_function_id",
+            "source_block_id", "target_block_id", "return_frontier_block_count",
+            "call_binding_count", "purity_override",
+        ),
+    )
+    print("\n[Blueprint function terminal calls]")
+    print_rows(
+        conn.execute(
+            """SELECT terminal_kind,caller_blueprint_path,call_node_id,target_function_id,
+                      caller_block_id,return_frontier_block_count,call_binding_count,purity_override
+               FROM blueprint_interprocedural_function_execution_terminals
+               WHERE caller_blueprint_path LIKE ? OR terminal_kind LIKE ?
+                  OR call_node_id LIKE ? OR target_function_id LIKE ?
+               LIMIT ?""",
+            (pattern, pattern, pattern, pattern, limit),
+        ),
+        (
+            "terminal_kind", "caller_blueprint_path", "call_node_id", "target_function_id",
+            "caller_block_id", "return_frontier_block_count", "call_binding_count",
+            "purity_override",
         ),
     )
