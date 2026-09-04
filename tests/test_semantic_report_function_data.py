@@ -292,8 +292,22 @@ class SemanticReportFunctionDataAuditTest(unittest.TestCase):
             self.assertEqual(result["function_data_binding_count"], 4)
             self.assertEqual(result["function_data_parameter_identity_count"], 4)
             self.assertEqual(result["function_data_type_verified_count"], 4)
+            self.assertEqual(result["function_data_exact_call_signature_equal_count"], 3)
+            self.assertEqual(result["function_data_exact_signature_pin_equal_count"], 3)
+            self.assertEqual(result["function_data_exact_call_pin_equal_count"], 3)
+            self.assertEqual(dict(result["function_data_type_surface_shapes"]), {
+                "call_signature=same signature_pin=same call_pin=same": 3,
+            })
+            self.assertEqual(result["function_data_type_diff_fields"], [])
             self.assertEqual(result["function_data_split_member_resolved_count"], 1)
             self.assertEqual(result["function_data_split_member_unresolved_count"], 0)
+            self.assertEqual(result["function_data_split_parent_pin_count"], 1)
+            self.assertEqual(result["function_data_split_exact_name_candidate_count"], 1)
+            self.assertEqual(result["function_data_split_suffix_candidate_count"], 0)
+            self.assertEqual(result["function_data_split_prefixed_candidate_count"], 1)
+            self.assertEqual(dict(result["function_data_split_candidate_shapes"]), {
+                "parent=yes exact=1 suffix=0 prefixed=1 raw_nonexec=3": 1,
+            })
             self.assertEqual(dict(result["function_data_directions"]), {
                 "argument": 3,
                 "return": 1,
