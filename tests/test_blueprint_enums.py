@@ -99,6 +99,23 @@ class BlueprintEnumTest(unittest.TestCase):
             self.assertEqual(expression["inputs"][0]["pin"], "NewEnumerator0")
             self.assertEqual(expression["inputs"][0]["literal"], "NewEnumerator0")
 
+    def test_enum_renderer_preserves_explicit_multi_source_marker(self) -> None:
+        expression = {
+            "kind": "expression",
+            "label": "Consumer",
+            "inputs": [{
+                "pin": "self",
+                "sources": [
+                    {"kind": "expression", "label": "A"},
+                    {"kind": "expression", "label": "B"},
+                ],
+            }],
+        }
+        self.assertEqual(
+            enums._render_expression(expression, {}, {}),
+            "Consumer(self=multi(A, B))",
+        )
+
     def test_input_debug_key_is_promoted_to_input_event(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             output = Path(temp_dir)
