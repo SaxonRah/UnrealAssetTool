@@ -819,6 +819,7 @@ namespace UnrealAssetTool
         }
         else if (OutOperation == TEXT("delegate_clear") ||
                  OutOperation == TEXT("delegate_bind") ||
+                 OutOperation == TEXT("delegate_unbind") ||
                  OutOperation == TEXT("delegate_call") ||
                  OutOperation == TEXT("delegate_assign"))
         {
@@ -1070,6 +1071,7 @@ namespace UnrealAssetTool
             { TEXT("K2Node_MakeArray"), TEXT("make_array") },
             { TEXT("K2Node_GetArrayItem"), TEXT("array_get") },
             { TEXT("K2Node_AddDelegate"), TEXT("delegate_bind") },
+            { TEXT("K2Node_RemoveDelegate"), TEXT("delegate_unbind") },
             { TEXT("K2Node_CreateDelegate"), TEXT("delegate_create") },
             { TEXT("K2Node_CallDelegate"), TEXT("delegate_call") },
             { TEXT("K2Node_GetEnumeratorNameAsString"), TEXT("enum_to_string") },
