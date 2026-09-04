@@ -108,11 +108,7 @@ class BlueprintFunctionInterproceduralTest(unittest.TestCase):
             call("call-interface", "fn-interface", self.interface, interface=True),
             call("call-unreachable", "fn-unreachable", self.target),
         ])
-        write_jsonl(self.output / "blueprint_call_bindings.jsonl", [
-            {"binding_id": "b1", "call_node_id": "call-connected"},
-            {"binding_id": "b2", "call_node_id": "call-terminal"},
-            {"binding_id": "b3", "call_node_id": "call-terminal"},
-        ])
+        write_jsonl(self.output / "blueprint_call_bindings.jsonl", [])
 
         write_jsonl(self.output / "blueprint_execution_blocks.jsonl", [
             {"block_id": "caller-connected", "blueprint_path": self.caller, "graph_id": "caller", "exit_node_id": "call-connected", "node_ids": ["call-connected"]},
@@ -156,7 +152,7 @@ class BlueprintFunctionInterproceduralTest(unittest.TestCase):
     def test_materializes_only_executable_direct_internal_calls(self) -> None:
         edges, terminals, stats = interproc.derive_function_execution(self.output, rows)
 
-        self.assertEqual(interproc.INTERPROCEDURAL_SCHEMA_VERSION, 3)
+        self.assertEqual(interproc.INTERPROCEDURAL_SCHEMA_VERSION, 4)
         self.assertEqual(stats["direct_impure"], 3)
         self.assertEqual(stats["excluded_pure"], 1)
         self.assertEqual(stats["excluded_interface"], 1)
@@ -175,7 +171,7 @@ class BlueprintFunctionInterproceduralTest(unittest.TestCase):
         self.assertEqual(len(connected_enters), 1)
         self.assertEqual(connected_enters[0]["target_block_id"], "connected-entry")
         self.assertEqual(connected_enters[0]["return_frontier_block_count"], 2)
-        self.assertEqual(connected_enters[0]["call_binding_count"], 1)
+        self.assertEqual(connected_enters[0]["call_binding_count"], 0)
 
         returns = [row for row in edges if row["edge_kind"] == "function_return"]
         self.assertEqual({row["source_block_id"] for row in returns}, {"connected-exit-a", "connected-exit-b"})
@@ -184,7 +180,7 @@ class BlueprintFunctionInterproceduralTest(unittest.TestCase):
         terminal = terminals[0]
         self.assertEqual(terminal["call_node_id"], "call-terminal")
         self.assertEqual(terminal["return_frontier_block_ids"], ["terminal-result"])
-        self.assertEqual(terminal["call_binding_count"], 2)
+        self.assertEqual(terminal["call_binding_count"], 0)
         self.assertTrue(terminal["purity_override"])
 
     def test_validation_and_sqlite_round_trip(self) -> None:
@@ -193,6 +189,7 @@ class BlueprintFunctionInterproceduralTest(unittest.TestCase):
         )
         write_jsonl(self.output / interproc.DERIVED_FILES[3], function_edges)
         write_jsonl(self.output / interproc.DERIVED_FILES[4], function_terminals)
+        write_jsonl(self.output / interproc.DERIVED_FILES[5], [])
         self.assertIsNone(interproc.validation_error(self.output, rows))
 
         conn = sqlite3.connect(":memory:")

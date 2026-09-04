@@ -11,6 +11,7 @@ SCRIPTS = ROOT / "scripts"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
+import uatool_blueprint_interprocedural as interproc
 import uatool_semantic_report as report
 
 
@@ -89,6 +90,7 @@ class SemanticReportFunctionDataAuditTest(unittest.TestCase):
             write_jsonl(root / "blueprint_interprocedural_data_routes.jsonl", [])
             write_jsonl(root / "blueprint_interprocedural_function_execution_edges.jsonl", [])
             write_jsonl(root / "blueprint_interprocedural_function_execution_terminals.jsonl", [])
+            write_jsonl(root / "blueprint_interprocedural_function_data_routes.jsonl", [])
 
             write_jsonl(root / "blueprints.jsonl", [
                 {"object_path": caller_bp, "blueprint_type": 0},
@@ -233,8 +235,18 @@ class SemanticReportFunctionDataAuditTest(unittest.TestCase):
                     "parameter_pin_ids": ["entry-value"],
                     "match_kind": "exact",
                     "split_suffix": "",
+                    "parameter_identity_kind": "exact_parameter",
+                    "member_identity_exact": True,
                     "call_pin_type": ptype(),
                     "parameter_type": ptype(),
+                    "parameter_pin_types": [ptype()],
+                    "value_type_compatible": True,
+                    "value_type_basis": "call_signature_parameter_pin",
+                    "qualifier_surfaces": {
+                        "call_pin": {"is_reference": False, "is_const": False},
+                        "signature": {"is_reference": False, "is_const": False},
+                        "parameter_pins": [{"is_reference": False, "is_const": False}],
+                    },
                     "dependency_ids": ["dep-call-value"],
                     "consumer_pin_ids": ["body-value-in"],
                 },
@@ -250,8 +262,18 @@ class SemanticReportFunctionDataAuditTest(unittest.TestCase):
                     "parameter_pin_ids": ["entry-config"],
                     "match_kind": "split_struct",
                     "split_suffix": "Speed",
+                    "parameter_identity_kind": "split_parent_projection",
+                    "member_identity_exact": False,
                     "call_pin_type": ptype(),
                     "parameter_type": struct_parent_type,
+                    "parameter_pin_types": [struct_parent_type],
+                    "value_type_compatible": True,
+                    "value_type_basis": "signature_parent_parameter_pin",
+                    "qualifier_surfaces": {
+                        "call_pin": {"is_reference": False, "is_const": False},
+                        "signature": {"is_reference": False, "is_const": False},
+                        "parameter_pins": [{"is_reference": False, "is_const": False}],
+                    },
                     "dependency_ids": [],
                     "consumer_pin_ids": [],
                 },
@@ -267,8 +289,18 @@ class SemanticReportFunctionDataAuditTest(unittest.TestCase):
                     "parameter_pin_ids": ["result-value"],
                     "match_kind": "exact",
                     "split_suffix": "",
+                    "parameter_identity_kind": "exact_parameter",
+                    "member_identity_exact": True,
                     "call_pin_type": ptype(),
                     "parameter_type": ptype(),
+                    "parameter_pin_types": [ptype()],
+                    "value_type_compatible": True,
+                    "value_type_basis": "call_signature_parameter_pin",
+                    "qualifier_surfaces": {
+                        "call_pin": {"is_reference": False, "is_const": False},
+                        "signature": {"is_reference": False, "is_const": False},
+                        "parameter_pins": [{"is_reference": False, "is_const": False}],
+                    },
                     "dependency_ids": [],
                     "consumer_pin_ids": ["caller-result-in"],
                 },
@@ -284,13 +316,28 @@ class SemanticReportFunctionDataAuditTest(unittest.TestCase):
                     "parameter_pin_ids": ["entry-interface-value"],
                     "match_kind": "exact",
                     "split_suffix": "",
+                    "parameter_identity_kind": "exact_parameter",
+                    "member_identity_exact": True,
                     "call_pin_type": ptype(),
                     "parameter_type": ptype(),
+                    "parameter_pin_types": [ptype()],
+                    "value_type_compatible": True,
+                    "value_type_basis": "call_signature_parameter_pin",
+                    "qualifier_surfaces": {
+                        "call_pin": {"is_reference": False, "is_const": False},
+                        "signature": {"is_reference": False, "is_const": False},
+                        "parameter_pins": [{"is_reference": False, "is_const": False}],
+                    },
                     "dependency_ids": [],
                     "consumer_pin_ids": ["body-interface-in"],
                 },
             ])
 
+            function_routes, _route_stats = interproc.derive_function_data_routes(root, rows)
+            write_jsonl(
+                root / "blueprint_interprocedural_function_data_routes.jsonl",
+                function_routes,
+            )
             result = report.build_report(root, rows)
 
             self.assertEqual(result["function_data_binding_count"], 4)
@@ -349,6 +396,19 @@ class SemanticReportFunctionDataAuditTest(unittest.TestCase):
             self.assertEqual(result["function_data_return_route_ready_count"], 1)
 
             self.assertEqual(result["function_data_mismatches"], [])
+            self.assertEqual(result["function_interprocedural_data_route_count"], 3)
+            self.assertEqual(result["function_data_expected_route_count"], 3)
+            self.assertEqual(result["function_interprocedural_data_boundary_ready_count"], 3)
+            self.assertEqual(result["function_interprocedural_data_member_ready_count"], 2)
+            self.assertTrue(result["function_interprocedural_data_alignment"])
+            self.assertEqual(
+                dict(result["function_interprocedural_data_route_kinds"]),
+                {"function_argument": 2, "function_return": 1},
+            )
+            self.assertEqual(
+                dict(result["function_interprocedural_data_identity_kinds"]),
+                {"exact_parameter": 2, "split_parent_projection": 1},
+            )
             self.assertEqual(dict(result["function_data_target_kinds"]), {
                 "interface_dispatch_or_declaration": 1,
                 "pure_internal": 3,
