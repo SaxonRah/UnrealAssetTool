@@ -1304,6 +1304,7 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
         "function_data_match_kinds": top(function_data_match_kinds),
         "function_data_status": top(function_data_status),
         "function_data_mismatches": top(function_data_mismatches),
+        "function_data_mismatch_count": sum(function_data_mismatches.values()),
         "function_data_parameter_identity_count": function_data_parameter_identity_count,
         "function_data_type_verified_count": function_data_type_verified_count,
         "function_data_split_member_resolved_count": function_data_split_member_resolved_count,
@@ -1519,7 +1520,8 @@ def print_report(report: dict) -> None:
         f"exact_parameter_identity={int(report.get('function_data_parameter_identity_count', 0) or 0)} "
         f"full_type_verified={int(report.get('function_data_type_verified_count', 0) or 0)} "
         f"split_member_resolved={int(report.get('function_data_split_member_resolved_count', 0) or 0)} "
-        f"split_member_unresolved={int(report.get('function_data_split_member_unresolved_count', 0) or 0)}"
+        f"split_member_unresolved={int(report.get('function_data_split_member_unresolved_count', 0) or 0)} "
+        f"mismatches={int(report.get('function_data_mismatch_count', 0) or 0)}"
     )
     section("function data target kinds", "function_data_target_kinds")
     section("function data directions", "function_data_directions")
