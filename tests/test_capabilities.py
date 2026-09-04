@@ -96,7 +96,7 @@ class CapabilityManifestTest(unittest.TestCase):
                 "blueprint_interprocedural_function_data_routes.jsonl",
                 by_family["blueprint"]["derived_streams"],
             )
-            self.assertIn("function_argument", by_family["blueprint"]["derived_relations"])
+            self.assertIn("function_argument_data", by_family["blueprint"]["derived_relations"])
             self.assertIn("function_return_data", by_family["blueprint"]["derived_relations"])
             self.assertTrue(all(row["runtime_state_captured"] is False for row in manifest["families"]))
 
