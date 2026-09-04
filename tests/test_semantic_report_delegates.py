@@ -84,6 +84,8 @@ class SemanticReportDelegateAuditTest(unittest.TestCase):
                     "semantic": {
                         "selected_function": "ONREADY",
                         "selected_function_guid": "{" + guid + "}",
+                        "selected_function_path": "/Game/Test/BP.SKEL_BP_C:OnReady",
+                        "selected_function_scope_class": "/Game/Test/BP.SKEL_BP_C",
                     },
                 },
                 {
@@ -317,11 +319,23 @@ class SemanticReportDelegateAuditTest(unittest.TestCase):
                 {"delegate_bind": 1},
             )
             self.assertEqual(
+                dict(result["delegate_binding_schema_versions"]),
+                {2: 1},
+            )
+            self.assertEqual(
                 dict(result["delegate_binding_basis_counts"]),
                 {"selected_guid": 1},
             )
             self.assertEqual(
+                dict(result["delegate_binding_expected_basis_counts"]),
+                {"selected_guid": 1},
+            )
+            self.assertEqual(
                 dict(result["delegate_binding_endpoint_kinds"]),
+                {"custom_event": 1},
+            )
+            self.assertEqual(
+                dict(result["delegate_binding_expected_endpoint_kinds"]),
                 {"custom_event": 1},
             )
             self.assertEqual(result["delegate_component_bound_event_count"], 1)
