@@ -18,7 +18,7 @@ from pathlib import Path
 
 import uatool_core as core
 
-DELEGATE_BINDING_SCHEMA_VERSION = 1
+DELEGATE_BINDING_SCHEMA_VERSION = 2
 DERIVED_FILES = ("blueprint_delegate_bindings.jsonl",)
 
 _SQL = """
@@ -35,6 +35,8 @@ CREATE TABLE blueprint_delegate_bindings(
  endpoint_id TEXT NOT NULL,endpoint_path TEXT NOT NULL,
  endpoint_blueprint_path TEXT NOT NULL,endpoint_graph_id TEXT NOT NULL,
  endpoint_local_resolution TEXT NOT NULL,endpoint_candidate_function_ids_json TEXT NOT NULL,
+ selected_function_guid TEXT NOT NULL,selected_function_path TEXT NOT NULL,
+ selected_function_scope_class TEXT NOT NULL,
  resolution_basis TEXT NOT NULL,evidence_kind TEXT NOT NULL,json TEXT NOT NULL
 );
 CREATE INDEX bp_delegate_bind_dispatcher_idx
@@ -177,23 +179,66 @@ def derive(output: Path, rows) -> tuple[list[dict], dict]:
             endpoint_graph_id = ""
             endpoint_local_resolution = ""
             endpoint_candidate_function_ids: list[str] = []
+            selected_function_guid_raw = ""
+            selected_function_path = ""
+            selected_function_scope_class = ""
             resolution_basis = ""
 
             if source_operation == "delegate_create":
                 source_sem = _semantic(source_node)
                 selected_name = str(source_sem.get("selected_function", "") or "")
-                selected_guid = _guid_key(
-                    str(source_sem.get("selected_function_guid", "") or "")
+                selected_function_guid_raw = str(
+                    source_sem.get("selected_function_guid", "") or ""
                 )
-                selected_path = str(source_sem.get("selected_function_path", "") or "")
+                selected_guid = _guid_key(selected_function_guid_raw)
+                selected_function_path = str(
+                    source_sem.get("selected_function_path", "") or ""
+                )
+                selected_function_scope_class = str(
+                    source_sem.get("selected_function_scope_class", "") or ""
+                )
 
-                if selected_path:
+                guid_candidates = (
+                    guid_nodes_by_blueprint.get((blueprint_path, selected_guid), [])
+                    if selected_guid else []
+                )
+                exact_event = None
+                if len(guid_candidates) == 1:
+                    candidate_operation = str(
+                        guid_candidates[0].get("operation", "") or ""
+                    )
+                    if candidate_operation in {"custom_event", "event"}:
+                        exact_event = guid_candidates[0]
+                elif len(guid_candidates) > 1:
+                    raise RuntimeError(
+                        f"CreateDelegate selected GUID is not unique in Blueprint: "
+                        f"{source_node_id} -> {selected_guid}"
+                    )
+
+                if exact_event is not None:
+                    endpoint_operation = str(exact_event.get("operation", "") or "")
+                    endpoint_kind = (
+                        "custom_event" if endpoint_operation == "custom_event" else "event"
+                    )
+                    endpoint_name = str(
+                        exact_event.get("symbol", "") or selected_name
+                    )
+                    endpoint_id = str(exact_event.get("node_id", "") or "")
+                    endpoint_path = endpoint_id
+                    endpoint_blueprint_path = str(
+                        exact_event.get("blueprint_path", "") or ""
+                    )
+                    endpoint_graph_id = str(exact_event.get("graph_id", "") or "")
+                    endpoint_local_resolution = "exact_captured_event_node"
+                    resolution_basis = "selected_guid"
+                    stats["create_delegate_event"] += 1
+                elif selected_function_path:
                     # Structural schema 13 records SelectedFunctionPath directly
                     # from UE's resolved UFunction::GetPathName(). That path is
                     # authoritative endpoint identity even when more than one
                     # captured Blueprint function row maps back to the same
                     # generated/skeleton UFunction path.
-                    candidates = functions_by_resolved.get(selected_path, [])
+                    candidates = functions_by_resolved.get(selected_function_path, [])
                     candidate_ids = sorted(
                         {
                             str(function.get("function_id", "") or "")
@@ -203,8 +248,8 @@ def derive(output: Path, rows) -> tuple[list[dict], dict]:
                     )
                     endpoint_kind = "function"
                     endpoint_name = selected_name
-                    endpoint_id = selected_path
-                    endpoint_path = selected_path
+                    endpoint_id = selected_function_path
+                    endpoint_path = selected_function_path
                     endpoint_blueprint_path = (
                         str(candidates[0].get("blueprint_path", "") or "")
                         if candidates
@@ -228,31 +273,6 @@ def derive(output: Path, rows) -> tuple[list[dict], dict]:
                     resolution_basis = "selected_function_path"
                     stats["create_delegate_function"] += 1
                     stats[f"function_local:{endpoint_local_resolution}"] += 1
-                elif selected_guid:
-                    candidates = guid_nodes_by_blueprint.get((blueprint_path, selected_guid), [])
-                    if len(candidates) != 1:
-                        raise RuntimeError(
-                            f"CreateDelegate selected GUID is not unique in Blueprint: "
-                            f"{source_node_id} -> {selected_guid}"
-                        )
-                    endpoint = candidates[0]
-                    endpoint_operation = str(endpoint.get("operation", "") or "")
-                    if endpoint_operation not in {"custom_event", "event"}:
-                        raise RuntimeError(
-                            f"CreateDelegate selected GUID resolves to unsupported endpoint "
-                            f"{endpoint_operation}: {source_node_id}"
-                        )
-                    endpoint_kind = (
-                        "custom_event" if endpoint_operation == "custom_event" else "event"
-                    )
-                    endpoint_name = str(endpoint.get("symbol", "") or selected_name)
-                    endpoint_id = str(endpoint.get("node_id", "") or "")
-                    endpoint_path = endpoint_id
-                    endpoint_blueprint_path = str(endpoint.get("blueprint_path", "") or "")
-                    endpoint_graph_id = str(endpoint.get("graph_id", "") or "")
-                    endpoint_local_resolution = "exact_captured_event_node"
-                    resolution_basis = "selected_guid"
-                    stats["create_delegate_event"] += 1
                 else:
                     raise RuntimeError(
                         f"CreateDelegate lacks exact endpoint identity: {source_node_id}"
@@ -318,6 +338,9 @@ def derive(output: Path, rows) -> tuple[list[dict], dict]:
                 "endpoint_graph_id": endpoint_graph_id,
                 "endpoint_local_resolution": endpoint_local_resolution,
                 "endpoint_candidate_function_ids": endpoint_candidate_function_ids,
+                "selected_function_guid": selected_function_guid_raw,
+                "selected_function_path": selected_function_path,
+                "selected_function_scope_class": selected_function_scope_class,
                 "resolution_basis": resolution_basis,
                 "evidence_kind": "exact_authored_delegate_binding",
             }
@@ -385,7 +408,7 @@ def load_database(conn, output: Path, rows) -> None:
     for row in rows(Path(output) / DERIVED_FILES[0]):
         conn.execute(
             "INSERT OR REPLACE INTO blueprint_delegate_bindings VALUES "
-            "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 row.get("binding_id", ""),
                 int(row.get("schema_version", 0) or 0),
@@ -411,6 +434,9 @@ def load_database(conn, output: Path, rows) -> None:
                 row.get("endpoint_graph_id", ""),
                 row.get("endpoint_local_resolution", ""),
                 _j(row.get("endpoint_candidate_function_ids", [])),
+                row.get("selected_function_guid", ""),
+                row.get("selected_function_path", ""),
+                row.get("selected_function_scope_class", ""),
                 row.get("resolution_basis", ""),
                 row.get("evidence_kind", ""),
                 _j(row),
