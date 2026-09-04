@@ -42,6 +42,7 @@ class BetaReleaseCandidateTest(unittest.TestCase):
             "project_graph",
             "static_mesh",
             "world_geometry",
+            "motion_warping",
         ):
             families.append({
                 "family": name,
@@ -148,6 +149,122 @@ class BetaReleaseCandidateTest(unittest.TestCase):
             self.assertTrue(
                 any(failure.startswith("schema:world_geometry:") for failure in record["failures"])
             )
+
+
+    def test_animation_schema3_is_allowed_only_when_motion_warping_is_explicitly_absent(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._current_cropout_fixture(root)
+            manifest = json.loads((root / capabilities.CAPABILITIES_FILE).read_text(encoding="utf-8"))
+            manifest["schemas"]["animation"] = 3
+            for row in manifest["families"]:
+                if row["family"] == "motion_warping":
+                    row["available_in_corpus"] = False
+                    row["corpus_coverage"] = "external_or_excluded"
+            write_json(root / capabilities.CAPABILITIES_FILE, manifest)
+
+            record = beta_rc.check_corpus(root, "cropout", repo_root=ROOT)
+            self.assertTrue(record["accepted"])
+            self.assertEqual(record["schemas"]["animation"], 3)
+            self.assertEqual(record["failures"], [])
+
+    def test_animation_schema3_fails_when_motion_warping_is_available(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._current_cropout_fixture(root)
+            manifest = json.loads((root / capabilities.CAPABILITIES_FILE).read_text(encoding="utf-8"))
+            manifest["schemas"]["animation"] = 3
+            write_json(root / capabilities.CAPABILITIES_FILE, manifest)
+
+            record = beta_rc.check_corpus(root, "cropout", repo_root=ROOT)
+            self.assertFalse(record["accepted"])
+            self.assertTrue(
+                any(failure.startswith("schema:animation:") for failure in record["failures"])
+            )
+
+    def test_animation_schema4_fails_when_motion_warping_is_explicitly_absent(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._current_cropout_fixture(root)
+            manifest = json.loads((root / capabilities.CAPABILITIES_FILE).read_text(encoding="utf-8"))
+            for row in manifest["families"]:
+                if row["family"] == "motion_warping":
+                    row["available_in_corpus"] = False
+                    row["corpus_coverage"] = "external_or_excluded"
+            write_json(root / capabilities.CAPABILITIES_FILE, manifest)
+
+            record = beta_rc.check_corpus(root, "cropout", repo_root=ROOT)
+            self.assertFalse(record["accepted"])
+            self.assertTrue(
+                any(failure.startswith("schema:animation:") for failure in record["failures"])
+            )
+
+    def test_stale_animation_schema2_fails_when_motion_warping_is_absent(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._current_cropout_fixture(root)
+            manifest = json.loads((root / capabilities.CAPABILITIES_FILE).read_text(encoding="utf-8"))
+            manifest["schemas"]["animation"] = 2
+            for row in manifest["families"]:
+                if row["family"] == "motion_warping":
+                    row["available_in_corpus"] = False
+                    row["corpus_coverage"] = "external_or_excluded"
+            write_json(root / capabilities.CAPABILITIES_FILE, manifest)
+
+            record = beta_rc.check_corpus(root, "cropout", repo_root=ROOT)
+            self.assertFalse(record["accepted"])
+            self.assertTrue(
+                any(failure.startswith("schema:animation:") for failure in record["failures"])
+            )
+
+    def test_contentexamples_accepts_schema3_without_motion_warping_and_manager_tag_settings(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._current_cropout_fixture(root)
+
+            manifest = json.loads((root / capabilities.CAPABILITIES_FILE).read_text(encoding="utf-8"))
+            manifest["schemas"]["animation"] = 3
+            for row in manifest["families"]:
+                if row["family"] == "motion_warping":
+                    row["available_in_corpus"] = False
+                    row["corpus_coverage"] = "external_or_excluded"
+
+            existing = {row["family"] for row in manifest["families"]}
+            for name, coverage in (
+                ("sequencer", "first_class_depth_pending"),
+                ("audio", "first_class_depth_pending"),
+                ("materials", "first_class"),
+                ("vfx", "first_class"),
+                ("gameplay_data", "first_class"),
+                ("gameplay_tags", "first_class"),
+            ):
+                if name not in existing:
+                    manifest["families"].append({
+                        "family": name,
+                        "contract_coverage": coverage,
+                        "corpus_coverage": coverage,
+                        "available_in_corpus": True,
+                        "runtime_state_captured": False,
+                    })
+            write_json(root / capabilities.CAPABILITIES_FILE, manifest)
+
+            for name in (
+                "level_sequences.jsonl",
+                "audio_assets.jsonl",
+                "material_expressions.jsonl",
+                "vfx_assets.jsonl",
+                "data_table_rows.jsonl",
+                "gameplay_tag_settings.jsonl",
+            ):
+                write_jsonl(root / name, 1)
+            write_jsonl(root / "gameplay_tags.jsonl", 0)
+
+            record = beta_rc.check_corpus(root, "contentexamples", repo_root=ROOT)
+            self.assertTrue(record["accepted"])
+            self.assertEqual(record["schemas"]["animation"], 3)
+            self.assertEqual(record["metrics"]["gameplay_tag_settings"], 1)
+            self.assertNotIn("gameplay_tags", record["metrics"])
+            self.assertEqual(record["failures"], [])
 
     def test_missing_profile_family_fails_record(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

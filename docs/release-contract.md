@@ -34,7 +34,9 @@ capabilities=1
 
 These schemas are independently versioned. Historical subsystem documents describe the schema milestone that introduced or accepted that subsystem and are not rewritten when unrelated later schemas advance.
 
-A full current corpus is identified by its manifests, not by a single monolithic version number.
+The table is the tool-current maximum/current contract. Content-dependent extensions can legitimately preserve a lower current base schema when their authored content is absent. In particular, animation schema 4 adds Motion Warping over the full schema-3 animation baseline: a corpus with an explicitly unavailable / `external_or_excluded` `motion_warping` capability remains current at animation schema 3. Independent mesh/world-geometry companion passes can likewise be schema 0 when their capability families are explicitly absent.
+
+A full current corpus is identified by its manifests and capability contract, not by a single monolithic version number.
 
 ## Compatibility policy
 

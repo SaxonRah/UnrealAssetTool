@@ -19,6 +19,17 @@ OPTIONAL_COMPANION_SCHEMAS = {
     "world_geometry": "world_geometry",
 }
 
+# Some public schemas are additive content-dependent extensions over a valid
+# lower full-corpus baseline. Animation schema 4 adds authored Motion Warping
+# to the current schema-3 animation contract; projects without any authored
+# Motion Warping windows intentionally remain animation schema 3.
+CONTENT_DEPENDENT_SCHEMA_FALLBACKS = {
+    "animation": {
+        "family": "motion_warping",
+        "fallback_schema": 3,
+    },
+}
+
 PROFILE_ALIASES = {
     "gasp": "gasp",
     "gameanimationsample": "gasp",
@@ -68,7 +79,7 @@ PROFILE_SPECS = {
             "material_expressions.jsonl": ("min", 1),
             "vfx_assets.jsonl": ("min", 1),
             "data_table_rows.jsonl": ("min", 1),
-            "gameplay_tags.jsonl": ("min", 1),
+            "gameplay_tag_settings.jsonl": ("exact", 1),
             "project_edges.jsonl": ("min", 1),
         },
     },
@@ -232,8 +243,29 @@ def check_corpus(
     families = _family_map(capability)
     for name, expected in version.CURRENT_SCHEMAS.items():
         observed = int(observed_schemas.get(name, 0) or 0)
+        fallback = CONTENT_DEPENDENT_SCHEMA_FALLBACKS.get(name)
         companion_family = OPTIONAL_COMPANION_SCHEMAS.get(name)
-        if companion_family:
+        if fallback:
+            family = str(fallback["family"])
+            fallback_schema = int(fallback["fallback_schema"])
+            row = families.get(family, {})
+            available = bool(row.get("available_in_corpus", False))
+            coverage = str(row.get("corpus_coverage", "") or "")
+            explicitly_absent = (
+                bool(row)
+                and not available
+                and coverage == "external_or_excluded"
+            )
+            if available:
+                ok = observed == expected
+            else:
+                ok = observed == fallback_schema and explicitly_absent
+            detail = (
+                f"observed={observed} expected={expected} "
+                f"fallback={fallback_schema} family={family} "
+                f"available={available} corpus_coverage={coverage or '<missing>'}"
+            )
+        elif companion_family:
             row = families.get(companion_family, {})
             available = bool(row.get("available_in_corpus", False))
             coverage = str(row.get("corpus_coverage", "") or "")
