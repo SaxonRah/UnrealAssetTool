@@ -34,6 +34,7 @@ CREATE TABLE blueprint_delegate_bindings(
  endpoint_kind TEXT NOT NULL,endpoint_name TEXT NOT NULL,
  endpoint_id TEXT NOT NULL,endpoint_path TEXT NOT NULL,
  endpoint_blueprint_path TEXT NOT NULL,endpoint_graph_id TEXT NOT NULL,
+ endpoint_local_resolution TEXT NOT NULL,endpoint_candidate_function_ids_json TEXT NOT NULL,
  resolution_basis TEXT NOT NULL,evidence_kind TEXT NOT NULL,json TEXT NOT NULL
 );
 CREATE INDEX bp_delegate_bind_dispatcher_idx
@@ -174,6 +175,8 @@ def derive(output: Path, rows) -> tuple[list[dict], dict]:
             endpoint_path = ""
             endpoint_blueprint_path = ""
             endpoint_graph_id = ""
+            endpoint_local_resolution = ""
+            endpoint_candidate_function_ids: list[str] = []
             resolution_basis = ""
 
             if source_operation == "delegate_create":
@@ -185,21 +188,46 @@ def derive(output: Path, rows) -> tuple[list[dict], dict]:
                 selected_path = str(source_sem.get("selected_function_path", "") or "")
 
                 if selected_path:
+                    # Structural schema 13 records SelectedFunctionPath directly
+                    # from UE's resolved UFunction::GetPathName(). That path is
+                    # authoritative endpoint identity even when more than one
+                    # captured Blueprint function row maps back to the same
+                    # generated/skeleton UFunction path.
                     candidates = functions_by_resolved.get(selected_path, [])
-                    if len(candidates) != 1:
-                        raise RuntimeError(
-                            f"CreateDelegate selected function path is not unique: "
-                            f"{source_node_id} -> {selected_path}"
-                        )
-                    function = candidates[0]
+                    candidate_ids = sorted(
+                        {
+                            str(function.get("function_id", "") or "")
+                            for function in candidates
+                            if function.get("function_id")
+                        }
+                    )
                     endpoint_kind = "function"
-                    endpoint_name = str(function.get("name", "") or selected_name)
-                    endpoint_id = str(function.get("function_id", "") or "")
+                    endpoint_name = selected_name
+                    endpoint_id = selected_path
                     endpoint_path = selected_path
-                    endpoint_blueprint_path = str(function.get("blueprint_path", "") or "")
-                    endpoint_graph_id = str(function.get("function_id", "") or "")
+                    endpoint_blueprint_path = (
+                        str(candidates[0].get("blueprint_path", "") or "")
+                        if candidates
+                        and len(
+                            {
+                                str(function.get("blueprint_path", "") or "")
+                                for function in candidates
+                            }
+                        ) == 1
+                        else ""
+                    )
+                    endpoint_graph_id = candidate_ids[0] if len(candidate_ids) == 1 else ""
+                    endpoint_local_resolution = (
+                        "unique_captured_function"
+                        if len(candidate_ids) == 1
+                        else "multiple_captured_function_rows"
+                        if candidate_ids
+                        else "no_captured_function_row"
+                    )
+                    endpoint_candidate_function_ids = candidate_ids
                     resolution_basis = "selected_function_path"
                     stats["create_delegate_function"] += 1
+                    stats[f"function_local:{endpoint_local_resolution}"] += 1
                 elif selected_guid:
                     candidates = guid_nodes_by_blueprint.get((blueprint_path, selected_guid), [])
                     if len(candidates) != 1:
@@ -222,6 +250,7 @@ def derive(output: Path, rows) -> tuple[list[dict], dict]:
                     endpoint_path = endpoint_id
                     endpoint_blueprint_path = str(endpoint.get("blueprint_path", "") or "")
                     endpoint_graph_id = str(endpoint.get("graph_id", "") or "")
+                    endpoint_local_resolution = "exact_captured_event_node"
                     resolution_basis = "selected_guid"
                     stats["create_delegate_event"] += 1
                 else:
@@ -239,6 +268,7 @@ def derive(output: Path, rows) -> tuple[list[dict], dict]:
                 endpoint_path = source_node_id
                 endpoint_blueprint_path = str(source_node.get("blueprint_path", "") or "")
                 endpoint_graph_id = str(source_node.get("graph_id", "") or "")
+                endpoint_local_resolution = "exact_captured_event_node"
                 resolution_basis = "direct_event_node"
                 stats["direct_event_sources"] += 1
             else:
@@ -286,6 +316,8 @@ def derive(output: Path, rows) -> tuple[list[dict], dict]:
                 "endpoint_path": endpoint_path,
                 "endpoint_blueprint_path": endpoint_blueprint_path,
                 "endpoint_graph_id": endpoint_graph_id,
+                "endpoint_local_resolution": endpoint_local_resolution,
+                "endpoint_candidate_function_ids": endpoint_candidate_function_ids,
                 "resolution_basis": resolution_basis,
                 "evidence_kind": "exact_authored_delegate_binding",
             }
@@ -353,7 +385,7 @@ def load_database(conn, output: Path, rows) -> None:
     for row in rows(Path(output) / DERIVED_FILES[0]):
         conn.execute(
             "INSERT OR REPLACE INTO blueprint_delegate_bindings VALUES "
-            "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 row.get("binding_id", ""),
                 int(row.get("schema_version", 0) or 0),
@@ -377,6 +409,8 @@ def load_database(conn, output: Path, rows) -> None:
                 row.get("endpoint_path", ""),
                 row.get("endpoint_blueprint_path", ""),
                 row.get("endpoint_graph_id", ""),
+                row.get("endpoint_local_resolution", ""),
+                _j(row.get("endpoint_candidate_function_ids", [])),
                 row.get("resolution_basis", ""),
                 row.get("evidence_kind", ""),
                 _j(row),
