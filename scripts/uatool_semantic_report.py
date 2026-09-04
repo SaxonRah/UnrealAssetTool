@@ -578,6 +578,9 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
     function_interprocedural_terminal_path = (
         output / "blueprint_interprocedural_function_execution_terminals.jsonl"
     )
+    function_interprocedural_data_path = (
+        output / "blueprint_interprocedural_function_data_routes.jsonl"
+    )
     interprocedural_edges = (
         list(rows(interprocedural_edge_path)) if interprocedural_edge_path.is_file() else []
     )
@@ -595,6 +598,11 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
     function_interprocedural_terminals = (
         list(rows(function_interprocedural_terminal_path))
         if function_interprocedural_terminal_path.is_file()
+        else []
+    )
+    function_interprocedural_data_routes = (
+        list(rows(function_interprocedural_data_path))
+        if function_interprocedural_data_path.is_file()
         else []
     )
     interprocedural_data_kinds = collections.Counter(
@@ -972,6 +980,10 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
     function_data_return_unused_count = 0
     function_data_return_binding_verified_count = 0
     function_data_return_route_ready_count = 0
+    function_data_expected_route_count = 0
+    function_data_expected_argument_route_count = 0
+    function_data_expected_return_route_count = 0
+    function_data_expected_split_projection_count = 0
 
     def function_target_kind(call: dict, target: dict | None) -> str:
         if target is None:
@@ -1305,6 +1317,14 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
             "latent_internal",
             "missing_target",
         }
+        if implementation_target:
+            function_data_expected_route_count += 1
+            if direction == "argument":
+                function_data_expected_argument_route_count += 1
+            else:
+                function_data_expected_return_route_count += 1
+            if match_kind == "split_struct":
+                function_data_expected_split_projection_count += 1
 
         if direction == "argument":
             function_data_argument_count += 1
@@ -1403,6 +1423,41 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
             function_data_status["return_route_ready"] += 1
         elif binding_verified and caller_consumers and match_kind == "split_struct":
             function_data_status["return_split_projection_not_member_route"] += 1
+
+    function_interprocedural_data_route_kinds = collections.Counter(
+        str(row.get("route_kind", "") or "<empty>")
+        for row in function_interprocedural_data_routes
+    )
+    function_interprocedural_data_identity_kinds = collections.Counter(
+        str(row.get("parameter_identity_kind", "") or "<empty>")
+        for row in function_interprocedural_data_routes
+    )
+    function_interprocedural_data_boundary_ready_count = sum(
+        int(bool(row.get("boundary_ready", False)))
+        for row in function_interprocedural_data_routes
+    )
+    function_interprocedural_data_member_ready_count = sum(
+        int(bool(row.get("member_route_ready", False)))
+        for row in function_interprocedural_data_routes
+    )
+    function_interprocedural_data_alignment = bool(
+        len(function_interprocedural_data_routes) == function_data_expected_route_count
+        and int(function_interprocedural_data_route_kinds.get("function_argument", 0))
+            == function_data_expected_argument_route_count
+        and int(function_interprocedural_data_route_kinds.get("function_return", 0))
+            == function_data_expected_return_route_count
+        and int(
+            function_interprocedural_data_identity_kinds.get(
+                "split_parent_projection", 0
+            )
+        ) == function_data_expected_split_projection_count
+        and function_interprocedural_data_boundary_ready_count
+            == function_data_argument_binding_verified_count
+                + function_data_return_binding_verified_count
+        and function_interprocedural_data_member_ready_count
+            == function_data_argument_route_ready_count
+                + function_data_return_route_ready_count
+    )
 
     function_interprocedural_edge_kinds = collections.Counter(
         str(row.get("edge_kind", "") or "<empty>")
@@ -1575,6 +1630,16 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
         "function_data_return_unused_count": function_data_return_unused_count,
         "function_data_return_binding_verified_count": function_data_return_binding_verified_count,
         "function_data_return_route_ready_count": function_data_return_route_ready_count,
+        "function_data_expected_route_count": function_data_expected_route_count,
+        "function_data_expected_argument_route_count": function_data_expected_argument_route_count,
+        "function_data_expected_return_route_count": function_data_expected_return_route_count,
+        "function_data_expected_split_projection_count": function_data_expected_split_projection_count,
+        "function_interprocedural_data_route_count": len(function_interprocedural_data_routes),
+        "function_interprocedural_data_route_kinds": top(function_interprocedural_data_route_kinds),
+        "function_interprocedural_data_identity_kinds": top(function_interprocedural_data_identity_kinds),
+        "function_interprocedural_data_boundary_ready_count": function_interprocedural_data_boundary_ready_count,
+        "function_interprocedural_data_member_ready_count": function_interprocedural_data_member_ready_count,
+        "function_interprocedural_data_alignment": function_interprocedural_data_alignment,
         "function_call_count": len(call_edges),
         "function_call_resolution": top(function_call_resolution),
         "function_call_internal_count": function_call_internal_count,
@@ -1834,6 +1899,19 @@ def print_report(report: dict) -> None:
     )
     section("function data binding status", "function_data_status")
     section("function data binding mismatches", "function_data_mismatches")
+
+    print("\n[Blueprint function interprocedural data routes]")
+    print(
+        f"routes={int(report.get('function_interprocedural_data_route_count', 0) or 0)} "
+        f"expected_routes={int(report.get('function_data_expected_route_count', 0) or 0)} "
+        f"boundary_ready={int(report.get('function_interprocedural_data_boundary_ready_count', 0) or 0)} "
+        f"expected_boundary_ready={int(report.get('function_data_argument_binding_verified_count', 0) or 0) + int(report.get('function_data_return_binding_verified_count', 0) or 0)} "
+        f"member_ready={int(report.get('function_interprocedural_data_member_ready_count', 0) or 0)} "
+        f"expected_member_ready={int(report.get('function_data_argument_route_ready_count', 0) or 0) + int(report.get('function_data_return_route_ready_count', 0) or 0)} "
+        f"aligned={bool(report.get('function_interprocedural_data_alignment', False))}"
+    )
+    section("function interprocedural data route kinds", "function_interprocedural_data_route_kinds")
+    section("function interprocedural data identity kinds", "function_interprocedural_data_identity_kinds")
 
     print("\n[Blueprint function call target audit]")
     print(
