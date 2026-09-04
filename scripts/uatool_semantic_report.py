@@ -115,7 +115,16 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
         return str(pin.get("direction", "") or "").lower() in {"output", "egpd_output", "1"}
 
     def pin_type_key(pin: dict) -> str:
-        return json.dumps(core._pin_type_fields(pin), sort_keys=True, separators=(",", ":"))
+        pin_type = pin.get("type", {}) if isinstance(pin.get("type"), dict) else {}
+        signature = {
+            "category": str(pin_type.get("category", "") or ""),
+            "subcategory": str(pin_type.get("subcategory", "") or ""),
+            "subcategory_object": str(pin_type.get("subcategory_object", "") or ""),
+            "container_type": int(pin_type.get("container_type", 0) or 0),
+            "is_reference": bool(pin_type.get("is_reference", False)),
+            "is_const": bool(pin_type.get("is_const", False)),
+        }
+        return json.dumps(signature, sort_keys=True, separators=(",", ":"))
 
     def tunnel_shape(node: dict) -> str:
         pins = pins_by_node.get(str(node.get("node_id", "") or ""), [])
