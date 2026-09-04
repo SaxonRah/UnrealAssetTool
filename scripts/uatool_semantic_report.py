@@ -878,6 +878,299 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
         else:
             function_internal_kinds["direct_impure_not_bridge_ready"] += 1
 
+    function_call_by_node = {
+        str(row.get("call_node_id", "") or ""): row
+        for row in call_edges
+        if row.get("call_node_id")
+    }
+
+    function_data_target_kinds = collections.Counter()
+    function_data_directions = collections.Counter()
+    function_data_match_kinds = collections.Counter()
+    function_data_status = collections.Counter()
+    function_data_mismatches = collections.Counter()
+    function_data_binding_count = len(call_bindings)
+    function_data_parameter_identity_count = 0
+    function_data_type_verified_count = 0
+    function_data_split_member_resolved_count = 0
+    function_data_split_member_unresolved_count = 0
+
+    function_data_argument_count = 0
+    function_data_argument_connected_value_count = 0
+    function_data_argument_authored_value_count = 0
+    function_data_argument_no_value_count = 0
+    function_data_argument_body_consumer_count = 0
+    function_data_argument_unused_count = 0
+    function_data_argument_binding_verified_count = 0
+    function_data_argument_route_ready_count = 0
+
+    function_data_return_count = 0
+    function_data_return_dependency_count = 0
+    function_data_return_authored_value_pin_count = 0
+    function_data_return_missing_provenance_binding_count = 0
+    function_data_return_caller_consumer_count = 0
+    function_data_return_unused_count = 0
+    function_data_return_binding_verified_count = 0
+    function_data_return_route_ready_count = 0
+
+    def function_target_kind(call: dict, target: dict | None) -> str:
+        if target is None:
+            return "missing_target"
+        target_bp_path = str(
+            call.get("target_blueprint_path", "")
+            or target.get("blueprint_path", "")
+            or ""
+        )
+        target_bp = blueprint_by_path.get(target_bp_path)
+        target_bp_type = None
+        if target_bp is not None:
+            try:
+                target_bp_type = int(target_bp.get("blueprint_type", -1))
+            except (TypeError, ValueError):
+                target_bp_type = None
+        if bool(call.get("interface_call", False)) or target_bp_type == BPTYPE_INTERFACE:
+            return "interface_dispatch_or_declaration"
+        if bool(call.get("latent", False)):
+            return "latent_internal"
+        if bool(call.get("pure", False)):
+            return "pure_internal"
+        return (
+            "direct_impure_reachable"
+            if str(call.get("call_node_id", "") or "") in block_by_node
+            else "direct_impure_unreachable"
+        )
+
+    def parameter_candidate_pins(target: dict, direction: str, call_pin_name: str) -> list[dict]:
+        if direction == "argument":
+            node_ids = [str(target.get("entry_node_id", "") or "")]
+            want_output = True
+        else:
+            node_ids = [
+                str(value or "")
+                for value in (
+                    target.get("result_node_ids", [])
+                    if isinstance(target.get("result_node_ids"), list)
+                    else []
+                )
+                if value
+            ]
+            want_output = False
+        result: list[dict] = []
+        for node_id in node_ids:
+            for pin in pins_by_node.get(node_id, []):
+                if pin_is_output(pin) != want_output:
+                    continue
+                pin_type = pin.get("type", {}) if isinstance(pin.get("type"), dict) else {}
+                if str(pin_type.get("category", "") or "").lower() == "exec":
+                    continue
+                if str(pin.get("name", "") or "") == call_pin_name:
+                    result.append(pin)
+        return result
+
+    for binding in call_bindings:
+        call_node_id = str(binding.get("call_node_id", "") or "")
+        call = function_call_by_node.get(call_node_id)
+        if call is None:
+            function_data_mismatches[f"{call_node_id} :: missing_call_edge"] += 1
+            continue
+        target_function_id = str(binding.get("target_function_id", "") or "")
+        target = function_by_id.get(target_function_id)
+        if target is None:
+            function_data_mismatches[
+                f"{call_node_id} :: missing_target_function:{target_function_id}"
+            ] += 1
+            continue
+
+        target_kind = function_target_kind(call, target)
+        function_data_target_kinds[target_kind] += 1
+
+        direction = str(binding.get("direction", "") or "")
+        match_kind = str(binding.get("match_kind", "") or "")
+        function_data_directions[direction or "<empty>"] += 1
+        function_data_match_kinds[match_kind or "<empty>"] += 1
+        if direction not in {"argument", "return"}:
+            function_data_mismatches[
+                f"{call_node_id} :: unexpected_direction:{direction or '<empty>'}"
+            ] += 1
+            continue
+
+        call_pin_id = str(binding.get("call_pin_id", "") or "")
+        call_pin_name = str(binding.get("call_pin_name", "") or "")
+        call_pin = pin_by_id.get(call_pin_id)
+        if call_pin is None:
+            function_data_mismatches[
+                f"{call_node_id} :: {direction}:{call_pin_name} :: missing_call_pin:{call_pin_id}"
+            ] += 1
+            continue
+
+        parameter_pin_ids = [
+            str(value or "")
+            for value in (
+                binding.get("parameter_pin_ids", [])
+                if isinstance(binding.get("parameter_pin_ids"), list)
+                else []
+            )
+            if value
+        ]
+        exact_parameter_pins = [
+            pin_by_id[pin_id]
+            for pin_id in parameter_pin_ids
+            if pin_id in pin_by_id
+        ]
+
+        identity_ok = False
+        type_ok = False
+        if match_kind == "exact":
+            identity_ok = bool(parameter_pin_ids) and len(exact_parameter_pins) == len(parameter_pin_ids)
+            expected_type = binding.get("parameter_type", {})
+            call_type = binding.get("call_pin_type", {})
+            type_ok = bool(
+                identity_ok
+                and type_key(call_type) == type_key(expected_type)
+                and all(pin_type_key(pin) == type_key(expected_type) for pin in exact_parameter_pins)
+            )
+            if not identity_ok:
+                function_data_mismatches[
+                    f"{call_node_id} :: {direction}:{call_pin_name} :: exact_parameter_pin_missing"
+                ] += 1
+            elif not type_ok:
+                function_data_mismatches[
+                    f"{call_node_id} :: {direction}:{call_pin_name} :: exact_type_mismatch"
+                ] += 1
+        elif match_kind == "split_struct":
+            member_pins = parameter_candidate_pins(target, direction, call_pin_name)
+            exact_parameter_pins = member_pins
+            identity_ok = bool(member_pins)
+            if direction == "argument" and len(member_pins) != 1:
+                identity_ok = False
+            call_type = binding.get("call_pin_type", {})
+            type_ok = bool(
+                identity_ok
+                and all(pin_type_key(pin) == type_key(call_type) for pin in member_pins)
+            )
+            if identity_ok:
+                function_data_split_member_resolved_count += 1
+                function_data_status["split_member_exact_pin_resolved"] += 1
+            else:
+                function_data_split_member_unresolved_count += 1
+                function_data_status["split_member_exact_pin_unresolved"] += 1
+                function_data_mismatches[
+                    f"{call_node_id} :: {direction}:{call_pin_name} :: split_member_pin_unresolved"
+                ] += 1
+            if identity_ok and not type_ok:
+                function_data_mismatches[
+                    f"{call_node_id} :: {direction}:{call_pin_name} :: split_member_type_mismatch"
+                ] += 1
+        else:
+            function_data_mismatches[
+                f"{call_node_id} :: {direction}:{call_pin_name} :: unexpected_match_kind:{match_kind or '<empty>'}"
+            ] += 1
+
+        if identity_ok:
+            function_data_parameter_identity_count += 1
+            function_data_status["exact_parameter_identity"] += 1
+        if type_ok:
+            function_data_type_verified_count += 1
+            function_data_status["full_type_verified"] += 1
+
+        implementation_target = target_kind not in {
+            "interface_dispatch_or_declaration",
+            "latent_internal",
+            "missing_target",
+        }
+
+        if direction == "argument":
+            function_data_argument_count += 1
+            dependency_ids = [
+                str(value or "")
+                for value in (
+                    binding.get("dependency_ids", [])
+                    if isinstance(binding.get("dependency_ids"), list)
+                    else []
+                )
+                if value
+            ]
+            incoming = data_incoming_by_pin.get(call_pin_id, [])
+            has_connected_value = bool(dependency_ids or incoming)
+            has_authored_value = pin_has_authored_value(call_pin)
+            if has_connected_value:
+                function_data_argument_connected_value_count += 1
+                function_data_status["argument_connected_value"] += 1
+                has_value = True
+            elif has_authored_value:
+                function_data_argument_authored_value_count += 1
+                function_data_status["argument_authored_value"] += 1
+                has_value = True
+            else:
+                function_data_argument_no_value_count += 1
+                function_data_status["argument_no_value_evidence"] += 1
+                has_value = False
+
+            consumers = [
+                edge
+                for pin in exact_parameter_pins
+                for edge in data_outgoing_by_pin.get(str(pin.get("pin_id", "") or ""), [])
+            ]
+            function_data_argument_body_consumer_count += len(consumers)
+            if consumers:
+                function_data_status["argument_used_by_callee"] += 1
+            else:
+                function_data_argument_unused_count += 1
+                function_data_status["argument_unused_by_callee"] += 1
+
+            binding_verified = bool(implementation_target and identity_ok and type_ok and has_value)
+            if binding_verified:
+                function_data_argument_binding_verified_count += 1
+                function_data_status["argument_binding_verified"] += 1
+            if binding_verified and consumers:
+                function_data_argument_route_ready_count += 1
+                function_data_status["argument_route_ready"] += 1
+            continue
+
+        function_data_return_count += 1
+        dependency_rows_by_pin = {
+            str(pin.get("pin_id", "") or ""): dependency_by_sink_pin.get(
+                str(pin.get("pin_id", "") or ""), []
+            )
+            for pin in exact_parameter_pins
+        }
+        dependency_count = sum(len(values) for values in dependency_rows_by_pin.values())
+        function_data_return_dependency_count += dependency_count
+        authored_result_pin_count = sum(
+            int(pin_has_authored_value(pin))
+            for pin in exact_parameter_pins
+        )
+        function_data_return_authored_value_pin_count += authored_result_pin_count
+
+        provenance_complete = bool(exact_parameter_pins) and all(
+            dependency_rows_by_pin.get(str(pin.get("pin_id", "") or ""))
+            or pin_has_authored_value(pin)
+            for pin in exact_parameter_pins
+        )
+        if provenance_complete:
+            function_data_status["return_internal_provenance_complete"] += 1
+        else:
+            function_data_return_missing_provenance_binding_count += 1
+            function_data_status["return_internal_provenance_incomplete"] += 1
+
+        caller_consumers = data_outgoing_by_pin.get(call_pin_id, [])
+        function_data_return_caller_consumer_count += len(caller_consumers)
+        if caller_consumers:
+            function_data_status["return_used_by_caller"] += 1
+        else:
+            function_data_return_unused_count += 1
+            function_data_status["return_unused_by_caller"] += 1
+
+        binding_verified = bool(
+            implementation_target and identity_ok and type_ok and provenance_complete
+        )
+        if binding_verified:
+            function_data_return_binding_verified_count += 1
+            function_data_status["return_binding_verified"] += 1
+        if binding_verified and caller_consumers:
+            function_data_return_route_ready_count += 1
+            function_data_status["return_route_ready"] += 1
+
     function_interprocedural_edge_kinds = collections.Counter(
         str(row.get("edge_kind", "") or "<empty>")
         for row in function_interprocedural_edges
@@ -1005,6 +1298,32 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
         "interprocedural_data_kinds": top(interprocedural_data_kinds),
         "interprocedural_data_value_kinds": top(interprocedural_data_value_kinds),
         "interprocedural_data_stream_alignment": interprocedural_data_stream_alignment,
+        "function_data_binding_count": function_data_binding_count,
+        "function_data_target_kinds": top(function_data_target_kinds),
+        "function_data_directions": top(function_data_directions),
+        "function_data_match_kinds": top(function_data_match_kinds),
+        "function_data_status": top(function_data_status),
+        "function_data_mismatches": top(function_data_mismatches),
+        "function_data_parameter_identity_count": function_data_parameter_identity_count,
+        "function_data_type_verified_count": function_data_type_verified_count,
+        "function_data_split_member_resolved_count": function_data_split_member_resolved_count,
+        "function_data_split_member_unresolved_count": function_data_split_member_unresolved_count,
+        "function_data_argument_count": function_data_argument_count,
+        "function_data_argument_connected_value_count": function_data_argument_connected_value_count,
+        "function_data_argument_authored_value_count": function_data_argument_authored_value_count,
+        "function_data_argument_no_value_count": function_data_argument_no_value_count,
+        "function_data_argument_body_consumer_count": function_data_argument_body_consumer_count,
+        "function_data_argument_unused_count": function_data_argument_unused_count,
+        "function_data_argument_binding_verified_count": function_data_argument_binding_verified_count,
+        "function_data_argument_route_ready_count": function_data_argument_route_ready_count,
+        "function_data_return_count": function_data_return_count,
+        "function_data_return_dependency_count": function_data_return_dependency_count,
+        "function_data_return_authored_value_pin_count": function_data_return_authored_value_pin_count,
+        "function_data_return_missing_provenance_binding_count": function_data_return_missing_provenance_binding_count,
+        "function_data_return_caller_consumer_count": function_data_return_caller_consumer_count,
+        "function_data_return_unused_count": function_data_return_unused_count,
+        "function_data_return_binding_verified_count": function_data_return_binding_verified_count,
+        "function_data_return_route_ready_count": function_data_return_route_ready_count,
         "function_call_count": len(call_edges),
         "function_call_resolution": top(function_call_resolution),
         "function_call_internal_count": function_call_internal_count,
@@ -1193,6 +1512,42 @@ def print_report(report: dict) -> None:
     )
     section("interprocedural execution edge kinds", "interprocedural_execution_edge_kinds")
     section("interprocedural execution terminal kinds", "interprocedural_execution_terminal_kinds")
+
+    print("\n[Blueprint function interprocedural data binding audit]")
+    print(
+        f"bindings={int(report.get('function_data_binding_count', 0) or 0)} "
+        f"exact_parameter_identity={int(report.get('function_data_parameter_identity_count', 0) or 0)} "
+        f"full_type_verified={int(report.get('function_data_type_verified_count', 0) or 0)} "
+        f"split_member_resolved={int(report.get('function_data_split_member_resolved_count', 0) or 0)} "
+        f"split_member_unresolved={int(report.get('function_data_split_member_unresolved_count', 0) or 0)}"
+    )
+    section("function data target kinds", "function_data_target_kinds")
+    section("function data directions", "function_data_directions")
+    section("function data match kinds", "function_data_match_kinds")
+    print("\n[Function argument provenance]")
+    print(
+        f"arguments={int(report.get('function_data_argument_count', 0) or 0)} "
+        f"connected_values={int(report.get('function_data_argument_connected_value_count', 0) or 0)} "
+        f"authored_values={int(report.get('function_data_argument_authored_value_count', 0) or 0)} "
+        f"without_value_evidence={int(report.get('function_data_argument_no_value_count', 0) or 0)} "
+        f"body_consumer_edges={int(report.get('function_data_argument_body_consumer_count', 0) or 0)} "
+        f"unused_arguments={int(report.get('function_data_argument_unused_count', 0) or 0)} "
+        f"binding_verified={int(report.get('function_data_argument_binding_verified_count', 0) or 0)} "
+        f"route_ready={int(report.get('function_data_argument_route_ready_count', 0) or 0)}"
+    )
+    print("\n[Function return provenance]")
+    print(
+        f"returns={int(report.get('function_data_return_count', 0) or 0)} "
+        f"dependency_rows={int(report.get('function_data_return_dependency_count', 0) or 0)} "
+        f"authored_result_pin_values={int(report.get('function_data_return_authored_value_pin_count', 0) or 0)} "
+        f"incomplete_internal_provenance={int(report.get('function_data_return_missing_provenance_binding_count', 0) or 0)} "
+        f"caller_consumer_edges={int(report.get('function_data_return_caller_consumer_count', 0) or 0)} "
+        f"unused_returns={int(report.get('function_data_return_unused_count', 0) or 0)} "
+        f"binding_verified={int(report.get('function_data_return_binding_verified_count', 0) or 0)} "
+        f"route_ready={int(report.get('function_data_return_route_ready_count', 0) or 0)}"
+    )
+    section("function data binding status", "function_data_status")
+    section("function data binding mismatches", "function_data_mismatches")
 
     print("\n[Blueprint function call target audit]")
     print(
