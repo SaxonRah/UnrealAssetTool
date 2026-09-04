@@ -156,7 +156,7 @@ class BlueprintFunctionInterproceduralTest(unittest.TestCase):
     def test_materializes_only_executable_direct_internal_calls(self) -> None:
         edges, terminals, stats = interproc.derive_function_execution(self.output, rows)
 
-        self.assertEqual(interproc.INTERPROCEDURAL_SCHEMA_VERSION, 3)
+        self.assertEqual(interproc.INTERPROCEDURAL_SCHEMA_VERSION, 4)
         self.assertEqual(stats["direct_impure"], 3)
         self.assertEqual(stats["excluded_pure"], 1)
         self.assertEqual(stats["excluded_interface"], 1)
@@ -193,6 +193,7 @@ class BlueprintFunctionInterproceduralTest(unittest.TestCase):
         )
         write_jsonl(self.output / interproc.DERIVED_FILES[3], function_edges)
         write_jsonl(self.output / interproc.DERIVED_FILES[4], function_terminals)
+        write_jsonl(self.output / interproc.DERIVED_FILES[5], [])
         self.assertIsNone(interproc.validation_error(self.output, rows))
 
         conn = sqlite3.connect(":memory:")
