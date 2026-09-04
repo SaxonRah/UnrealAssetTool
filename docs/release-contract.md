@@ -28,7 +28,7 @@ vfx=1
 systems=11
 mesh=1
 world_geometry=1
-derived=39
+derived=40
 capabilities=1
 ```
 
@@ -46,7 +46,7 @@ Canonical scanner schemas and derived schemas are independent contracts.
 - Old corpora remain self-describing through their manifests. They are not automatically claimed to satisfy the current baseline.
 - Focused subsystem captures remain explicitly partial and do not imply unrelated canonical passes were run.
 
-During the `1.0.0-beta.*` line, an individual schema may still advance when real-corpus evidence requires it. Breaking or ambiguous semantic changes must be evidence-driven, versioned, and validated before release.
+During the `1.0.0-beta.*` line, an individual schema may still advance when real-corpus evidence requires it. Breaking or ambiguous semantic changes must be evidence-driven, versioned, and validated before release. Derived schema 40 also distinguishes authored delegate Bind/Assign sites from resolved subscriptions: a zero-input site remains diagnostic evidence and does not manufacture a binding row.
 
 ## Semantic guarantee
 
