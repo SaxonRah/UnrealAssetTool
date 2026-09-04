@@ -204,16 +204,28 @@ class SemanticReportDelegateAuditTest(unittest.TestCase):
                 "target_pin_name": "Delegate",
             }])
             write_jsonl(root / "blueprint_data_dependencies.jsonl", [])
-            write_jsonl(root / "blueprint_functions.jsonl", [{
-                "function_id": "fn-do-thing",
-                "blueprint_path": bp,
-                "graph_id": "fn-do-thing",
-                "graph_name": "DoThing",
-                "name": "DoThing",
-                "resolved_function": "/Game/Test/BP.BP_C:DoThing",
-                "entry_node_id": "",
-                "result_node_ids": [],
-            }])
+            write_jsonl(root / "blueprint_functions.jsonl", [
+                {
+                    "function_id": "fn-do-thing-a",
+                    "blueprint_path": bp,
+                    "graph_id": "fn-do-thing-a",
+                    "graph_name": "DoThing",
+                    "name": "DoThing",
+                    "resolved_function": "/Game/Test/BP.BP_C:DoThing",
+                    "entry_node_id": "",
+                    "result_node_ids": [],
+                },
+                {
+                    "function_id": "fn-do-thing-b",
+                    "blueprint_path": bp,
+                    "graph_id": "fn-do-thing-b",
+                    "graph_name": "DoThing",
+                    "name": "DoThing",
+                    "resolved_function": "/Game/Test/BP.BP_C:DoThing",
+                    "entry_node_id": "",
+                    "result_node_ids": [],
+                },
+            ])
             write_jsonl(root / "blueprint_call_edges.jsonl", [])
             write_jsonl(root / "blueprint_call_bindings.jsonl", [])
             write_jsonl(root / "blueprints.jsonl", [{"object_path": bp, "blueprint_type": 0}])
@@ -279,6 +291,10 @@ class SemanticReportDelegateAuditTest(unittest.TestCase):
             self.assertEqual(
                 dict(result["delegate_create_target_operations"]),
                 {"custom_event": 1, "function": 1},
+            )
+            self.assertEqual(
+                dict(result["delegate_create_function_local_resolution"]),
+                {"multiple_captured_function_rows": 1},
             )
             self.assertEqual(result["delegate_bind_assign_node_count"], 1)
             self.assertEqual(result["delegate_bind_assign_delegate_input_edge_count"], 1)
