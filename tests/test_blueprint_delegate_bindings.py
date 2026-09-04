@@ -99,6 +99,8 @@ class BlueprintDelegateBindingsTest(unittest.TestCase):
                     "semantic": {
                         "selected_function": "OnEvent",
                         "selected_function_guid": event_guid,
+                        "selected_function_path": "/Game/Test/BP.SKEL_BP_C:OnEvent",
+                        "selected_function_scope_class": "/Game/Test/BP.SKEL_BP_C",
                     },
                 },
                 {
@@ -199,8 +201,18 @@ class BlueprintDelegateBindingsTest(unittest.TestCase):
             self.assertEqual(stats["basis:direct_event_node"], 1)
 
             by_basis = {row["resolution_basis"]: row for row in bindings}
+            self.assertEqual(by_basis["selected_guid"]["schema_version"], 2)
             self.assertEqual(by_basis["selected_guid"]["endpoint_kind"], "custom_event")
             self.assertEqual(by_basis["selected_guid"]["endpoint_id"], event_id)
+            self.assertEqual(
+                by_basis["selected_guid"]["selected_function_path"],
+                "/Game/Test/BP.SKEL_BP_C:OnEvent",
+            )
+            self.assertEqual(
+                by_basis["selected_guid"]["selected_function_guid"],
+                event_guid,
+            )
+            self.assertEqual(by_basis["selected_function_path"]["schema_version"], 2)
             self.assertEqual(by_basis["selected_function_path"]["endpoint_kind"], "function")
             self.assertEqual(
                 by_basis["selected_function_path"]["endpoint_path"],
