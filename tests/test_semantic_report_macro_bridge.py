@@ -264,7 +264,10 @@ class SemanticReportMacroBridgeTest(unittest.TestCase):
                 "graph_path": macro_graph,
             }])
 
-            def pin(pin_id: str, node_id: str, name: str, direction: str, category: str) -> dict:
+            def pin(
+                pin_id: str, node_id: str, name: str, direction: str, category: str,
+                *, is_reference: bool = False, is_const: bool = False,
+            ) -> dict:
                 return {
                     "pin_id": pin_id,
                     "node_id": node_id,
@@ -278,8 +281,8 @@ class SemanticReportMacroBridgeTest(unittest.TestCase):
                         "category": category,
                         "subcategory": "",
                         "container_type": 0,
-                        "is_reference": False,
-                        "is_const": False,
+                        "is_reference": is_reference,
+                        "is_const": is_const,
                         "subcategory_object": "",
                     },
                     "default_value": "",
@@ -294,6 +297,69 @@ class SemanticReportMacroBridgeTest(unittest.TestCase):
                 pin("mi", "macro-instance", "Value", "input", "float"),
                 pin("entry", "entry", "Value", "output", "int"),
                 pin("exit", "exit", "Result", "input", "float"),
+            ])
+
+            result = report.build_report(root, rows)
+            self.assertEqual(result["macro_binding_pin_count"], 1)
+            self.assertEqual(result["macro_binding_exact_pin_count"], 0)
+            self.assertIn(("name_match_type_mismatch", 1), result["macro_binding_status"])
+
+    def test_macro_pin_reference_qualifier_mismatch_is_not_exact(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            macro_graph = "/Game/Test/BPL.BPL:ByRef"
+
+            write_jsonl(root / "blueprint_semantic_nodes.jsonl", [{
+                "node_id": "macro-instance",
+                "operation": "macro_instance",
+                "semantic_kind": "call",
+                "opaque": False,
+            }])
+            write_jsonl(root / "blueprint_nodes.jsonl", [
+                {
+                    "node_id": "macro-instance",
+                    "graph_id": "caller",
+                    "operation": "macro_instance",
+                    "semantic": {"macro_graph": macro_graph},
+                },
+                {"node_id": "entry", "graph_id": "g", "operation": "tunnel", "semantic": {}},
+                {"node_id": "exit", "graph_id": "g", "operation": "tunnel", "semantic": {}},
+            ])
+            write_jsonl(root / "blueprint_graphs.jsonl", [{"graph_id": "g", "graph_path": macro_graph}])
+
+            def pin(pin_id: str, node_id: str, direction: str, is_reference: bool) -> dict:
+                return {
+                    "pin_id": pin_id,
+                    "node_id": node_id,
+                    "blueprint_path": "/Game/Test/BP.BP",
+                    "graph_id": "caller" if node_id == "macro-instance" else "g",
+                    "graph_name": "EventGraph" if node_id == "macro-instance" else "ByRef",
+                    "pin_index": 0,
+                    "name": "Value",
+                    "direction": direction,
+                    "type": {
+                        "category": "struct",
+                        "subcategory": "",
+                        "container_type": 0,
+                        "is_reference": is_reference,
+                        "is_const": False,
+                        "subcategory_object": "/Script/CoreUObject.Vector",
+                    },
+                    "default_value": "",
+                    "default_object": "",
+                    "default_text": "",
+                    "hidden": False,
+                    "not_connectable": False,
+                    "linked_count": 0,
+                }
+
+            write_jsonl(root / "blueprint_pins.jsonl", [
+                pin("mi", "macro-instance", "input", True),
+                pin("entry", "entry", "output", False),
+                {
+                    **pin("exit", "exit", "input", False),
+                    "name": "Result",
+                },
             ])
 
             result = report.build_report(root, rows)

@@ -115,7 +115,16 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
         return str(pin.get("direction", "") or "").lower() in {"output", "egpd_output", "1"}
 
     def pin_type_key(pin: dict) -> str:
-        return json.dumps(core._pin_type_fields(pin), sort_keys=True, separators=(",", ":"))
+        pin_type = pin.get("type", {}) if isinstance(pin.get("type"), dict) else {}
+        signature = {
+            "category": str(pin_type.get("category", "") or ""),
+            "subcategory": str(pin_type.get("subcategory", "") or ""),
+            "subcategory_object": str(pin_type.get("subcategory_object", "") or ""),
+            "container_type": int(pin_type.get("container_type", 0) or 0),
+            "is_reference": bool(pin_type.get("is_reference", False)),
+            "is_const": bool(pin_type.get("is_const", False)),
+        }
+        return json.dumps(signature, sort_keys=True, separators=(",", ":"))
 
     def tunnel_shape(node: dict) -> str:
         pins = pins_by_node.get(str(node.get("node_id", "") or ""), [])
@@ -166,6 +175,15 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
             "entry": entries[0] if len(entries) == 1 else None,
             "exit": exits[0] if len(exits) == 1 else None,
         }
+
+    semantic_edge_path = output / "blueprint_semantic_edges.jsonl"
+    semantic_edges = list(rows(semantic_edge_path)) if semantic_edge_path.is_file() else []
+    macro_proof_relations = {"maps_to_macro_graph", "binds_macro_input", "binds_macro_output"}
+    macro_semantic_proof_edges = collections.Counter(
+        str(edge.get("relation", "") or "")
+        for edge in semantic_edges
+        if str(edge.get("relation", "") or "") in macro_proof_relations
+    )
 
     macro_binding_status = collections.Counter()
     macro_binding_mismatches = collections.Counter()
@@ -283,6 +301,8 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
         "macro_binding_exact_pin_count": macro_binding_exact_pin_count,
         "macro_binding_status": top(macro_binding_status),
         "macro_binding_mismatches": top(macro_binding_mismatches),
+        "macro_semantic_proof_edges": top(macro_semantic_proof_edges),
+        "macro_semantic_proof_edge_count": sum(macro_semantic_proof_edges.values()),
         "control_rig_node_count": len(control_rig_nodes),
         "rigvm_link_count": len(rigvm_links),
         "rigvm_duplicate_link_node_ids": len(rigvm_link_ids) - len(rigvm_link_id_set),
@@ -370,6 +390,10 @@ def print_report(report: dict) -> None:
     section("macro interface graph status", "macro_interface_graph_status")
     section("macro pin binding status", "macro_binding_status")
     section("macro pin binding mismatches", "macro_binding_mismatches")
+
+    print("\n[Macro semantic proof edges]")
+    print(f"proof_edges={int(report.get('macro_semantic_proof_edge_count', 0) or 0)}")
+    section("macro semantic proof relations", "macro_semantic_proof_edges")
 
     control_rig = int(report.get("control_rig_node_count", 0) or 0)
     rigvm_links = int(report.get("rigvm_link_count", 0) or 0)
