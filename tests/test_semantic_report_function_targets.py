@@ -11,6 +11,7 @@ SCRIPTS = ROOT / "scripts"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
+import uatool_blueprint_interprocedural as interproc
 import uatool_semantic_report as report
 
 
@@ -30,6 +31,13 @@ def rows(path: Path):
 
 
 class SemanticReportFunctionTargetAuditTest(unittest.TestCase):
+    def _write_function_streams(self, root: Path) -> None:
+        function_edges, function_terminals, _stats = interproc.derive_function_execution(
+            root, rows
+        )
+        write_jsonl(root / interproc.DERIVED_FILES[3], function_edges)
+        write_jsonl(root / interproc.DERIVED_FILES[4], function_terminals)
+
     def test_distinguishes_direct_interface_pure_and_latent_internal_calls(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -241,6 +249,7 @@ class SemanticReportFunctionTargetAuditTest(unittest.TestCase):
                 },
             ])
 
+            self._write_function_streams(root)
             result = report.build_report(root, rows)
             self.assertEqual(result["function_call_count"], 5)
             self.assertEqual(result["function_call_internal_count"], 5)
@@ -271,6 +280,15 @@ class SemanticReportFunctionTargetAuditTest(unittest.TestCase):
             self.assertEqual(result["function_direct_binding_count"], 1)
             self.assertEqual(result["function_direct_bridge_ready_count"], 2)
             self.assertEqual(result["function_call_mismatches"], [])
+            self.assertTrue(result["function_interprocedural_stream_alignment"])
+            self.assertEqual(
+                dict(result["function_interprocedural_edge_kinds"]),
+                {"function_enter": 2, "function_return": 1},
+            )
+            self.assertEqual(
+                dict(result["function_interprocedural_terminal_kinds"]),
+                {"function_call_no_continuation": 1},
+            )
 
             self.assertEqual(dict(result["function_call_resolution"]), {"internal": 5})
             self.assertEqual(dict(result["function_internal_kinds"]), {
@@ -387,6 +405,7 @@ class SemanticReportFunctionTargetAuditTest(unittest.TestCase):
                 },
             ])
 
+            self._write_function_streams(root)
             result = report.build_report(root, rows)
             self.assertEqual(result["function_call_purity_override_count"], 1)
             self.assertEqual(result["function_call_suspicious_purity_count"], 0)
