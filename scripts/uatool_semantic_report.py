@@ -790,14 +790,20 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
         if str(node.get("operation", "") or "") in {"custom_event", "event"}:
             name = str(node.get("symbol", "") or "")
             if bp and name:
-                event_name_nodes_by_blueprint[(bp, name)].append(node)
+                event_name_nodes_by_blueprint[(bp, name.casefold())].append(node)
 
     function_name_rows_by_blueprint: dict[tuple[str, str], list[dict]] = collections.defaultdict(list)
     for function in function_rows:
         bp = str(function.get("blueprint_path", "") or "")
         name = str(function.get("name", "") or "")
         if bp and name:
-            function_name_rows_by_blueprint[(bp, name)].append(function)
+            function_name_rows_by_blueprint[(bp, name.casefold())].append(function)
+
+    function_rows_by_resolved: dict[str, list[dict]] = collections.defaultdict(list)
+    for function in function_rows:
+        resolved = str(function.get("resolved_function", "") or "")
+        if resolved:
+            function_rows_by_resolved[resolved].append(function)
 
     delegate_create_status = collections.Counter()
     delegate_create_target_operations = collections.Counter()
@@ -818,6 +824,8 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
         selected_name = str(sem.get("selected_function", "") or "")
         selected_guid_raw = str(sem.get("selected_function_guid", "") or "")
         selected_guid = guid_key(selected_guid_raw)
+        selected_function_path = str(sem.get("selected_function_path", "") or "")
+        selected_scope_class = str(sem.get("selected_function_scope_class", "") or "")
         if selected_name:
             delegate_create_selected_name_count += 1
         if selected_guid_raw:
@@ -835,15 +843,23 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
             target_operation = str(candidate.get("operation", "") or "<empty>")
             target_node_id = str(candidate.get("node_id", "") or "")
             candidate_name = str(candidate.get("symbol", "") or "")
-            if selected_name and candidate_name and selected_name != candidate_name:
+            if (
+                selected_name
+                and candidate_name
+                and selected_name.casefold() == candidate_name.casefold()
+            ):
+                status = (
+                    "exact_guid_name_match"
+                    if selected_name == candidate_name
+                    else "exact_guid_name_case_variant"
+                )
+                delegate_create_exact_endpoint_count += 1
+            elif selected_name and candidate_name:
                 status = "exact_guid_name_mismatch"
                 delegate_mismatches[
                     f"{node_id} :: create :: selected_name={selected_name} "
                     f"guid_target_name={candidate_name}"
                 ] += 1
-            elif selected_name and candidate_name:
-                status = "exact_guid_name_match"
-                delegate_create_exact_endpoint_count += 1
             else:
                 status = "exact_guid_only"
                 delegate_create_exact_endpoint_count += 1
