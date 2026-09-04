@@ -1235,6 +1235,18 @@ def print_report(report: dict) -> None:
     )
     section("function target/block audit mismatches", "function_call_mismatches")
 
+    print("\n[Blueprint function interprocedural execution streams]")
+    print(
+        f"edges={int(report.get('function_interprocedural_edge_count', 0) or 0)} "
+        f"expected_enters={int(report.get('function_direct_expected_enter_edge_count', 0) or 0)} "
+        f"expected_returns={int(report.get('function_direct_expected_return_edge_count', 0) or 0)} "
+        f"terminals={int(report.get('function_interprocedural_terminal_count', 0) or 0)} "
+        f"expected_terminals={int(report.get('function_direct_expected_terminal_record_count', 0) or 0)} "
+        f"aligned={bool(report.get('function_interprocedural_stream_alignment', False))}"
+    )
+    section("function interprocedural edge kinds", "function_interprocedural_edge_kinds")
+    section("function interprocedural terminal kinds", "function_interprocedural_terminal_kinds")
+
     control_rig = int(report.get("control_rig_node_count", 0) or 0)
     rigvm_links = int(report.get("rigvm_link_count", 0) or 0)
     matched = int(report.get("rigvm_matched_count", 0) or 0)
