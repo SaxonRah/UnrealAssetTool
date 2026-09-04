@@ -41,7 +41,7 @@ class SemanticReportFunctionTargetAuditTest(unittest.TestCase):
                     "semantic_kind": "call",
                     "opaque": False,
                 }
-                for node_id in ("call-direct", "call-interface", "call-pure", "call-latent")
+                for node_id in ("call-direct", "call-void", "call-interface", "call-pure", "call-latent")
             ])
             write_jsonl(root / "blueprint_nodes.jsonl", [])
             write_jsonl(root / "blueprint_graphs.jsonl", [])
@@ -54,6 +54,7 @@ class SemanticReportFunctionTargetAuditTest(unittest.TestCase):
 
             caller_bp = "/Game/Test/BP_Caller.BP_Caller"
             direct_bp = "/Game/Test/BP_Direct.BP_Direct"
+            void_bp = "/Game/Test/BP_Void.BP_Void"
             interface_bp = "/Game/Test/BPI_Target.BPI_Target"
             pure_bp = "/Game/Test/BP_Pure.BP_Pure"
             latent_bp = "/Game/Test/BP_Latent.BP_Latent"
@@ -61,6 +62,7 @@ class SemanticReportFunctionTargetAuditTest(unittest.TestCase):
             write_jsonl(root / "blueprints.jsonl", [
                 {"object_path": caller_bp, "blueprint_type": 0},
                 {"object_path": direct_bp, "blueprint_type": 0},
+                {"object_path": void_bp, "blueprint_type": 0},
                 {"object_path": interface_bp, "blueprint_type": 3},
                 {"object_path": pure_bp, "blueprint_type": 0},
                 {"object_path": latent_bp, "blueprint_type": 0},
@@ -74,6 +76,14 @@ class SemanticReportFunctionTargetAuditTest(unittest.TestCase):
                     "blueprint_pure": False,
                     "entry_node_id": "entry-direct",
                     "result_node_ids": ["result-direct"],
+                },
+                {
+                    "function_id": "fn-void",
+                    "blueprint_path": void_bp,
+                    "name": "DoVoid",
+                    "blueprint_pure": False,
+                    "entry_node_id": "entry-void",
+                    "result_node_ids": [],
                 },
                 {
                     "function_id": "fn-interface",
@@ -127,6 +137,7 @@ class SemanticReportFunctionTargetAuditTest(unittest.TestCase):
 
             write_jsonl(root / "blueprint_call_edges.jsonl", [
                 call_row("call-direct", direct_bp, "fn-direct"),
+                call_row("call-void", void_bp, "fn-void"),
                 call_row("call-interface", interface_bp, "fn-interface"),
                 call_row("call-pure", pure_bp, "fn-pure", pure=True),
                 call_row("call-latent", latent_bp, "fn-latent", latent=True),
@@ -147,6 +158,12 @@ class SemanticReportFunctionTargetAuditTest(unittest.TestCase):
                     "node_ids": ["call-direct"],
                 },
                 {
+                    "block_id": "caller-void-block",
+                    "blueprint_path": caller_bp,
+                    "graph_id": "caller-graph",
+                    "node_ids": ["call-void"],
+                },
+                {
                     "block_id": "caller-next-block",
                     "blueprint_path": caller_bp,
                     "graph_id": "caller-graph",
@@ -164,44 +181,83 @@ class SemanticReportFunctionTargetAuditTest(unittest.TestCase):
                     "graph_id": "fn-direct",
                     "node_ids": ["result-direct"],
                 },
+                {
+                    "block_id": "void-entry-block",
+                    "blueprint_path": void_bp,
+                    "graph_id": "fn-void",
+                    "node_ids": ["entry-void"],
+                },
+                {
+                    "block_id": "void-terminal-block",
+                    "blueprint_path": void_bp,
+                    "graph_id": "fn-void",
+                    "node_ids": ["void-last"],
+                },
             ])
-            write_jsonl(root / "blueprint_edges.jsonl", [{
-                "edge_kind": "execution",
-                "graph_id": "caller-graph",
-                "source_node_id": "call-direct",
-                "source_pin_id": "call-direct-then",
+            write_jsonl(root / "blueprint_edges.jsonl", [
+                {
+                    "edge_kind": "execution",
+                    "graph_id": "caller-graph",
+                    "source_node_id": "call-direct",
+                    "source_pin_id": "call-direct-then",
+                    "source_pin_name": "then",
+                    "target_node_id": "next",
+                    "target_pin_id": "next-exec",
+                    "target_pin_name": "execute",
+                },
+                {
+                    "edge_kind": "execution",
+                    "graph_id": "fn-void",
+                    "source_node_id": "entry-void",
+                    "source_pin_id": "entry-void-then",
+                    "source_pin_name": "then",
+                    "target_node_id": "void-last",
+                    "target_pin_id": "void-last-exec",
+                    "target_pin_name": "execute",
+                },
+            ])
+            write_jsonl(root / "blueprint_execution_block_edges.jsonl", [{
+                "edge_id": "void-edge",
+                "blueprint_path": void_bp,
+                "graph_id": "fn-void",
+                "source_block_id": "void-entry-block",
+                "target_block_id": "void-terminal-block",
+                "source_node_id": "entry-void",
+                "target_node_id": "void-last",
                 "source_pin_name": "then",
-                "target_node_id": "next",
-                "target_pin_id": "next-exec",
                 "target_pin_name": "execute",
             }])
 
             result = report.build_report(root, rows)
-            self.assertEqual(result["function_call_count"], 4)
-            self.assertEqual(result["function_call_internal_count"], 4)
-            self.assertEqual(result["function_call_internal_target_count"], 4)
+            self.assertEqual(result["function_call_count"], 5)
+            self.assertEqual(result["function_call_internal_count"], 5)
+            self.assertEqual(result["function_call_internal_target_count"], 5)
             self.assertEqual(result["function_call_interface_count"], 1)
             self.assertEqual(result["function_call_pure_internal_count"], 1)
             self.assertEqual(result["function_call_latent_internal_count"], 1)
-            self.assertEqual(result["function_call_direct_impure_count"], 1)
+            self.assertEqual(result["function_call_direct_impure_count"], 2)
             self.assertEqual(result["function_call_purity_mismatch_count"], 0)
             self.assertEqual(result["function_call_unknown_blueprint_type_count"], 0)
 
-            self.assertEqual(result["function_direct_exact_caller_block_count"], 1)
-            self.assertEqual(result["function_direct_exact_entry_block_count"], 1)
+            self.assertEqual(result["function_direct_exact_caller_block_count"], 2)
+            self.assertEqual(result["function_direct_exact_entry_block_count"], 2)
+            self.assertEqual(result["function_direct_explicit_result_call_count"], 1)
             self.assertEqual(result["function_direct_result_node_count"], 1)
             self.assertEqual(result["function_direct_exact_result_block_count"], 1)
+            self.assertEqual(result["function_direct_void_call_count"], 1)
+            self.assertEqual(result["function_direct_void_calls_with_terminal_frontier"], 1)
+            self.assertEqual(result["function_direct_void_reachable_terminal_block_count"], 1)
             self.assertEqual(result["function_direct_connected_continuation_count"], 1)
-            self.assertEqual(result["function_direct_terminal_call_count"], 0)
+            self.assertEqual(result["function_direct_terminal_call_count"], 1)
             self.assertEqual(result["function_direct_exact_continuation_block_count"], 1)
             self.assertEqual(result["function_direct_binding_count"], 1)
-            self.assertEqual(result["function_direct_bridge_ready_count"], 1)
+            self.assertEqual(result["function_direct_bridge_ready_count"], 2)
             self.assertEqual(result["function_call_mismatches"], [])
 
-            self.assertEqual(dict(result["function_call_resolution"]), {"internal": 4})
+            self.assertEqual(dict(result["function_call_resolution"]), {"internal": 5})
             self.assertEqual(dict(result["function_internal_kinds"]), {
-                "direct_impure_bridge_ready": 1,
-                "direct_impure_internal": 1,
+                "direct_impure_bridge_ready": 2,
+                "direct_impure_internal": 2,
                 "interface_dispatch_or_declaration": 1,
                 "latent_internal": 1,
                 "pure_internal": 1,
