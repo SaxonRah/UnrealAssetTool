@@ -426,5 +426,57 @@ class BlueprintDelegateBindingsTest(unittest.TestCase):
                 delegates.derive(root, rows)
 
 
+    def test_unbound_bind_and_assign_sites_do_not_fabricate_subscriptions(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            bp = "/Game/Test/BP.BP"
+            owner = "/Game/Test/BP_Target.BP_Target_C"
+            bind_id = f"{bp}::graph::graph::node::11111111-2222-3333-4444-555555555555"
+            assign_id = f"{bp}::graph::graph::node::66666666-7777-8888-9999-aaaaaaaaaaaa"
+            dispatcher_guid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+
+            nodes = []
+            for node_id, operation, name in (
+                (bind_id, "delegate_bind", "OnBind"),
+                (assign_id, "delegate_assign", "OnAssign"),
+            ):
+                nodes.append({
+                    "node_id": node_id,
+                    "blueprint_path": bp,
+                    "graph_id": "graph",
+                    "operation": operation,
+                    "symbol": name,
+                    "semantic": {
+                        "delegate_name": name,
+                        "delegate_owner": owner,
+                        "delegate_member_guid": dispatcher_guid,
+                        "delegate_self_context": False,
+                        "delegate_local_scope": False,
+                        "delegate_member_scope": "",
+                    },
+                })
+
+            write_jsonl(root / "blueprint_nodes.jsonl", nodes)
+            write_jsonl(root / "blueprint_functions.jsonl", [])
+            write_jsonl(root / "blueprint_pins.jsonl", [
+                pin("bind-in", bind_id, "Delegate", "input"),
+                pin("assign-in", assign_id, "Delegate", "input"),
+            ])
+            write_jsonl(root / "blueprint_edges.jsonl", [])
+
+            bindings, stats = delegates.derive(root, rows)
+            self.assertEqual(bindings, [])
+            self.assertEqual(stats["bind_assign_nodes"], 2)
+            self.assertEqual(stats["delegate_input_edges"], 0)
+            self.assertEqual(stats["unbound_bind_assign_nodes"], 2)
+            self.assertEqual(stats["unbound_operation:delegate_bind"], 1)
+            self.assertEqual(stats["unbound_operation:delegate_assign"], 1)
+            self.assertNotIn("operation:delegate_bind", stats)
+            self.assertNotIn("operation:delegate_assign", stats)
+
+            write_jsonl(root / delegates.DERIVED_FILES[0], bindings)
+            self.assertIsNone(delegates.validation_error(root, rows))
+
+
 if __name__ == "__main__":
     unittest.main()
