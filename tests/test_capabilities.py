@@ -60,6 +60,9 @@ class CapabilityManifestTest(unittest.TestCase):
             path = capabilities.write_manifest(root)
             self.assertIsNone(capabilities.validation_error(root))
             manifest = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(manifest["tool"]["version"], "1.0.0-beta.1")
+            self.assertEqual(manifest["tool"]["release_line"], "1.0.0-beta.1")
+            self.assertTrue(manifest["tool"]["beta"])
             self.assertEqual(manifest["schemas"], {
                 "structural": 12,
                 "world": 12,
