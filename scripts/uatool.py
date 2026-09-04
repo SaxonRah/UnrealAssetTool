@@ -31,10 +31,10 @@ import uatool_verify_bundle as bundle_verify
 import uatool_version as version
 import uatool_beta_rc as beta_rc
 
-# Public derived schema 39 preserves exact Blueprint delegate bindings through
-# transparent reroute chains while retaining the authored endpoint and every
-# reroute hop as provenance.
-FINAL_DERIVED_SCHEMA_VERSION = 39
+# Public derived schema 40 distinguishes authored Bind/Assign sites from
+# resolved delegate subscriptions. Zero-input sites remain diagnostic evidence
+# and never manufacture a blueprint_delegate_bindings row.
+FINAL_DERIVED_SCHEMA_VERSION = 40
 project_graph.DERIVED_SCHEMA_VERSION = FINAL_DERIVED_SCHEMA_VERSION
 SCRIPT_DIR = Path(__file__).resolve().parent
 
@@ -463,6 +463,12 @@ def derive_output(output):
         )
         manifest["blueprint_delegate_binding_summary"] = {
             "binding_count": len(delegate_bindings),
+            "bind_assign_site_count": int(
+                delegate_binding_stats.get("bind_assign_nodes", 0) or 0
+            ),
+            "unbound_site_count": int(
+                delegate_binding_stats.get("unbound_bind_assign_nodes", 0) or 0
+            ),
             "bind_count": int(delegate_binding_stats.get("operation:delegate_bind", 0) or 0),
             "assign_count": int(delegate_binding_stats.get("operation:delegate_assign", 0) or 0),
             "create_delegate_source_count": int(
@@ -712,6 +718,8 @@ def _combined_summary(args) -> None:
         print(
             "blueprint delegate binding complete: "
             f"bindings={delegate_summary.get('binding_count', 0)} "
+            f"sites={delegate_summary.get('bind_assign_site_count', 0)} "
+            f"unbound_sites={delegate_summary.get('unbound_site_count', 0)} "
             f"binds={delegate_summary.get('bind_count', 0)} "
             f"assigns={delegate_summary.get('assign_count', 0)} "
             f"create_sources={delegate_summary.get('create_delegate_source_count', 0)} "
