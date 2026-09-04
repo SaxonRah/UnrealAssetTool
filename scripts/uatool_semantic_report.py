@@ -812,6 +812,7 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
             function_rows_by_resolved[resolved].append(function)
 
     delegate_create_status = collections.Counter()
+    delegate_create_function_local_resolution = collections.Counter()
     delegate_create_target_operations = collections.Counter()
     delegate_create_selected_name_count = 0
     delegate_create_selected_guid_count = 0
@@ -877,17 +878,32 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
                 function_rows_by_resolved.get(selected_function_path, [])
                 if selected_function_path else []
             )
-            if len(resolved_function_candidates) == 1:
-                target = resolved_function_candidates[0]
+            if selected_function_path:
+                # Structural schema 13 records this path from the exact
+                # UFunction selected by UE. Multiple derived function rows may
+                # map back to the same generated/skeleton UFunction; that is a
+                # local-row multiplicity diagnostic, not endpoint ambiguity.
                 status = "exact_function_path"
                 target_operation = "function"
-                target_node_id = str(target.get("function_id", "") or "")
+                candidate_ids = sorted(
+                    {
+                        str(candidate.get("function_id", "") or "")
+                        for candidate in resolved_function_candidates
+                        if candidate.get("function_id")
+                    }
+                )
+                target_node_id = (
+                    candidate_ids[0] if len(candidate_ids) == 1 else selected_function_path
+                )
+                local_status = (
+                    "unique_captured_function"
+                    if len(candidate_ids) == 1
+                    else "multiple_captured_function_rows"
+                    if candidate_ids
+                    else "no_captured_function_row"
+                )
+                delegate_create_function_local_resolution[local_status] += 1
                 delegate_create_exact_endpoint_count += 1
-            elif len(resolved_function_candidates) > 1:
-                status = "ambiguous_function_path"
-                delegate_mismatches[
-                    f"{node_id} :: create :: ambiguous_selected_function_path={selected_function_path}"
-                ] += 1
             else:
                 event_candidates = (
                     event_name_nodes_by_blueprint.get((bp, selected_name.casefold()), [])
@@ -1977,6 +1993,7 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
         "delegate_create_exact_endpoint_count": delegate_create_exact_endpoint_count,
         "delegate_create_status": top(delegate_create_status),
         "delegate_create_target_operations": top(delegate_create_target_operations),
+        "delegate_create_function_local_resolution": top(delegate_create_function_local_resolution),
         "delegate_create_examples": delegate_create_examples,
         "delegate_bind_assign_node_count": delegate_bind_assign_node_count,
         "delegate_bind_assign_delegate_input_edge_count": delegate_bind_assign_delegate_input_edge_count,
@@ -2261,6 +2278,10 @@ def print_report(report: dict) -> None:
     section("delegate dispatcher shapes", "delegate_dispatcher_shapes")
     section("delegate create endpoint status", "delegate_create_status")
     section("delegate create endpoint operations", "delegate_create_target_operations")
+    section(
+        "delegate create function local resolution",
+        "delegate_create_function_local_resolution",
+    )
     print("\n[Delegate bind/assign canonical data evidence]")
     print(
         f"bind_assign_nodes={int(report.get('delegate_bind_assign_node_count', 0) or 0)} "
