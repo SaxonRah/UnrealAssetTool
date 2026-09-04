@@ -211,6 +211,28 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
             block_graph_by_node[node_id] = graph_id
 
     raw_blueprint_edges = list(rows(output / "blueprint_edges.jsonl"))
+    execution_block_edges_path = output / "blueprint_execution_block_edges.jsonl"
+    execution_block_edges = (
+        list(rows(execution_block_edges_path))
+        if execution_block_edges_path.is_file()
+        else []
+    )
+    blocks_by_graph: dict[str, list[dict]] = collections.defaultdict(list)
+    block_by_id: dict[str, dict] = {}
+    for block in execution_blocks:
+        block_id = str(block.get("block_id", "") or "")
+        graph_id = str(block.get("graph_id", "") or "")
+        if block_id:
+            block_by_id[block_id] = block
+        if graph_id:
+            blocks_by_graph[graph_id].append(block)
+    block_outgoing: dict[str, list[str]] = collections.defaultdict(list)
+    for block_edge in execution_block_edges:
+        source_block_id = str(block_edge.get("source_block_id", "") or "")
+        target_block_id = str(block_edge.get("target_block_id", "") or "")
+        if source_block_id and target_block_id:
+            block_outgoing[source_block_id].append(target_block_id)
+
     raw_exec_edges = [
         edge for edge in raw_blueprint_edges
         if str(edge.get("edge_kind", "") or "") == "execution"
@@ -623,6 +645,10 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
     function_direct_exact_entry_block_count = 0
     function_direct_result_node_count = 0
     function_direct_exact_result_block_count = 0
+    function_direct_explicit_result_call_count = 0
+    function_direct_void_call_count = 0
+    function_direct_void_reachable_terminal_block_count = 0
+    function_direct_void_calls_with_terminal_frontier = 0
     function_direct_connected_continuation_count = 0
     function_direct_terminal_call_count = 0
     function_direct_exact_continuation_block_count = 0
@@ -722,19 +748,57 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
         ]
         function_direct_result_node_count += len(result_node_ids)
         result_ok_count = 0
-        for result_node_id in result_node_ids:
-            result_block = block_by_node.get(result_node_id, "")
-            if (
-                result_block
-                and block_graph_by_node.get(result_node_id, "") == target_function_id
-                and result_node_id not in duplicate_block_nodes
-            ):
-                result_ok_count += 1
+        return_frontier_ok = False
+
+        if result_node_ids:
+            function_direct_explicit_result_call_count += 1
+            for result_node_id in result_node_ids:
+                result_block = block_by_node.get(result_node_id, "")
+                if (
+                    result_block
+                    and block_graph_by_node.get(result_node_id, "") == target_function_id
+                    and result_node_id not in duplicate_block_nodes
+                ):
+                    result_ok_count += 1
+                else:
+                    function_call_mismatches[
+                        f"{call_node_id} :: missing_or_ambiguous_result_block:{result_node_id}"
+                    ] += 1
+            function_direct_exact_result_block_count += result_ok_count
+            return_frontier_ok = result_ok_count == len(result_node_ids)
+        else:
+            function_direct_void_call_count += 1
+            entry_block_id = str(entry_block or "")
+            reachable: set[str] = set()
+            pending = [entry_block_id] if entry_block_id else []
+            while pending:
+                block_id = pending.pop()
+                if not block_id or block_id in reachable:
+                    continue
+                block = block_by_id.get(block_id)
+                if block is None or str(block.get("graph_id", "") or "") != target_function_id:
+                    continue
+                reachable.add(block_id)
+                for target_block_id in block_outgoing.get(block_id, []):
+                    if target_block_id not in reachable:
+                        pending.append(target_block_id)
+            terminal_blocks = sorted(
+                block_id for block_id in reachable
+                if not [
+                    target_block_id
+                    for target_block_id in block_outgoing.get(block_id, [])
+                    if str(block_by_id.get(target_block_id, {}).get("graph_id", "") or "")
+                        == target_function_id
+                ]
+            )
+            function_direct_void_reachable_terminal_block_count += len(terminal_blocks)
+            if entry_ok and terminal_blocks:
+                function_direct_void_calls_with_terminal_frontier += 1
+                return_frontier_ok = True
             else:
                 function_call_mismatches[
-                    f"{call_node_id} :: missing_or_ambiguous_result_block:{result_node_id}"
+                    f"{call_node_id} :: void_function_missing_reachable_terminal_frontier"
                 ] += 1
-        function_direct_exact_result_block_count += result_ok_count
 
         outgoing = exec_outgoing_by_node.get(call_node_id, [])
         if not outgoing:
@@ -756,9 +820,8 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
                 ] += 1
         function_direct_exact_continuation_block_count += continuation_ok_count
 
-        result_shape_ok = bool(result_node_ids) and result_ok_count == len(result_node_ids)
         continuation_shape_ok = (not outgoing) or continuation_ok_count == len(outgoing)
-        if caller_ok and entry_ok and result_shape_ok and continuation_shape_ok:
+        if caller_ok and entry_ok and return_frontier_ok and continuation_shape_ok:
             function_direct_bridge_ready_count += 1
             function_internal_kinds["direct_impure_bridge_ready"] += 1
         else:
@@ -883,6 +946,10 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
         "function_direct_exact_entry_block_count": function_direct_exact_entry_block_count,
         "function_direct_result_node_count": function_direct_result_node_count,
         "function_direct_exact_result_block_count": function_direct_exact_result_block_count,
+        "function_direct_explicit_result_call_count": function_direct_explicit_result_call_count,
+        "function_direct_void_call_count": function_direct_void_call_count,
+        "function_direct_void_reachable_terminal_block_count": function_direct_void_reachable_terminal_block_count,
+        "function_direct_void_calls_with_terminal_frontier": function_direct_void_calls_with_terminal_frontier,
         "function_direct_connected_continuation_count": function_direct_connected_continuation_count,
         "function_direct_terminal_call_count": function_direct_terminal_call_count,
         "function_direct_exact_continuation_block_count": function_direct_exact_continuation_block_count,
@@ -1056,8 +1123,12 @@ def print_report(report: dict) -> None:
         f"direct_impure_calls={int(report.get('function_call_direct_impure_count', 0) or 0)} "
         f"exact_caller_blocks={int(report.get('function_direct_exact_caller_block_count', 0) or 0)} "
         f"exact_entry_blocks={int(report.get('function_direct_exact_entry_block_count', 0) or 0)} "
+        f"explicit_result_calls={int(report.get('function_direct_explicit_result_call_count', 0) or 0)} "
         f"result_nodes={int(report.get('function_direct_result_node_count', 0) or 0)} "
         f"exact_result_blocks={int(report.get('function_direct_exact_result_block_count', 0) or 0)} "
+        f"void_calls={int(report.get('function_direct_void_call_count', 0) or 0)} "
+        f"void_terminal_frontiers={int(report.get('function_direct_void_calls_with_terminal_frontier', 0) or 0)} "
+        f"void_terminal_blocks={int(report.get('function_direct_void_reachable_terminal_block_count', 0) or 0)} "
         f"connected_continuations={int(report.get('function_direct_connected_continuation_count', 0) or 0)} "
         f"terminal_calls={int(report.get('function_direct_terminal_call_count', 0) or 0)} "
         f"exact_continuation_blocks={int(report.get('function_direct_exact_continuation_block_count', 0) or 0)} "
