@@ -1093,7 +1093,7 @@ static bool WriteManifest(const FString& OutputDir, const FWorldCounts& Counts)
     Root->SetNumberField(TEXT("schema_version"), WorldSchemaVersion);
     Root->SetStringField(TEXT("schema_name"), TEXT("world"));
     Root->SetStringField(TEXT("pass"), TEXT("UnrealAssetToolWorld"));
-    Root->SetNumberField(TEXT("structural_schema_baseline"), 12);
+    Root->SetNumberField(TEXT("structural_schema_baseline"), 13);
     Root->SetStringField(TEXT("engine_version"), FEngineVersion::Current().ToString());
     Root->SetStringField(TEXT("project_name"), FApp::GetProjectName());
     Root->SetStringField(TEXT("project_dir"), FPaths::ConvertRelativePathToFull(FPaths::ProjectDir()));
