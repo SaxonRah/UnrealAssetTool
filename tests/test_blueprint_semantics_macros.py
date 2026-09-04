@@ -12,6 +12,7 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 import uatool_blueprint_semantics as semantics
+import uatool_semantic_report as semantic_report
 
 
 def write_jsonl(path: Path, values: list[dict]) -> None:
@@ -230,6 +231,14 @@ class BlueprintMacroSemanticSchema4Test(unittest.TestCase):
             }
             (root / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
             self.assertIsNone(semantics.validation_error(root, rows))
+
+            report = semantic_report.build_report(root, rows)
+            self.assertEqual(report["macro_semantic_proof_edge_count"], 5)
+            self.assertEqual(dict(report["macro_semantic_proof_edges"]), {
+                "binds_macro_input": 2,
+                "binds_macro_output": 2,
+                "maps_to_macro_graph": 1,
+            })
 
     def test_reference_qualifier_mismatch_does_not_emit_false_binding(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
