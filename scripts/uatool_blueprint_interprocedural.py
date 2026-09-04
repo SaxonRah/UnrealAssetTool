@@ -18,13 +18,14 @@ from pathlib import Path
 
 import uatool_core as core
 
-INTERPROCEDURAL_SCHEMA_VERSION = 3
+INTERPROCEDURAL_SCHEMA_VERSION = 4
 DERIVED_FILES = (
     "blueprint_interprocedural_execution_edges.jsonl",
     "blueprint_interprocedural_execution_terminals.jsonl",
     "blueprint_interprocedural_data_routes.jsonl",
     "blueprint_interprocedural_function_execution_edges.jsonl",
     "blueprint_interprocedural_function_execution_terminals.jsonl",
+    "blueprint_interprocedural_function_data_routes.jsonl",
 )
 
 _SQL = """
@@ -114,6 +115,30 @@ CREATE INDEX bp_interproc_fn_terminal_call_idx
  ON blueprint_interprocedural_function_execution_terminals(call_node_id);
 CREATE INDEX bp_interproc_fn_terminal_target_idx
  ON blueprint_interprocedural_function_execution_terminals(target_function_id);
+
+CREATE TABLE blueprint_interprocedural_function_data_routes(
+ route_id TEXT PRIMARY KEY,schema_version INTEGER NOT NULL,binding_schema_version INTEGER NOT NULL,
+ route_kind TEXT NOT NULL,binding_id TEXT NOT NULL,call_node_id TEXT NOT NULL,
+ target_function_id TEXT NOT NULL,caller_blueprint_path TEXT NOT NULL,caller_graph_id TEXT NOT NULL,
+ target_blueprint_path TEXT NOT NULL,target_kind TEXT NOT NULL,direction TEXT NOT NULL,
+ match_kind TEXT NOT NULL,parameter_identity_kind TEXT NOT NULL,member_identity_exact INTEGER NOT NULL,
+ call_pin_id TEXT NOT NULL,call_pin_name TEXT NOT NULL,parameter_name TEXT NOT NULL,
+ parameter_pin_ids_json TEXT NOT NULL,split_suffix TEXT NOT NULL,
+ value_type_compatible INTEGER NOT NULL,value_type_basis TEXT NOT NULL,
+ qualifier_surfaces_json TEXT NOT NULL,value_kind TEXT NOT NULL,
+ caller_source_count INTEGER NOT NULL,callee_consumer_count INTEGER NOT NULL,
+ callee_consumer_scope TEXT NOT NULL,dependency_count INTEGER NOT NULL,
+ caller_consumer_count INTEGER NOT NULL,internal_provenance_complete INTEGER NOT NULL,
+ boundary_ready INTEGER NOT NULL,member_route_ready INTEGER NOT NULL,
+ authored_default_value TEXT NOT NULL,authored_default_object TEXT NOT NULL,
+ authored_default_text TEXT NOT NULL,evidence_kind TEXT NOT NULL,json TEXT NOT NULL
+);
+CREATE INDEX bp_interproc_fn_data_call_idx
+ ON blueprint_interprocedural_function_data_routes(call_node_id,route_kind);
+CREATE INDEX bp_interproc_fn_data_target_idx
+ ON blueprint_interprocedural_function_data_routes(target_function_id,route_kind);
+CREATE INDEX bp_interproc_fn_data_pin_idx
+ ON blueprint_interprocedural_function_data_routes(call_pin_id);
 """
 
 
@@ -857,6 +882,354 @@ def derive_function_execution(output: Path, rows) -> tuple[list[dict], list[dict
         row["terminal_id"],
     ))
     return execution_edges, terminals, dict(stats)
+
+
+def derive_function_data_routes(output: Path, rows) -> tuple[list[dict], dict]:
+    """Materialize static data provenance for exact-internal Blueprint calls.
+
+    Call-binding schema 2 is authoritative for boundary identity and structural
+    value-type compatibility. Exact-member bindings may become member routes.
+    Split call-site pins remain explicit projections to the exact unsplit parent
+    parameter and never claim callee member identity.
+    """
+    output = Path(output)
+    pins = list(core.iter_blueprint_pin_rows(output))
+    pin_by_id = {
+        str(pin.get("pin_id", "") or ""): pin
+        for pin in pins
+        if pin.get("pin_id")
+    }
+    calls = {
+        str(row.get("call_node_id", "") or ""): row
+        for row in rows(output / "blueprint_call_edges.jsonl")
+        if row.get("call_node_id")
+    }
+    functions = {
+        str(row.get("function_id", "") or ""): row
+        for row in rows(output / "blueprint_functions.jsonl")
+        if row.get("function_id")
+    }
+    blueprints = {
+        str(row.get("object_path", "") or ""): row
+        for row in rows(output / "blueprints.jsonl")
+        if row.get("object_path")
+    }
+    block_by_node, duplicates = _block_membership(output, rows)
+    if duplicates:
+        sample = ", ".join(sorted(duplicates)[:5])
+        raise RuntimeError(f"Blueprint execution node belongs to multiple blocks: {sample}")
+
+    incoming_by_pin: dict[str, list[dict]] = collections.defaultdict(list)
+    outgoing_by_pin: dict[str, list[dict]] = collections.defaultdict(list)
+    for edge in rows(output / "blueprint_edges.jsonl"):
+        if str(edge.get("edge_kind", "") or "") != "data":
+            continue
+        source_pin_id = str(edge.get("source_pin_id", "") or "")
+        target_pin_id = str(edge.get("target_pin_id", "") or "")
+        if source_pin_id:
+            outgoing_by_pin[source_pin_id].append(edge)
+        if target_pin_id:
+            incoming_by_pin[target_pin_id].append(edge)
+
+    dependency_by_sink_pin: dict[str, list[dict]] = collections.defaultdict(list)
+    dependency_by_id: dict[str, dict] = {}
+    dependency_path = output / "blueprint_data_dependencies.jsonl"
+    if dependency_path.is_file():
+        for dependency in rows(dependency_path):
+            dependency_id = str(dependency.get("dependency_id", "") or "")
+            sink_pin_id = str(dependency.get("sink_pin_id", "") or "")
+            if dependency_id:
+                dependency_by_id[dependency_id] = dependency
+            if sink_pin_id:
+                dependency_by_sink_pin[sink_pin_id].append(dependency)
+
+    BPTYPE_INTERFACE = 3
+    stats = collections.Counter()
+    routes: list[dict] = []
+
+    def pin_has_authored_value(pin: dict) -> bool:
+        return bool(
+            str(pin.get("default_object", "") or "")
+            or str(pin.get("default_value", "") or "")
+            or str(pin.get("default_text", "") or "")
+        )
+
+    def endpoint(edge: dict, *, source: bool) -> dict:
+        prefix = "source" if source else "target"
+        pin_id = str(edge.get(f"{prefix}_pin_id", "") or "")
+        pin = pin_by_id.get(pin_id, {})
+        return {
+            "node_id": str(edge.get(f"{prefix}_node_id", "") or ""),
+            "pin_id": pin_id,
+            "pin_name": str(edge.get(f"{prefix}_pin_name", "") or pin.get("name", "") or ""),
+            "blueprint_path": str(pin.get("blueprint_path", "") or ""),
+            "graph_id": str(pin.get("graph_id", "") or ""),
+        }
+
+    def endpoints(edges: list[dict], *, source: bool) -> list[dict]:
+        return sorted(
+            [endpoint(edge, source=source) for edge in edges],
+            key=lambda value: (
+                value["blueprint_path"], value["graph_id"], value["node_id"],
+                value["pin_id"], value["pin_name"],
+            ),
+        )
+
+    for binding in rows(output / "blueprint_call_bindings.jsonl"):
+        stats["bindings"] += 1
+        binding_schema = int(binding.get("schema_version", 0) or 0)
+        if binding_schema != core.BLUEPRINT_CALL_BINDING_SCHEMA_VERSION:
+            raise RuntimeError(
+                f"function data route requires call-binding schema "
+                f"{core.BLUEPRINT_CALL_BINDING_SCHEMA_VERSION}: {binding.get('binding_id','')}"
+            )
+        if not bool(binding.get("value_type_compatible", False)):
+            raise RuntimeError(
+                f"function data route has structurally incompatible binding: {binding.get('binding_id','')}"
+            )
+
+        call_node_id = str(binding.get("call_node_id", "") or "")
+        call = calls.get(call_node_id)
+        if call is None or str(call.get("resolution", "") or "") != "internal":
+            raise RuntimeError(f"function data binding lacks exact internal call: {call_node_id}")
+
+        target_function_id = str(binding.get("target_function_id", "") or "")
+        target = functions.get(target_function_id)
+        if target is None:
+            raise RuntimeError(f"function data binding lacks target function: {target_function_id}")
+
+        target_blueprint_path = str(
+            call.get("target_blueprint_path", "")
+            or target.get("blueprint_path", "")
+            or ""
+        )
+        target_bp = blueprints.get(target_blueprint_path)
+        if target_bp is None:
+            raise RuntimeError(
+                f"function data binding lacks target Blueprint: {target_blueprint_path}"
+            )
+        try:
+            target_bp_type = int(target_bp.get("blueprint_type", -1))
+        except (TypeError, ValueError):
+            raise RuntimeError(
+                f"function data target has invalid Blueprint type: {target_blueprint_path}"
+            )
+        if bool(call.get("interface_call", False)) or target_bp_type == BPTYPE_INTERFACE:
+            stats["excluded_interface"] += 1
+            continue
+
+        if bool(call.get("latent", False)):
+            target_kind = "latent_internal"
+        elif bool(call.get("pure", False)):
+            target_kind = "pure_internal"
+        else:
+            target_kind = (
+                "direct_impure_reachable"
+                if call_node_id in block_by_node
+                else "direct_impure_unreachable"
+            )
+        stats[target_kind] += 1
+
+        direction = str(binding.get("direction", "") or "")
+        if direction not in {"argument", "return"}:
+            raise RuntimeError(
+                f"function data binding has unexpected direction: {binding.get('binding_id','')}"
+            )
+        match_kind = str(binding.get("match_kind", "") or "")
+        identity_kind = str(binding.get("parameter_identity_kind", "") or "")
+        member_identity_exact = bool(binding.get("member_identity_exact", False))
+        if match_kind == "exact":
+            if identity_kind != "exact_parameter" or not member_identity_exact:
+                raise RuntimeError(
+                    f"exact function binding lacks exact member identity: {binding.get('binding_id','')}"
+                )
+        elif match_kind == "split_struct":
+            if identity_kind != "split_parent_projection" or member_identity_exact:
+                raise RuntimeError(
+                    f"split function binding has invalid projection identity: {binding.get('binding_id','')}"
+                )
+        else:
+            raise RuntimeError(
+                f"function data binding has unexpected match kind: {binding.get('binding_id','')}"
+            )
+
+        call_pin_id = str(binding.get("call_pin_id", "") or "")
+        call_pin = pin_by_id.get(call_pin_id)
+        if call_pin is None:
+            raise RuntimeError(f"function data binding call pin missing: {call_pin_id}")
+        parameter_pin_ids = [
+            str(value or "")
+            for value in (
+                binding.get("parameter_pin_ids", [])
+                if isinstance(binding.get("parameter_pin_ids"), list)
+                else []
+            )
+            if value
+        ]
+        parameter_pins = [pin_by_id.get(pin_id) for pin_id in parameter_pin_ids]
+        if not parameter_pin_ids or any(pin is None for pin in parameter_pins):
+            raise RuntimeError(
+                f"function data binding parameter identity incomplete: {binding.get('binding_id','')}"
+            )
+        parameter_pins = [pin for pin in parameter_pins if pin is not None]
+
+        caller_sources: list[dict] = []
+        callee_consumers: list[dict] = []
+        dependencies: list[dict] = []
+        caller_consumers: list[dict] = []
+        value_kind = ""
+        internal_provenance_complete = False
+
+        if direction == "argument":
+            incoming = incoming_by_pin.get(call_pin_id, [])
+            caller_sources = endpoints(incoming, source=True)
+            dependency_ids = [
+                str(value or "")
+                for value in (
+                    binding.get("dependency_ids", [])
+                    if isinstance(binding.get("dependency_ids"), list)
+                    else []
+                )
+                if value
+            ]
+            dependencies = sorted(
+                [
+                    {
+                        "dependency_id": dependency_id,
+                        "text": str(dependency_by_id.get(dependency_id, {}).get("text", "") or ""),
+                        "source_count": int(dependency_by_id.get(dependency_id, {}).get("source_count", 0) or 0),
+                    }
+                    for dependency_id in dependency_ids
+                ],
+                key=lambda value: value["dependency_id"],
+            )
+            if caller_sources or dependencies:
+                value_kind = "connected_source"
+            elif pin_has_authored_value(call_pin):
+                value_kind = "authored_value"
+            else:
+                value_kind = "no_value_evidence"
+
+            consumer_edges = [
+                edge
+                for pin_id in parameter_pin_ids
+                for edge in outgoing_by_pin.get(pin_id, [])
+            ]
+            callee_consumers = endpoints(consumer_edges, source=False)
+            internal_provenance_complete = value_kind != "no_value_evidence"
+        else:
+            dependency_rows_by_pin = {
+                pin_id: dependency_by_sink_pin.get(pin_id, [])
+                for pin_id in parameter_pin_ids
+            }
+            dependencies = sorted(
+                [
+                    {
+                        "dependency_id": str(dep.get("dependency_id", "") or ""),
+                        "text": str(dep.get("text", "") or ""),
+                        "source_count": int(dep.get("source_count", 0) or 0),
+                    }
+                    for pin_id in parameter_pin_ids
+                    for dep in dependency_rows_by_pin.get(pin_id, [])
+                ],
+                key=lambda value: (value["dependency_id"], value["text"]),
+            )
+            internal_provenance_complete = all(
+                dependency_rows_by_pin.get(pin_id)
+                or pin_has_authored_value(pin_by_id.get(pin_id, {}))
+                for pin_id in parameter_pin_ids
+            )
+            value_kind = (
+                "derived_output"
+                if dependencies
+                else "authored_output"
+                if internal_provenance_complete
+                else "incomplete_output_provenance"
+            )
+            caller_consumers = endpoints(outgoing_by_pin.get(call_pin_id, []), source=False)
+
+        boundary_ready = bool(
+            binding.get("value_type_compatible", False)
+            and parameter_pin_ids
+            and internal_provenance_complete
+        )
+        consumer_ready = bool(
+            callee_consumers if direction == "argument" else caller_consumers
+        )
+        member_route_ready = bool(
+            boundary_ready and consumer_ready and member_identity_exact
+        )
+        callee_consumer_scope = (
+            "exact_member" if member_identity_exact else "parent_parameter_projection"
+        )
+
+        route_kind = (
+            "function_argument" if direction == "argument" else "function_return"
+        )
+        route_id = _id(
+            "bpinterfndata:",
+            str(binding.get("binding_id", "") or ""),
+            route_kind, call_node_id, call_pin_id, target_function_id,
+        )
+        route = {
+            "route_id": route_id,
+            "schema_version": INTERPROCEDURAL_SCHEMA_VERSION,
+            "binding_schema_version": binding_schema,
+            "route_kind": route_kind,
+            "binding_id": str(binding.get("binding_id", "") or ""),
+            "call_node_id": call_node_id,
+            "target_function_id": target_function_id,
+            "caller_blueprint_path": str(binding.get("caller_blueprint_path", "") or call.get("blueprint_path", "") or ""),
+            "caller_graph_id": str(binding.get("caller_graph_id", "") or call.get("graph_id", "") or ""),
+            "target_blueprint_path": target_blueprint_path,
+            "target_kind": target_kind,
+            "direction": direction,
+            "match_kind": match_kind,
+            "parameter_identity_kind": identity_kind,
+            "member_identity_exact": member_identity_exact,
+            "call_pin_id": call_pin_id,
+            "call_pin_name": str(binding.get("call_pin_name", "") or call_pin.get("name", "") or ""),
+            "parameter_name": str(binding.get("parameter_name", "") or ""),
+            "parameter_pin_ids": parameter_pin_ids,
+            "split_suffix": str(binding.get("split_suffix", "") or ""),
+            "value_type_compatible": bool(binding.get("value_type_compatible", False)),
+            "value_type_basis": str(binding.get("value_type_basis", "") or ""),
+            "qualifier_surfaces": binding.get("qualifier_surfaces", {}),
+            "value_kind": value_kind,
+            "caller_sources": caller_sources,
+            "caller_source_count": len(caller_sources),
+            "callee_consumers": callee_consumers,
+            "callee_consumer_count": len(callee_consumers),
+            "callee_consumer_scope": callee_consumer_scope,
+            "dependencies": dependencies,
+            "dependency_count": len(dependencies),
+            "caller_consumers": caller_consumers,
+            "caller_consumer_count": len(caller_consumers),
+            "internal_provenance_complete": internal_provenance_complete,
+            "boundary_ready": boundary_ready,
+            "member_route_ready": member_route_ready,
+            "authored_default_value": str(call_pin.get("default_value", "") or ""),
+            "authored_default_object": str(call_pin.get("default_object", "") or ""),
+            "authored_default_text": str(call_pin.get("default_text", "") or ""),
+            "evidence_kind": (
+                "exact_function_member_data_provenance"
+                if member_identity_exact
+                else "split_callsite_parent_parameter_projection"
+            ),
+        }
+        routes.append(route)
+        stats["routes"] += 1
+        stats[route_kind] += 1
+        stats[f"target:{target_kind}"] += 1
+        stats[f"identity:{identity_kind}"] += 1
+        stats["boundary_ready"] += int(boundary_ready)
+        stats["member_route_ready"] += int(member_route_ready)
+
+    routes.sort(key=lambda row: (
+        row["caller_blueprint_path"], row["caller_graph_id"], row["call_node_id"],
+        row["route_kind"], row["call_pin_id"], row["route_id"],
+    ))
+    return routes, dict(stats)
 
 
 def validation_error(output: Path, rows) -> str | None:
