@@ -216,17 +216,30 @@ class SemanticReportFunctionTargetAuditTest(unittest.TestCase):
                     "target_pin_name": "execute",
                 },
             ])
-            write_jsonl(root / "blueprint_execution_block_edges.jsonl", [{
-                "edge_id": "void-edge",
-                "blueprint_path": void_bp,
-                "graph_id": "fn-void",
-                "source_block_id": "void-entry-block",
-                "target_block_id": "void-terminal-block",
-                "source_node_id": "entry-void",
-                "target_node_id": "void-last",
-                "source_pin_name": "then",
-                "target_pin_name": "execute",
-            }])
+            write_jsonl(root / "blueprint_execution_block_edges.jsonl", [
+                {
+                    "edge_id": "direct-edge",
+                    "blueprint_path": direct_bp,
+                    "graph_id": "fn-direct",
+                    "source_block_id": "direct-entry-block",
+                    "target_block_id": "direct-result-block",
+                    "source_node_id": "entry-direct",
+                    "target_node_id": "result-direct",
+                    "source_pin_name": "then",
+                    "target_pin_name": "execute",
+                },
+                {
+                    "edge_id": "void-edge",
+                    "blueprint_path": void_bp,
+                    "graph_id": "fn-void",
+                    "source_block_id": "void-entry-block",
+                    "target_block_id": "void-terminal-block",
+                    "source_node_id": "entry-void",
+                    "target_node_id": "void-last",
+                    "source_pin_name": "then",
+                    "target_pin_name": "execute",
+                },
+            ])
 
             result = report.build_report(root, rows)
             self.assertEqual(result["function_call_count"], 5)
