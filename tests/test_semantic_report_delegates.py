@@ -68,6 +68,8 @@ class SemanticReportDelegateAuditTest(unittest.TestCase):
             bind_id = f"{bp}::graph::caller::node::bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
             call_id = f"{bp}::graph::caller::node::cccccccc-dddd-eeee-ffff-000000000000"
             clear_id = f"{bp}::graph::caller::node::dddddddd-eeee-ffff-0000-111111111111"
+            unbind_id = f"{bp}::graph::caller::node::eeeeeeee-ffff-0000-1111-222222222222"
+            function_create_id = f"{bp}::graph::caller::node::ffffffff-0000-1111-2222-333333333333"
 
             raw_nodes = [
                 {
@@ -79,7 +81,7 @@ class SemanticReportDelegateAuditTest(unittest.TestCase):
                     "operation": "delegate_create",
                     "symbol": "OnReady",
                     "semantic": {
-                        "selected_function": "OnReady",
+                        "selected_function": "ONREADY",
                         "selected_function_guid": "{" + guid + "}",
                     },
                 },
@@ -104,6 +106,12 @@ class SemanticReportDelegateAuditTest(unittest.TestCase):
                     "semantic": {
                         "delegate_name": "OnReadyDelegate",
                         "delegate_owner": owner,
+                        "delegate_member_guid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                        "delegate_self_context": True,
+                        "delegate_member_guid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                        "delegate_self_context": True,
+                        "delegate_member_guid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                        "delegate_self_context": True,
                     },
                 },
                 {
@@ -130,6 +138,36 @@ class SemanticReportDelegateAuditTest(unittest.TestCase):
                     "semantic": {
                         "delegate_name": "OnReadyDelegate",
                         "delegate_owner": owner,
+                    },
+                },
+                {
+                    "node_id": unbind_id,
+                    "blueprint_path": bp,
+                    "graph_id": "caller",
+                    "graph_name": "EventGraph",
+                    "node_class": "/Script/BlueprintGraph.K2Node_RemoveDelegate",
+                    "operation": "delegate_unbind",
+                    "symbol": "OnReadyDelegate",
+                    "semantic": {
+                        "delegate_name": "OnReadyDelegate",
+                        "delegate_owner": owner,
+                        "delegate_member_guid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                        "delegate_self_context": True,
+                    },
+                },
+                {
+                    "node_id": function_create_id,
+                    "blueprint_path": bp,
+                    "graph_id": "caller",
+                    "graph_name": "EventGraph",
+                    "node_class": "/Script/BlueprintGraph.K2Node_CreateDelegate",
+                    "operation": "delegate_create",
+                    "symbol": "DoThing",
+                    "semantic": {
+                        "selected_function": "DoThing",
+                        "selected_function_guid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                        "selected_function_path": "/Game/Test/BP.BP_C:DoThing",
+                        "selected_function_scope_class": "/Game/Test/BP.BP_C",
                     },
                 },
             ]
@@ -165,7 +203,16 @@ class SemanticReportDelegateAuditTest(unittest.TestCase):
                 "target_pin_name": "Delegate",
             }])
             write_jsonl(root / "blueprint_data_dependencies.jsonl", [])
-            write_jsonl(root / "blueprint_functions.jsonl", [])
+            write_jsonl(root / "blueprint_functions.jsonl", [{
+                "function_id": "fn-do-thing",
+                "blueprint_path": bp,
+                "graph_id": "fn-do-thing",
+                "graph_name": "DoThing",
+                "name": "DoThing",
+                "resolved_function": "/Game/Test/BP.BP_C:DoThing",
+                "entry_node_id": "",
+                "result_node_ids": [],
+            }])
             write_jsonl(root / "blueprint_call_edges.jsonl", [])
             write_jsonl(root / "blueprint_call_bindings.jsonl", [])
             write_jsonl(root / "blueprints.jsonl", [{"object_path": bp, "blueprint_type": 0}])
@@ -201,30 +248,34 @@ class SemanticReportDelegateAuditTest(unittest.TestCase):
 
             result = report.build_report(root, rows)
 
-            self.assertEqual(result["delegate_node_count"], 4)
+            self.assertEqual(result["delegate_node_count"], 6)
             self.assertEqual(dict(result["delegate_operation_counts"]), {
                 "delegate_bind": 1,
                 "delegate_call": 1,
                 "delegate_clear": 1,
-                "delegate_create": 1,
+                "delegate_create": 2,
+                "delegate_unbind": 1,
             })
-            self.assertEqual(result["delegate_dispatcher_node_count"], 3)
-            self.assertEqual(result["delegate_exact_dispatcher_identity_count"], 3)
+            self.assertEqual(result["delegate_dispatcher_node_count"], 4)
+            self.assertEqual(result["delegate_exact_dispatcher_identity_count"], 4)
+            self.assertEqual(result["delegate_member_guid_count"], 4)
+            self.assertEqual(result["delegate_self_context_count"], 4)
+            self.assertEqual(result["delegate_external_context_count"], 0)
             self.assertEqual(
                 dict(result["delegate_dispatcher_identity_status"]),
-                {"exact_owner_and_name": 3},
+                {"exact_owner_and_name": 4},
             )
-            self.assertEqual(result["delegate_create_count"], 1)
-            self.assertEqual(result["delegate_create_selected_name_count"], 1)
-            self.assertEqual(result["delegate_create_selected_guid_count"], 1)
-            self.assertEqual(result["delegate_create_exact_endpoint_count"], 1)
+            self.assertEqual(result["delegate_create_count"], 2)
+            self.assertEqual(result["delegate_create_selected_name_count"], 2)
+            self.assertEqual(result["delegate_create_selected_guid_count"], 2)
+            self.assertEqual(result["delegate_create_exact_endpoint_count"], 2)
             self.assertEqual(
                 dict(result["delegate_create_status"]),
-                {"exact_guid_name_match": 1},
+                {"exact_function_path": 1, "exact_guid_name_case_variant": 1},
             )
             self.assertEqual(
                 dict(result["delegate_create_target_operations"]),
-                {"custom_event": 1},
+                {"custom_event": 1, "function": 1},
             )
             self.assertEqual(result["delegate_bind_assign_node_count"], 1)
             self.assertEqual(result["delegate_bind_assign_delegate_input_edge_count"], 1)
