@@ -607,7 +607,12 @@ def _combined_summary(args) -> None:
             f"returns={interprocedural_summary.get('macro_return_count', 0)} "
             f"terminals={interprocedural_summary.get('terminal_count', 0)} "
             f"data_routes={interprocedural_summary.get('data_route_count', 0)} "
-            f"data_ready={interprocedural_summary.get('data_bridge_ready_count', 0)}"
+            f"data_ready={interprocedural_summary.get('data_bridge_ready_count', 0)} "
+            f"function_edges={interprocedural_summary.get('function_edge_count', 0)} "
+            f"function_enters={interprocedural_summary.get('function_enter_count', 0)} "
+            f"function_returns={interprocedural_summary.get('function_return_count', 0)} "
+            f"function_terminals={interprocedural_summary.get('function_terminal_count', 0)} "
+            f"function_unreachable={interprocedural_summary.get('function_unreachable_callsite_count', 0)}"
         )
     if statement_summary:
         print(
@@ -626,6 +631,8 @@ def _combined_summary(args) -> None:
                 "blueprint_interprocedural_execution_edges",
                 "blueprint_interprocedural_execution_terminals",
                 "blueprint_interprocedural_data_routes",
+                "blueprint_interprocedural_function_execution_edges",
+                "blueprint_interprocedural_function_execution_terminals",
                 "blueprint_semantic_statements", "blueprint_semantic_blocks",
                 "mover_transition_behaviors", "mover_transition_routes",
                 "vfx_relations", "vfx_context", "vfx_summaries",
