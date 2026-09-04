@@ -658,6 +658,12 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
     function_direct_terminal_call_count = 0
     function_direct_exact_continuation_block_count = 0
     function_direct_bridge_ready_count = 0
+    function_direct_bridge_ready_connected_call_count = 0
+    function_direct_bridge_ready_terminal_call_count = 0
+    function_direct_expected_enter_edge_count = 0
+    function_direct_expected_return_edge_count = 0
+    function_direct_expected_terminal_record_count = 0
+    function_direct_bridge_ready_return_frontier_block_count = 0
     function_direct_binding_count = 0
 
     for call in call_edges:
@@ -841,7 +847,15 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
         continuation_shape_ok = (not outgoing) or continuation_ok_count == len(outgoing)
         if caller_ok and entry_ok and return_frontier_ok and continuation_shape_ok:
             function_direct_bridge_ready_count += 1
+            function_direct_expected_enter_edge_count += 1
             function_internal_kinds["direct_impure_bridge_ready"] += 1
+            if outgoing:
+                function_direct_bridge_ready_connected_call_count += 1
+                function_direct_expected_return_edge_count += len(terminal_blocks) * len(outgoing)
+            else:
+                function_direct_bridge_ready_terminal_call_count += 1
+                function_direct_expected_terminal_record_count += 1
+                function_direct_bridge_ready_return_frontier_block_count += len(terminal_blocks)
         else:
             function_internal_kinds["direct_impure_not_bridge_ready"] += 1
 
@@ -977,6 +991,12 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
         "function_direct_terminal_call_count": function_direct_terminal_call_count,
         "function_direct_exact_continuation_block_count": function_direct_exact_continuation_block_count,
         "function_direct_bridge_ready_count": function_direct_bridge_ready_count,
+        "function_direct_bridge_ready_connected_call_count": function_direct_bridge_ready_connected_call_count,
+        "function_direct_bridge_ready_terminal_call_count": function_direct_bridge_ready_terminal_call_count,
+        "function_direct_expected_enter_edge_count": function_direct_expected_enter_edge_count,
+        "function_direct_expected_return_edge_count": function_direct_expected_return_edge_count,
+        "function_direct_expected_terminal_record_count": function_direct_expected_terminal_record_count,
+        "function_direct_bridge_ready_return_frontier_block_count": function_direct_bridge_ready_return_frontier_block_count,
         "function_direct_binding_count": function_direct_binding_count,
         "control_rig_node_count": len(control_rig_nodes),
         "rigvm_link_count": len(rigvm_links),
@@ -1161,7 +1181,12 @@ def print_report(report: dict) -> None:
         f"terminal_calls={int(report.get('function_direct_terminal_call_count', 0) or 0)} "
         f"exact_continuation_blocks={int(report.get('function_direct_exact_continuation_block_count', 0) or 0)} "
         f"call_bindings={int(report.get('function_direct_binding_count', 0) or 0)} "
-        f"bridge_ready_calls={int(report.get('function_direct_bridge_ready_count', 0) or 0)}"
+        f"bridge_ready_calls={int(report.get('function_direct_bridge_ready_count', 0) or 0)} "
+        f"bridge_ready_connected={int(report.get('function_direct_bridge_ready_connected_call_count', 0) or 0)} "
+        f"bridge_ready_terminal={int(report.get('function_direct_bridge_ready_terminal_call_count', 0) or 0)} "
+        f"expected_enters={int(report.get('function_direct_expected_enter_edge_count', 0) or 0)} "
+        f"expected_returns={int(report.get('function_direct_expected_return_edge_count', 0) or 0)} "
+        f"expected_terminal_records={int(report.get('function_direct_expected_terminal_record_count', 0) or 0)}"
     )
     section("function target/block audit mismatches", "function_call_mismatches")
 
