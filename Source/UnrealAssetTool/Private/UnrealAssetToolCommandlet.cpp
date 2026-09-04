@@ -825,7 +825,11 @@ namespace UnrealAssetTool
         {
             if (UK2Node_BaseMCDelegate* DelegateNode = Cast<UK2Node_BaseMCDelegate>(Node))
             {
-                UClass* SelfScope = Blueprint ? Blueprint->SkeletonGeneratedClass : nullptr;
+                UClass* SelfScope = Blueprint
+                    ? (Blueprint->SkeletonGeneratedClass
+                        ? Blueprint->SkeletonGeneratedClass
+                        : Blueprint->GeneratedClass)
+                    : nullptr;
                 AddMemberReferenceFields(
                     DelegateNode->DelegateReference,
                     SelfScope,
