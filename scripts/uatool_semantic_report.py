@@ -926,6 +926,15 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
     function_data_status = collections.Counter()
     function_data_mismatches = collections.Counter()
     function_data_binding_count = len(call_bindings)
+    function_data_binding_schema_versions = collections.Counter(
+        int(binding.get("schema_version", 0) or 0)
+        for binding in call_bindings
+    )
+    function_data_binding_schema_current = bool(
+        call_bindings
+        and function_data_binding_schema_versions
+            == collections.Counter({core.BLUEPRINT_CALL_BINDING_SCHEMA_VERSION: len(call_bindings)})
+    )
     function_data_parameter_identity_count = 0
     function_data_member_identity_exact_count = 0
     function_data_split_parent_projection_count = 0
@@ -1523,6 +1532,8 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
         "interprocedural_data_value_kinds": top(interprocedural_data_value_kinds),
         "interprocedural_data_stream_alignment": interprocedural_data_stream_alignment,
         "function_data_binding_count": function_data_binding_count,
+        "function_data_binding_schema_versions": top(function_data_binding_schema_versions),
+        "function_data_binding_schema_current": function_data_binding_schema_current,
         "function_data_target_kinds": top(function_data_target_kinds),
         "function_data_directions": top(function_data_directions),
         "function_data_match_kinds": top(function_data_match_kinds),
@@ -1756,6 +1767,7 @@ def print_report(report: dict) -> None:
     print("\n[Blueprint function interprocedural data binding audit]")
     print(
         f"bindings={int(report.get('function_data_binding_count', 0) or 0)} "
+        f"binding_schema_current={bool(report.get('function_data_binding_schema_current', False))} "
         f"parameter_identity_verified={int(report.get('function_data_parameter_identity_count', 0) or 0)} "
         f"exact_member_identity={int(report.get('function_data_member_identity_exact_count', 0) or 0)} "
         f"split_parent_projections={int(report.get('function_data_split_parent_projection_count', 0) or 0)} "
@@ -1771,6 +1783,7 @@ def print_report(report: dict) -> None:
         f"signature_pin_equal={int(report.get('function_data_exact_signature_pin_equal_count', 0) or 0)} "
         f"call_pin_equal={int(report.get('function_data_exact_call_pin_equal_count', 0) or 0)}"
     )
+    section("function binding schema versions", "function_data_binding_schema_versions")
     section("function exact type surface shapes", "function_data_type_surface_shapes")
     section("function exact type differing fields", "function_data_type_diff_fields")
     print(
