@@ -867,12 +867,17 @@ def validation_error(output: Path, rows) -> str | None:
 
     try:
         expected_edges, expected_terminals, expected_data_routes = derive(output, rows)
+        expected_function_edges, expected_function_terminals, _function_stats = (
+            derive_function_execution(output, rows)
+        )
     except RuntimeError as exc:
         return str(exc)
 
     actual_edges = list(rows(output / DERIVED_FILES[0]))
     actual_terminals = list(rows(output / DERIVED_FILES[1]))
     actual_data_routes = list(rows(output / DERIVED_FILES[2]))
+    actual_function_edges = list(rows(output / DERIVED_FILES[3]))
+    actual_function_terminals = list(rows(output / DERIVED_FILES[4]))
 
     if actual_edges != expected_edges:
         return (
@@ -889,16 +894,32 @@ def validation_error(output: Path, rows) -> str | None:
             "Blueprint interprocedural data routes do not exactly match "
             "schema-4 macro proofs and canonical data provenance"
         )
+    if actual_function_edges != expected_function_edges:
+        return (
+            "Blueprint interprocedural function execution edges do not exactly match "
+            "exact internal call targets and canonical execution topology"
+        )
+    if actual_function_terminals != expected_function_terminals:
+        return (
+            "Blueprint interprocedural function execution terminals do not exactly match "
+            "exact internal call targets and canonical execution topology"
+        )
 
     edge_ids = [str(row.get("interprocedural_edge_id", "") or "") for row in actual_edges]
     terminal_ids = [str(row.get("terminal_id", "") or "") for row in actual_terminals]
     route_ids = [str(row.get("route_id", "") or "") for row in actual_data_routes]
+    function_edge_ids = [str(row.get("function_edge_id", "") or "") for row in actual_function_edges]
+    function_terminal_ids = [str(row.get("terminal_id", "") or "") for row in actual_function_terminals]
     if any(not value for value in edge_ids) or len(edge_ids) != len(set(edge_ids)):
         return "Blueprint interprocedural execution edges contain missing/duplicate ids"
     if any(not value for value in terminal_ids) or len(terminal_ids) != len(set(terminal_ids)):
         return "Blueprint interprocedural execution terminals contain missing/duplicate ids"
     if any(not value for value in route_ids) or len(route_ids) != len(set(route_ids)):
         return "Blueprint interprocedural data routes contain missing/duplicate ids"
+    if any(not value for value in function_edge_ids) or len(function_edge_ids) != len(set(function_edge_ids)):
+        return "Blueprint interprocedural function execution edges contain missing/duplicate ids"
+    if any(not value for value in function_terminal_ids) or len(function_terminal_ids) != len(set(function_terminal_ids)):
+        return "Blueprint interprocedural function terminals contain missing/duplicate ids"
 
     for row in actual_edges:
         if int(row.get("schema_version", 0) or 0) != INTERPROCEDURAL_SCHEMA_VERSION:
@@ -924,6 +945,24 @@ def validation_error(output: Path, rows) -> str | None:
             return f"unexpected Blueprint interprocedural data route kind: {kind!r}"
         if not str(row.get("call_pin_id", "") or "") or not str(row.get("interface_pin_id", "") or ""):
             return f"Blueprint interprocedural data route lacks exact pin identity: {row.get('route_id')}"
+
+    for row in actual_function_edges:
+        if int(row.get("schema_version", 0) or 0) != INTERPROCEDURAL_SCHEMA_VERSION:
+            return f"unexpected Blueprint function interprocedural edge schema: {row.get('schema_version')!r}"
+        if str(row.get("edge_kind", "") or "") not in {"function_enter", "function_return"}:
+            return f"unexpected Blueprint function interprocedural edge kind: {row.get('edge_kind')!r}"
+        if not str(row.get("source_block_id", "") or "") or not str(row.get("target_block_id", "") or ""):
+            return f"Blueprint function interprocedural edge lacks block endpoint: {row.get('function_edge_id')}"
+
+    for row in actual_function_terminals:
+        if int(row.get("schema_version", 0) or 0) != INTERPROCEDURAL_SCHEMA_VERSION:
+            return f"unexpected Blueprint function interprocedural terminal schema: {row.get('schema_version')!r}"
+        if str(row.get("terminal_kind", "") or "") != "function_call_no_continuation":
+            return f"unexpected Blueprint function terminal kind: {row.get('terminal_kind')!r}"
+        if int(row.get("canonical_outgoing_exec_count", -1)) != 0:
+            return f"Blueprint function terminal has caller continuation: {row.get('terminal_id')}"
+        if int(row.get("return_frontier_block_count", 0) or 0) <= 0:
+            return f"Blueprint function terminal lacks return frontier: {row.get('terminal_id')}"
     return None
 
 
