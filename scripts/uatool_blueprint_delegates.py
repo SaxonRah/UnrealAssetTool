@@ -18,7 +18,7 @@ from pathlib import Path
 
 import uatool_core as core
 
-DELEGATE_BINDING_SCHEMA_VERSION = 2
+DELEGATE_BINDING_SCHEMA_VERSION = 3
 DERIVED_FILES = ("blueprint_delegate_bindings.jsonl",)
 
 _SQL = """
@@ -31,6 +31,8 @@ CREATE TABLE blueprint_delegate_bindings(
  dispatcher_local_scope TEXT NOT NULL,dispatcher_member_scope TEXT NOT NULL,
  source_node_id TEXT NOT NULL,source_operation TEXT NOT NULL,
  source_pin_id TEXT NOT NULL,target_pin_id TEXT NOT NULL,
+ source_resolution_basis TEXT NOT NULL,source_reroute_node_ids_json TEXT NOT NULL,
+ source_route_json TEXT NOT NULL,
  endpoint_kind TEXT NOT NULL,endpoint_name TEXT NOT NULL,
  endpoint_id TEXT NOT NULL,endpoint_path TEXT NOT NULL,
  endpoint_blueprint_path TEXT NOT NULL,endpoint_graph_id TEXT NOT NULL,
@@ -125,6 +127,50 @@ def derive(output: Path, rows) -> tuple[list[dict], dict]:
         if target_node_id:
             incoming_delegate_edges[target_node_id].append(edge)
 
+    def resolve_delegate_source(edge: dict, bind_node_id: str) -> tuple[dict, list[str], list[dict]]:
+        current = edge
+        seen: set[str] = set()
+        reroutes_backwards: list[str] = []
+        route_backwards: list[dict] = []
+
+        while True:
+            source_node_id = str(current.get("source_node_id", "") or "")
+            source_node = node_by_id.get(source_node_id)
+            if source_node is None:
+                raise RuntimeError(
+                    f"delegate binding source node missing: {bind_node_id} <- {source_node_id}"
+                )
+
+            route_backwards.append({
+                "source_node_id": source_node_id,
+                "source_pin_id": str(current.get("source_pin_id", "") or ""),
+                "target_node_id": str(current.get("target_node_id", "") or ""),
+                "target_pin_id": str(current.get("target_pin_id", "") or ""),
+            })
+
+            source_operation = str(source_node.get("operation", "") or "")
+            if source_operation != "reroute":
+                return (
+                    source_node,
+                    list(reversed(reroutes_backwards)),
+                    list(reversed(route_backwards)),
+                )
+
+            if source_node_id in seen:
+                raise RuntimeError(
+                    f"delegate binding reroute cycle: {bind_node_id} <- {source_node_id}"
+                )
+            seen.add(source_node_id)
+            reroutes_backwards.append(source_node_id)
+
+            upstream = incoming_delegate_edges.get(source_node_id, [])
+            if len(upstream) != 1:
+                raise RuntimeError(
+                    f"delegate binding reroute lacks unique delegate input: "
+                    f"{bind_node_id} <- {source_node_id} incoming={len(upstream)}"
+                )
+            current = upstream[0]
+
     stats = collections.Counter()
     result: list[dict] = []
 
@@ -163,14 +209,19 @@ def derive(output: Path, rows) -> tuple[list[dict], dict]:
             )
 
         for edge in incoming:
-            source_node_id = str(edge.get("source_node_id", "") or "")
-            source_node = node_by_id.get(source_node_id)
-            if source_node is None:
-                raise RuntimeError(
-                    f"delegate binding source node missing: {bind_node_id} <- {source_node_id}"
-                )
-
+            source_node, source_reroute_node_ids, source_route = resolve_delegate_source(
+                edge, bind_node_id
+            )
+            source_node_id = str(source_node.get("node_id", "") or "")
             source_operation = str(source_node.get("operation", "") or "")
+            source_resolution_basis = (
+                "transparent_reroute_chain"
+                if source_reroute_node_ids else
+                "direct"
+            )
+            stats[f"source_resolution:{source_resolution_basis}"] += 1
+            stats["reroute_hops"] += len(source_reroute_node_ids)
+
             endpoint_kind = ""
             endpoint_name = ""
             endpoint_id = ""
@@ -297,7 +348,7 @@ def derive(output: Path, rows) -> tuple[list[dict], dict]:
                     f"{source_operation}: {bind_node_id} <- {source_node_id}"
                 )
 
-            source_pin_id = str(edge.get("source_pin_id", "") or "")
+            source_pin_id = str(source_route[0].get("source_pin_id", "") or "")
             target_pin_id = str(edge.get("target_pin_id", "") or "")
             binding_id = _id(
                 blueprint_path,
@@ -309,6 +360,7 @@ def derive(output: Path, rows) -> tuple[list[dict], dict]:
                 source_node_id,
                 source_pin_id,
                 target_pin_id,
+                *source_reroute_node_ids,
                 endpoint_kind,
                 endpoint_id,
                 endpoint_path,
@@ -330,6 +382,9 @@ def derive(output: Path, rows) -> tuple[list[dict], dict]:
                 "source_operation": source_operation,
                 "source_pin_id": source_pin_id,
                 "target_pin_id": target_pin_id,
+                "source_resolution_basis": source_resolution_basis,
+                "source_reroute_node_ids": source_reroute_node_ids,
+                "source_route": source_route,
                 "endpoint_kind": endpoint_kind,
                 "endpoint_name": endpoint_name,
                 "endpoint_id": endpoint_id,
@@ -386,6 +441,24 @@ def validation_error(output: Path, rows) -> str | None:
     for row in actual:
         if int(row.get("schema_version", 0) or 0) != DELEGATE_BINDING_SCHEMA_VERSION:
             return f"unexpected Blueprint delegate binding schema: {row.get('schema_version')!r}"
+        if str(row.get("source_resolution_basis", "") or "") not in {
+            "direct",
+            "transparent_reroute_chain",
+        }:
+            return f"unexpected Blueprint delegate source basis: {row.get('source_resolution_basis')!r}"
+        route = row.get("source_route", [])
+        reroutes = row.get("source_reroute_node_ids", [])
+        if not isinstance(route, list) or not route:
+            return f"delegate binding lacks exact source route: {row.get('binding_id')}"
+        if not isinstance(reroutes, list):
+            return f"delegate binding reroute provenance invalid: {row.get('binding_id')}"
+        if str(route[0].get("source_node_id", "") or "") != str(row.get("source_node_id", "") or ""):
+            return f"delegate binding source route origin mismatch: {row.get('binding_id')}"
+        if str(route[-1].get("target_node_id", "") or "") != str(row.get("bind_node_id", "") or ""):
+            return f"delegate binding source route target mismatch: {row.get('binding_id')}"
+        expected_basis = "transparent_reroute_chain" if reroutes else "direct"
+        if str(row.get("source_resolution_basis", "") or "") != expected_basis:
+            return f"delegate binding source basis/provenance mismatch: {row.get('binding_id')}"
         if str(row.get("bind_operation", "") or "") not in {
             "delegate_bind",
             "delegate_assign",
@@ -408,7 +481,7 @@ def load_database(conn, output: Path, rows) -> None:
     for row in rows(Path(output) / DERIVED_FILES[0]):
         conn.execute(
             "INSERT OR REPLACE INTO blueprint_delegate_bindings VALUES "
-            "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 row.get("binding_id", ""),
                 int(row.get("schema_version", 0) or 0),
@@ -426,6 +499,9 @@ def load_database(conn, output: Path, rows) -> None:
                 row.get("source_operation", ""),
                 row.get("source_pin_id", ""),
                 row.get("target_pin_id", ""),
+                row.get("source_resolution_basis", ""),
+                _j(row.get("source_reroute_node_ids", [])),
+                _j(row.get("source_route", [])),
                 row.get("endpoint_kind", ""),
                 row.get("endpoint_name", ""),
                 row.get("endpoint_id", ""),

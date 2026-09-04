@@ -201,7 +201,7 @@ class BlueprintDelegateBindingsTest(unittest.TestCase):
             self.assertEqual(stats["basis:direct_event_node"], 1)
 
             by_basis = {row["resolution_basis"]: row for row in bindings}
-            self.assertEqual(by_basis["selected_guid"]["schema_version"], 2)
+            self.assertEqual(by_basis["selected_guid"]["schema_version"], 3)
             self.assertEqual(by_basis["selected_guid"]["endpoint_kind"], "custom_event")
             self.assertEqual(by_basis["selected_guid"]["endpoint_id"], event_id)
             self.assertEqual(
@@ -212,7 +212,7 @@ class BlueprintDelegateBindingsTest(unittest.TestCase):
                 by_basis["selected_guid"]["selected_function_guid"],
                 event_guid,
             )
-            self.assertEqual(by_basis["selected_function_path"]["schema_version"], 2)
+            self.assertEqual(by_basis["selected_function_path"]["schema_version"], 3)
             self.assertEqual(by_basis["selected_function_path"]["endpoint_kind"], "function")
             self.assertEqual(
                 by_basis["selected_function_path"]["endpoint_path"],
@@ -259,6 +259,171 @@ class BlueprintDelegateBindingsTest(unittest.TestCase):
                 )
             finally:
                 conn.close()
+
+
+    def test_delegate_reroute_chain_is_exact_and_ambiguous_or_cyclic_chains_fail(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            bp = "/Game/Test/BP.BP"
+            owner = "/Game/Test/BP_Target.BP_Target_C"
+            event_guid = "11111111-2222-3333-4444-555555555555"
+            event_id = f"{bp}::graph::graph::node::{event_guid}"
+            create_id = f"{bp}::graph::graph::node::aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+            reroute_a = f"{bp}::graph::graph::node::bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
+            reroute_b = f"{bp}::graph::graph::node::cccccccc-dddd-eeee-ffff-000000000000"
+            bind_id = f"{bp}::graph::graph::node::dddddddd-eeee-ffff-0000-111111111111"
+            dispatcher_guid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+
+            nodes = [
+                {
+                    "node_id": event_id,
+                    "blueprint_path": bp,
+                    "graph_id": "graph",
+                    "operation": "custom_event",
+                    "symbol": "OnEvent",
+                    "semantic": {},
+                },
+                {
+                    "node_id": create_id,
+                    "blueprint_path": bp,
+                    "graph_id": "graph",
+                    "operation": "delegate_create",
+                    "symbol": "OnEvent",
+                    "semantic": {
+                        "selected_function": "OnEvent",
+                        "selected_function_guid": event_guid,
+                        "selected_function_path": "/Game/Test/BP.SKEL_BP_C:OnEvent",
+                        "selected_function_scope_class": "/Game/Test/BP.SKEL_BP_C",
+                    },
+                },
+                {
+                    "node_id": reroute_a,
+                    "blueprint_path": bp,
+                    "graph_id": "graph",
+                    "operation": "reroute",
+                    "symbol": "",
+                    "semantic": {},
+                },
+                {
+                    "node_id": reroute_b,
+                    "blueprint_path": bp,
+                    "graph_id": "graph",
+                    "operation": "reroute",
+                    "symbol": "",
+                    "semantic": {},
+                },
+                {
+                    "node_id": bind_id,
+                    "blueprint_path": bp,
+                    "graph_id": "graph",
+                    "operation": "delegate_bind",
+                    "symbol": "OnEventDelegate",
+                    "semantic": {
+                        "delegate_name": "OnEventDelegate",
+                        "delegate_owner": owner,
+                        "delegate_member_guid": dispatcher_guid,
+                        "delegate_self_context": False,
+                        "delegate_local_scope": False,
+                        "delegate_member_scope": "",
+                    },
+                },
+            ]
+            write_jsonl(root / "blueprint_nodes.jsonl", nodes)
+            write_jsonl(root / "blueprint_functions.jsonl", [])
+            write_jsonl(root / "blueprint_pins.jsonl", [
+                pin("create-out", create_id, "OutputDelegate", "output"),
+                pin("ra-in", reroute_a, "InputPin", "input"),
+                pin("ra-out", reroute_a, "OutputPin", "output"),
+                pin("rb-in", reroute_b, "InputPin", "input"),
+                pin("rb-out", reroute_b, "OutputPin", "output"),
+                pin("bind-in", bind_id, "Delegate", "input"),
+            ])
+            edges = [
+                {
+                    "edge_kind": "data",
+                    "source_node_id": create_id,
+                    "source_pin_id": "create-out",
+                    "target_node_id": reroute_a,
+                    "target_pin_id": "ra-in",
+                },
+                {
+                    "edge_kind": "data",
+                    "source_node_id": reroute_a,
+                    "source_pin_id": "ra-out",
+                    "target_node_id": reroute_b,
+                    "target_pin_id": "rb-in",
+                },
+                {
+                    "edge_kind": "data",
+                    "source_node_id": reroute_b,
+                    "source_pin_id": "rb-out",
+                    "target_node_id": bind_id,
+                    "target_pin_id": "bind-in",
+                },
+            ]
+            write_jsonl(root / "blueprint_edges.jsonl", edges)
+
+            bindings, stats = delegates.derive(root, rows)
+            self.assertEqual(len(bindings), 1)
+            row = bindings[0]
+            self.assertEqual(row["schema_version"], 3)
+            self.assertEqual(row["source_node_id"], create_id)
+            self.assertEqual(row["source_resolution_basis"], "transparent_reroute_chain")
+            self.assertEqual(row["source_reroute_node_ids"], [reroute_a, reroute_b])
+            self.assertEqual(len(row["source_route"]), 3)
+            self.assertEqual(row["source_route"][0]["source_node_id"], create_id)
+            self.assertEqual(row["source_route"][-1]["target_node_id"], bind_id)
+            self.assertEqual(row["resolution_basis"], "selected_guid")
+            self.assertEqual(stats["source_resolution:transparent_reroute_chain"], 1)
+            self.assertEqual(stats["reroute_hops"], 2)
+
+            ambiguous_edges = list(edges)
+            ambiguous_edges.insert(1, {
+                "edge_kind": "data",
+                "source_node_id": event_id,
+                "source_pin_id": "event-out",
+                "target_node_id": reroute_a,
+                "target_pin_id": "ra-in",
+            })
+            write_jsonl(root / "blueprint_pins.jsonl", [
+                pin("create-out", create_id, "OutputDelegate", "output"),
+                pin("event-out", event_id, "OutputDelegate", "output"),
+                pin("ra-in", reroute_a, "InputPin", "input"),
+                pin("ra-out", reroute_a, "OutputPin", "output"),
+                pin("rb-in", reroute_b, "InputPin", "input"),
+                pin("rb-out", reroute_b, "OutputPin", "output"),
+                pin("bind-in", bind_id, "Delegate", "input"),
+            ])
+            write_jsonl(root / "blueprint_edges.jsonl", ambiguous_edges)
+            with self.assertRaisesRegex(RuntimeError, "reroute lacks unique delegate input"):
+                delegates.derive(root, rows)
+
+            cyclic_edges = [
+                {
+                    "edge_kind": "data",
+                    "source_node_id": reroute_b,
+                    "source_pin_id": "rb-out",
+                    "target_node_id": reroute_a,
+                    "target_pin_id": "ra-in",
+                },
+                {
+                    "edge_kind": "data",
+                    "source_node_id": reroute_a,
+                    "source_pin_id": "ra-out",
+                    "target_node_id": reroute_b,
+                    "target_pin_id": "rb-in",
+                },
+                {
+                    "edge_kind": "data",
+                    "source_node_id": reroute_b,
+                    "source_pin_id": "rb-out",
+                    "target_node_id": bind_id,
+                    "target_pin_id": "bind-in",
+                },
+            ]
+            write_jsonl(root / "blueprint_edges.jsonl", cyclic_edges)
+            with self.assertRaisesRegex(RuntimeError, "reroute cycle"):
+                delegates.derive(root, rows)
 
 
 if __name__ == "__main__":

@@ -17,7 +17,7 @@ CURRENT_SCHEMAS = {
     "systems": 11,
     "mesh": 1,
     "world_geometry": 1,
-    "derived": 38,
+    "derived": 39,
     "capabilities": 1,
 }
 

@@ -31,10 +31,10 @@ import uatool_verify_bundle as bundle_verify
 import uatool_version as version
 import uatool_beta_rc as beta_rc
 
-# Public derived schema 38 preserves the strongest authored Blueprint delegate
-# endpoint identity: exact event-node GUIDs take precedence over compiled
-# UFunction aliases while both remain available as provenance.
-FINAL_DERIVED_SCHEMA_VERSION = 38
+# Public derived schema 39 preserves exact Blueprint delegate bindings through
+# transparent reroute chains while retaining the authored endpoint and every
+# reroute hop as provenance.
+FINAL_DERIVED_SCHEMA_VERSION = 39
 project_graph.DERIVED_SCHEMA_VERSION = FINAL_DERIVED_SCHEMA_VERSION
 SCRIPT_DIR = Path(__file__).resolve().parent
 
