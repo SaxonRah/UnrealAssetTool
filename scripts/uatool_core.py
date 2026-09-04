@@ -20,6 +20,7 @@ from typing import Iterable, Iterator
 
 DB_NAME = "uat.db"
 MODULE_NAME = "UnrealAssetTool"
+BLUEPRINT_CALL_BINDING_SCHEMA_VERSION = 2
 
 WORLD_RAW_FILES = (
     "world_manifest.json",
@@ -2435,10 +2436,14 @@ def derive_blueprint_call_bindings(
     function_by_id = {str(row.get("function_id", "")): row for row in functions}
 
     pins_by_node: dict[str, list[dict]] = collections.defaultdict(list)
+    pin_by_id: dict[str, dict] = {}
     for pin in iter_blueprint_pin_rows(output):
         node_id = str(pin.get("node_id", ""))
+        pin_id = str(pin.get("pin_id", ""))
         if node_id:
             pins_by_node[node_id].append(pin)
+        if pin_id:
+            pin_by_id[pin_id] = pin
 
     outgoing_by_pin: dict[str, list[dict]] = collections.defaultdict(list)
     for edge in iter_jsonl(output / "blueprint_edges.jsonl"):
@@ -2461,6 +2466,33 @@ def derive_blueprint_call_bindings(
 
     def is_input_pin(pin: dict) -> bool:
         return str(pin.get("direction", "")).lower() in {"input", "egpd_input", "0"}
+
+    def normalized_type(pin_type: dict) -> dict:
+        pin_type = pin_type if isinstance(pin_type, dict) else {}
+        return {
+            "category": str(pin_type.get("category", "") or ""),
+            "subcategory": str(pin_type.get("subcategory", "") or ""),
+            "subcategory_object": str(pin_type.get("subcategory_object", "") or ""),
+            "container_type": int(pin_type.get("container_type", 0) or 0),
+            "is_reference": bool(pin_type.get("is_reference", False)),
+            "is_const": bool(pin_type.get("is_const", False)),
+        }
+
+    def value_type_key(pin_type: dict) -> tuple:
+        normalized = normalized_type(pin_type)
+        return (
+            normalized["category"],
+            normalized["subcategory"],
+            normalized["subcategory_object"],
+            normalized["container_type"],
+        )
+
+    def qualifiers(pin_type: dict) -> dict:
+        normalized = normalized_type(pin_type)
+        return {
+            "is_reference": normalized["is_reference"],
+            "is_const": normalized["is_const"],
+        }
 
     def parameter_records(function: dict, direction: str) -> list[dict]:
         if direction == "argument":
@@ -2543,6 +2575,15 @@ def derive_blueprint_call_bindings(
 
             call_pin_id = str(call_pin.get("pin_id", ""))
             parameter_pin_ids = [str(value) for value in parameter.get("pin_ids", []) if value]
+            parameter_pins = [
+                pin_by_id[pin_id]
+                for pin_id in parameter_pin_ids
+                if pin_id in pin_by_id
+            ]
+            parameter_pin_types = [
+                pin.get("type", {}) if isinstance(pin.get("type"), dict) else {}
+                for pin in parameter_pins
+            ]
             if direction == "argument":
                 dependency_ids = list(dependency_by_sink_pin.get(call_pin_id, []))
                 consumer_pin_ids = sorted({
@@ -2566,8 +2607,42 @@ def derive_blueprint_call_bindings(
             basis = "\x1f".join((call_node_id, direction, call_pin_id, str(parameter.get("name", ""))))
             binding_id = "bind:" + hashlib.sha1(basis.encode("utf-8")).hexdigest()[:24]
             call_pin_type = call_pin.get("type", {}) if isinstance(call_pin.get("type"), dict) else {}
+            parameter_type = parameter.get("type", {}) if isinstance(parameter.get("type"), dict) else {}
+
+            if match_kind == "exact":
+                parameter_identity_kind = "exact_parameter"
+                member_identity_exact = True
+                value_type_basis = "call_signature_parameter_pin"
+                value_type_compatible = bool(
+                    parameter_pin_ids
+                    and len(parameter_pins) == len(parameter_pin_ids)
+                    and value_type_key(call_pin_type) == value_type_key(parameter_type)
+                    and all(
+                        value_type_key(pin_type) == value_type_key(parameter_type)
+                        for pin_type in parameter_pin_types
+                    )
+                )
+            else:
+                parameter_identity_kind = "split_parent_projection"
+                member_identity_exact = False
+                value_type_basis = "signature_parent_parameter_pin"
+                value_type_compatible = bool(
+                    parameter_pin_ids
+                    and len(parameter_pins) == len(parameter_pin_ids)
+                    and all(
+                        value_type_key(pin_type) == value_type_key(parameter_type)
+                        for pin_type in parameter_pin_types
+                    )
+                )
+
+            qualifier_surfaces = {
+                "call_pin": qualifiers(call_pin_type),
+                "signature": qualifiers(parameter_type),
+                "parameter_pins": [qualifiers(pin_type) for pin_type in parameter_pin_types],
+            }
             rows.append({
                 "binding_id": binding_id,
+                "schema_version": BLUEPRINT_CALL_BINDING_SCHEMA_VERSION,
                 "call_id": call.get("call_id", ""),
                 "call_node_id": call_node_id,
                 "caller_blueprint_path": call.get("blueprint_path", ""),
@@ -2582,8 +2657,14 @@ def derive_blueprint_call_bindings(
                 "parameter_pin_ids": parameter_pin_ids,
                 "match_kind": match_kind,
                 "split_suffix": split_suffix,
+                "parameter_identity_kind": parameter_identity_kind,
+                "member_identity_exact": member_identity_exact,
                 "call_pin_type": call_pin_type,
-                "parameter_type": parameter.get("type", {}),
+                "parameter_type": parameter_type,
+                "parameter_pin_types": parameter_pin_types,
+                "value_type_compatible": value_type_compatible,
+                "value_type_basis": value_type_basis,
+                "qualifier_surfaces": qualifier_surfaces,
                 "dependency_ids": dependency_ids,
                 "consumer_pin_ids": consumer_pin_ids,
             })

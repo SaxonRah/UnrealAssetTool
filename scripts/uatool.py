@@ -369,6 +369,9 @@ def derive_output(output):
             "coverage": (classified_nodes / len(semantic_nodes)) if semantic_nodes else 1.0,
             "modeled_coverage": (modeled_nodes / len(semantic_nodes)) if semantic_nodes else 1.0,
         }
+        manifest["blueprint_call_binding_schema_version"] = (
+            core.BLUEPRINT_CALL_BINDING_SCHEMA_VERSION
+        )
         manifest["blueprint_interprocedural_schema_version"] = (
             blueprint_interprocedural.INTERPROCEDURAL_SCHEMA_VERSION
         )
@@ -644,6 +647,7 @@ def _combined_summary(args) -> None:
         f"schemas: vfx={vfx_manifest.get('schema_version', 0)} "
         f"systems={systems_manifest.get('schema_version', 0)} "
         f"bp_semantic={top_manifest.get('blueprint_semantic_schema_version', 0)} "
+        f"bp_call_bindings={top_manifest.get('blueprint_call_binding_schema_version', 0)} "
         f"bp_interprocedural={top_manifest.get('blueprint_interprocedural_schema_version', 0)} "
         f"bp_statement={top_manifest.get('blueprint_statement_schema_version', 0)} "
         f"mover_behavior={top_manifest.get('mover_behavior_schema_version', 0)} "

@@ -114,8 +114,8 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
     def pin_is_output(pin: dict) -> bool:
         return str(pin.get("direction", "") or "").lower() in {"output", "egpd_output", "1"}
 
-    def pin_type_key(pin: dict) -> str:
-        pin_type = pin.get("type", {}) if isinstance(pin.get("type"), dict) else {}
+    def type_key(pin_type: dict) -> str:
+        pin_type = pin_type if isinstance(pin_type, dict) else {}
         signature = {
             "category": str(pin_type.get("category", "") or ""),
             "subcategory": str(pin_type.get("subcategory", "") or ""),
@@ -125,6 +125,45 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
             "is_const": bool(pin_type.get("is_const", False)),
         }
         return json.dumps(signature, sort_keys=True, separators=(",", ":"))
+
+    def pin_type_key(pin: dict) -> str:
+        return type_key(pin.get("type", {}) if isinstance(pin.get("type"), dict) else {})
+
+    TYPE_FIELDS = (
+        "category",
+        "subcategory",
+        "subcategory_object",
+        "container_type",
+        "is_reference",
+        "is_const",
+    )
+
+    def normalized_type(pin_type: dict) -> dict:
+        pin_type = pin_type if isinstance(pin_type, dict) else {}
+        return {
+            "category": str(pin_type.get("category", "") or ""),
+            "subcategory": str(pin_type.get("subcategory", "") or ""),
+            "subcategory_object": str(pin_type.get("subcategory_object", "") or ""),
+            "container_type": int(pin_type.get("container_type", 0) or 0),
+            "is_reference": bool(pin_type.get("is_reference", False)),
+            "is_const": bool(pin_type.get("is_const", False)),
+        }
+
+    def type_diff_fields(left: dict, right: dict) -> tuple[str, ...]:
+        a = normalized_type(left)
+        b = normalized_type(right)
+        return tuple(field for field in TYPE_FIELDS if a[field] != b[field])
+
+    VALUE_TYPE_FIELDS = (
+        "category",
+        "subcategory",
+        "subcategory_object",
+        "container_type",
+    )
+
+    def value_type_key(pin_type: dict) -> tuple:
+        normalized = normalized_type(pin_type)
+        return tuple(normalized[field] for field in VALUE_TYPE_FIELDS)
 
     def tunnel_shape(node: dict) -> str:
         pins = pins_by_node.get(str(node.get("node_id", "") or ""), [])
@@ -875,6 +914,496 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
         else:
             function_internal_kinds["direct_impure_not_bridge_ready"] += 1
 
+    function_call_by_node = {
+        str(row.get("call_node_id", "") or ""): row
+        for row in call_edges
+        if row.get("call_node_id")
+    }
+
+    function_data_target_kinds = collections.Counter()
+    function_data_directions = collections.Counter()
+    function_data_match_kinds = collections.Counter()
+    function_data_status = collections.Counter()
+    function_data_mismatches = collections.Counter()
+    function_data_binding_count = len(call_bindings)
+    function_data_binding_schema_versions = collections.Counter(
+        int(binding.get("schema_version", 0) or 0)
+        for binding in call_bindings
+    )
+    function_data_binding_schema_current = bool(
+        call_bindings
+        and function_data_binding_schema_versions
+            == collections.Counter({core.BLUEPRINT_CALL_BINDING_SCHEMA_VERSION: len(call_bindings)})
+    )
+    function_data_parameter_identity_count = 0
+    function_data_member_identity_exact_count = 0
+    function_data_split_parent_projection_count = 0
+    function_data_value_type_verified_count = 0
+    function_data_type_verified_count = 0
+    function_data_qualifier_difference_count = 0
+    function_data_exact_call_signature_equal_count = 0
+    function_data_exact_signature_pin_equal_count = 0
+    function_data_exact_call_pin_equal_count = 0
+    function_data_type_diff_fields = collections.Counter()
+    function_data_type_surface_shapes = collections.Counter()
+    function_data_split_member_resolved_count = 0
+    function_data_split_member_unresolved_count = 0
+    function_data_split_parent_pin_count = 0
+    function_data_split_exact_name_candidate_count = 0
+    function_data_split_suffix_candidate_count = 0
+    function_data_split_prefixed_candidate_count = 0
+    function_data_split_candidate_shapes = collections.Counter()
+    function_data_split_candidate_examples: list[dict] = []
+
+    function_data_argument_count = 0
+    function_data_argument_connected_value_count = 0
+    function_data_argument_authored_value_count = 0
+    function_data_argument_no_value_count = 0
+    function_data_argument_body_consumer_count = 0
+    function_data_argument_unused_count = 0
+    function_data_argument_binding_verified_count = 0
+    function_data_argument_route_ready_count = 0
+
+    function_data_return_count = 0
+    function_data_return_dependency_count = 0
+    function_data_return_authored_value_pin_count = 0
+    function_data_return_missing_provenance_binding_count = 0
+    function_data_return_caller_consumer_count = 0
+    function_data_return_unused_count = 0
+    function_data_return_binding_verified_count = 0
+    function_data_return_route_ready_count = 0
+
+    def function_target_kind(call: dict, target: dict | None) -> str:
+        if target is None:
+            return "missing_target"
+        target_bp_path = str(
+            call.get("target_blueprint_path", "")
+            or target.get("blueprint_path", "")
+            or ""
+        )
+        target_bp = blueprint_by_path.get(target_bp_path)
+        target_bp_type = None
+        if target_bp is not None:
+            try:
+                target_bp_type = int(target_bp.get("blueprint_type", -1))
+            except (TypeError, ValueError):
+                target_bp_type = None
+        if bool(call.get("interface_call", False)) or target_bp_type == BPTYPE_INTERFACE:
+            return "interface_dispatch_or_declaration"
+        if bool(call.get("latent", False)):
+            return "latent_internal"
+        if bool(call.get("pure", False)):
+            return "pure_internal"
+        return (
+            "direct_impure_reachable"
+            if str(call.get("call_node_id", "") or "") in block_by_node
+            else "direct_impure_unreachable"
+        )
+
+    def parameter_candidate_pins(target: dict, direction: str, call_pin_name: str) -> list[dict]:
+        if direction == "argument":
+            node_ids = [str(target.get("entry_node_id", "") or "")]
+            want_output = True
+        else:
+            node_ids = [
+                str(value or "")
+                for value in (
+                    target.get("result_node_ids", [])
+                    if isinstance(target.get("result_node_ids"), list)
+                    else []
+                )
+                if value
+            ]
+            want_output = False
+        result: list[dict] = []
+        for node_id in node_ids:
+            for pin in pins_by_node.get(node_id, []):
+                if pin_is_output(pin) != want_output:
+                    continue
+                pin_type = pin.get("type", {}) if isinstance(pin.get("type"), dict) else {}
+                if str(pin_type.get("category", "") or "").lower() == "exec":
+                    continue
+                if str(pin.get("name", "") or "") == call_pin_name:
+                    result.append(pin)
+        return result
+
+    for binding in call_bindings:
+        call_node_id = str(binding.get("call_node_id", "") or "")
+        call = function_call_by_node.get(call_node_id)
+        if call is None:
+            function_data_mismatches[f"{call_node_id} :: missing_call_edge"] += 1
+            continue
+        target_function_id = str(binding.get("target_function_id", "") or "")
+        target = function_by_id.get(target_function_id)
+        if target is None:
+            function_data_mismatches[
+                f"{call_node_id} :: missing_target_function:{target_function_id}"
+            ] += 1
+            continue
+
+        target_kind = function_target_kind(call, target)
+        function_data_target_kinds[target_kind] += 1
+
+        direction = str(binding.get("direction", "") or "")
+        match_kind = str(binding.get("match_kind", "") or "")
+        function_data_directions[direction or "<empty>"] += 1
+        function_data_match_kinds[match_kind or "<empty>"] += 1
+        if direction not in {"argument", "return"}:
+            function_data_mismatches[
+                f"{call_node_id} :: unexpected_direction:{direction or '<empty>'}"
+            ] += 1
+            continue
+
+        call_pin_id = str(binding.get("call_pin_id", "") or "")
+        call_pin_name = str(binding.get("call_pin_name", "") or "")
+        call_pin = pin_by_id.get(call_pin_id)
+        if call_pin is None:
+            function_data_mismatches[
+                f"{call_node_id} :: {direction}:{call_pin_name} :: missing_call_pin:{call_pin_id}"
+            ] += 1
+            continue
+
+        parameter_pin_ids = [
+            str(value or "")
+            for value in (
+                binding.get("parameter_pin_ids", [])
+                if isinstance(binding.get("parameter_pin_ids"), list)
+                else []
+            )
+            if value
+        ]
+        exact_parameter_pins = [
+            pin_by_id[pin_id]
+            for pin_id in parameter_pin_ids
+            if pin_id in pin_by_id
+        ]
+
+        identity_ok = False
+        type_ok = False
+        if match_kind == "exact":
+            identity_ok = bool(parameter_pin_ids) and len(exact_parameter_pins) == len(parameter_pin_ids)
+            expected_type = binding.get("parameter_type", {})
+            call_type = binding.get("call_pin_type", {})
+            call_signature_equal = type_key(call_type) == type_key(expected_type)
+            signature_pin_equal = bool(
+                identity_ok
+                and all(pin_type_key(pin) == type_key(expected_type) for pin in exact_parameter_pins)
+            )
+            call_pin_equal = bool(
+                identity_ok
+                and all(pin_type_key(pin) == type_key(call_type) for pin in exact_parameter_pins)
+            )
+            if call_signature_equal:
+                function_data_exact_call_signature_equal_count += 1
+            if signature_pin_equal:
+                function_data_exact_signature_pin_equal_count += 1
+            if call_pin_equal:
+                function_data_exact_call_pin_equal_count += 1
+
+            shape = (
+                f"call_signature={'same' if call_signature_equal else 'diff'} "
+                f"signature_pin={'same' if signature_pin_equal else 'diff'} "
+                f"call_pin={'same' if call_pin_equal else 'diff'}"
+            )
+            function_data_type_surface_shapes[shape] += 1
+
+            if not call_signature_equal:
+                for field in type_diff_fields(call_type, expected_type):
+                    function_data_type_diff_fields[f"call_vs_signature:{field}"] += 1
+            if identity_ok:
+                for pin in exact_parameter_pins:
+                    pin_type = pin.get("type", {}) if isinstance(pin.get("type"), dict) else {}
+                    if type_key(pin_type) != type_key(expected_type):
+                        for field in type_diff_fields(expected_type, pin_type):
+                            function_data_type_diff_fields[f"signature_vs_pin:{field}"] += 1
+                    if type_key(pin_type) != type_key(call_type):
+                        for field in type_diff_fields(call_type, pin_type):
+                            function_data_type_diff_fields[f"call_vs_pin:{field}"] += 1
+
+            value_type_ok = bool(
+                identity_ok
+                and value_type_key(call_type) == value_type_key(expected_type)
+                and all(
+                    value_type_key(
+                        pin.get("type", {}) if isinstance(pin.get("type"), dict) else {}
+                    ) == value_type_key(expected_type)
+                    for pin in exact_parameter_pins
+                )
+            )
+            type_ok = value_type_ok
+            if identity_ok:
+                function_data_member_identity_exact_count += 1
+            if value_type_ok:
+                function_data_value_type_verified_count += 1
+                if not (call_signature_equal and signature_pin_equal and call_pin_equal):
+                    function_data_qualifier_difference_count += 1
+                    function_data_status["qualifier_presentation_differs"] += 1
+            if not identity_ok:
+                function_data_mismatches[
+                    f"{call_node_id} :: {direction}:{call_pin_name} :: exact_parameter_pin_missing"
+                ] += 1
+            elif not value_type_ok:
+                function_data_mismatches[
+                    f"{call_node_id} :: {direction}:{call_pin_name} :: structural_value_type_mismatch"
+                ] += 1
+        elif match_kind == "split_struct":
+            member_pins = parameter_candidate_pins(target, direction, call_pin_name)
+            exact_parameter_pins = member_pins
+            identity_ok = bool(member_pins)
+            if direction == "argument" and len(member_pins) != 1:
+                identity_ok = False
+
+            parent_pins = [
+                pin_by_id[pin_id]
+                for pin_id in parameter_pin_ids
+                if pin_id in pin_by_id
+            ]
+            function_data_split_parent_pin_count += int(bool(parent_pins))
+
+            parameter_name = str(binding.get("parameter_name", "") or "")
+            split_suffix = str(binding.get("split_suffix", "") or "")
+            if direction == "argument":
+                node_ids = [str(target.get("entry_node_id", "") or "")]
+                want_output = True
+            else:
+                node_ids = [
+                    str(value or "")
+                    for value in (
+                        target.get("result_node_ids", [])
+                        if isinstance(target.get("result_node_ids"), list)
+                        else []
+                    )
+                    if value
+                ]
+                want_output = False
+
+            raw_candidate_pins = []
+            for node_id in node_ids:
+                for candidate in pins_by_node.get(node_id, []):
+                    if pin_is_output(candidate) != want_output:
+                        continue
+                    candidate_type = candidate.get("type", {}) if isinstance(candidate.get("type"), dict) else {}
+                    if str(candidate_type.get("category", "") or "").lower() == "exec":
+                        continue
+                    raw_candidate_pins.append(candidate)
+
+            exact_name_candidates = [
+                pin for pin in raw_candidate_pins
+                if str(pin.get("name", "") or "") == call_pin_name
+            ]
+            suffix_candidates = [
+                pin for pin in raw_candidate_pins
+                if split_suffix and str(pin.get("name", "") or "") == split_suffix
+            ]
+            prefixed_candidates = [
+                pin for pin in raw_candidate_pins
+                if parameter_name
+                and str(pin.get("name", "") or "").startswith(parameter_name + "_")
+            ]
+            function_data_split_exact_name_candidate_count += len(exact_name_candidates)
+            function_data_split_suffix_candidate_count += len(suffix_candidates)
+            function_data_split_prefixed_candidate_count += len(prefixed_candidates)
+            function_data_split_candidate_shapes[
+                (
+                    f"parent={'yes' if parent_pins else 'no'} "
+                    f"exact={len(exact_name_candidates)} "
+                    f"suffix={len(suffix_candidates)} "
+                    f"prefixed={len(prefixed_candidates)} "
+                    f"raw_nonexec={len(raw_candidate_pins)}"
+                )
+            ] += 1
+            if len(function_data_split_candidate_examples) < limit:
+                function_data_split_candidate_examples.append({
+                    "call_node_id": call_node_id,
+                    "direction": direction,
+                    "call_pin_name": call_pin_name,
+                    "parameter_name": parameter_name,
+                    "split_suffix": split_suffix,
+                    "parent_pin_names": sorted(
+                        str(pin.get("name", "") or "") for pin in parent_pins
+                    ),
+                    "raw_pin_names": sorted(
+                        str(pin.get("name", "") or "") for pin in raw_candidate_pins
+                    ),
+                })
+
+            # UE keeps these members split only at the call site in the
+            # representative GASP corpus. The callee boundary exposes the exact
+            # unsplit parent parameter. Treat that as an authored parent
+            # projection, not as a missing child-pin defect.
+            expected_type = binding.get("parameter_type", {})
+            parent_identity_ok = bool(
+                parameter_pin_ids
+                and len(parent_pins) == len(parameter_pin_ids)
+            )
+            parent_value_type_ok = bool(
+                parent_identity_ok
+                and all(
+                    value_type_key(
+                        pin.get("type", {}) if isinstance(pin.get("type"), dict) else {}
+                    ) == value_type_key(expected_type)
+                    for pin in parent_pins
+                )
+            )
+            identity_ok = parent_identity_ok
+            type_ok = parent_value_type_ok
+            exact_parameter_pins = parent_pins
+
+            if parent_identity_ok:
+                function_data_split_parent_projection_count += 1
+                function_data_status["split_parent_projection"] += 1
+            else:
+                function_data_mismatches[
+                    f"{call_node_id} :: {direction}:{call_pin_name} :: split_parent_parameter_missing"
+                ] += 1
+            if parent_value_type_ok:
+                function_data_value_type_verified_count += 1
+            elif parent_identity_ok:
+                function_data_mismatches[
+                    f"{call_node_id} :: {direction}:{call_pin_name} :: split_parent_value_type_mismatch"
+                ] += 1
+
+            # Keep the diagnostic counts from the first pass explicit: no
+            # exact member pin is claimed unless one is actually captured.
+            if member_pins:
+                function_data_split_member_resolved_count += 1
+                function_data_status["split_member_exact_pin_resolved"] += 1
+            else:
+                function_data_split_member_unresolved_count += 1
+                function_data_status["split_member_identity_not_captured"] += 1
+        else:
+            function_data_mismatches[
+                f"{call_node_id} :: {direction}:{call_pin_name} :: unexpected_match_kind:{match_kind or '<empty>'}"
+            ] += 1
+
+        if identity_ok:
+            function_data_parameter_identity_count += 1
+            function_data_status["parameter_identity_verified"] += 1
+        if type_ok:
+            function_data_type_verified_count += 1
+            function_data_status["value_type_verified"] += 1
+
+        binding_contract_kind = str(binding.get("parameter_identity_kind", "") or "")
+        binding_contract_type = binding.get("value_type_compatible")
+        if binding_contract_kind:
+            expected_kind = (
+                "exact_parameter" if match_kind == "exact"
+                else "split_parent_projection" if match_kind == "split_struct"
+                else ""
+            )
+            if expected_kind and binding_contract_kind != expected_kind:
+                function_data_mismatches[
+                    f"{call_node_id} :: {direction}:{call_pin_name} :: binding_identity_contract_mismatch"
+                ] += 1
+        if binding_contract_type is not None and bool(binding_contract_type) != bool(type_ok):
+            function_data_mismatches[
+                f"{call_node_id} :: {direction}:{call_pin_name} :: binding_value_type_contract_mismatch"
+            ] += 1
+
+        implementation_target = target_kind not in {
+            "interface_dispatch_or_declaration",
+            "latent_internal",
+            "missing_target",
+        }
+
+        if direction == "argument":
+            function_data_argument_count += 1
+            dependency_ids = [
+                str(value or "")
+                for value in (
+                    binding.get("dependency_ids", [])
+                    if isinstance(binding.get("dependency_ids"), list)
+                    else []
+                )
+                if value
+            ]
+            incoming = data_incoming_by_pin.get(call_pin_id, [])
+            has_connected_value = bool(dependency_ids or incoming)
+            has_authored_value = pin_has_authored_value(call_pin)
+            if has_connected_value:
+                function_data_argument_connected_value_count += 1
+                function_data_status["argument_connected_value"] += 1
+                has_value = True
+            elif has_authored_value:
+                function_data_argument_authored_value_count += 1
+                function_data_status["argument_authored_value"] += 1
+                has_value = True
+            else:
+                function_data_argument_no_value_count += 1
+                function_data_status["argument_no_value_evidence"] += 1
+                has_value = False
+
+            consumers = [
+                edge
+                for pin in exact_parameter_pins
+                for edge in data_outgoing_by_pin.get(str(pin.get("pin_id", "") or ""), [])
+            ]
+            function_data_argument_body_consumer_count += len(consumers)
+            if consumers:
+                function_data_status["argument_used_by_callee"] += 1
+            else:
+                function_data_argument_unused_count += 1
+                function_data_status["argument_unused_by_callee"] += 1
+
+            binding_verified = bool(implementation_target and identity_ok and type_ok and has_value)
+            if binding_verified:
+                function_data_argument_binding_verified_count += 1
+                function_data_status["argument_binding_verified"] += 1
+            member_route_exact = match_kind == "exact"
+            if binding_verified and consumers and member_route_exact:
+                function_data_argument_route_ready_count += 1
+                function_data_status["argument_route_ready"] += 1
+            elif binding_verified and consumers and match_kind == "split_struct":
+                function_data_status["argument_split_projection_not_member_route"] += 1
+            continue
+
+        function_data_return_count += 1
+        dependency_rows_by_pin = {
+            str(pin.get("pin_id", "") or ""): dependency_by_sink_pin.get(
+                str(pin.get("pin_id", "") or ""), []
+            )
+            for pin in exact_parameter_pins
+        }
+        dependency_count = sum(len(values) for values in dependency_rows_by_pin.values())
+        function_data_return_dependency_count += dependency_count
+        authored_result_pin_count = sum(
+            int(pin_has_authored_value(pin))
+            for pin in exact_parameter_pins
+        )
+        function_data_return_authored_value_pin_count += authored_result_pin_count
+
+        provenance_complete = bool(exact_parameter_pins) and all(
+            dependency_rows_by_pin.get(str(pin.get("pin_id", "") or ""))
+            or pin_has_authored_value(pin)
+            for pin in exact_parameter_pins
+        )
+        if provenance_complete:
+            function_data_status["return_internal_provenance_complete"] += 1
+        else:
+            function_data_return_missing_provenance_binding_count += 1
+            function_data_status["return_internal_provenance_incomplete"] += 1
+
+        caller_consumers = data_outgoing_by_pin.get(call_pin_id, [])
+        function_data_return_caller_consumer_count += len(caller_consumers)
+        if caller_consumers:
+            function_data_status["return_used_by_caller"] += 1
+        else:
+            function_data_return_unused_count += 1
+            function_data_status["return_unused_by_caller"] += 1
+
+        binding_verified = bool(
+            implementation_target and identity_ok and type_ok and provenance_complete
+        )
+        if binding_verified:
+            function_data_return_binding_verified_count += 1
+            function_data_status["return_binding_verified"] += 1
+        member_route_exact = match_kind == "exact"
+        if binding_verified and caller_consumers and member_route_exact:
+            function_data_return_route_ready_count += 1
+            function_data_status["return_route_ready"] += 1
+        elif binding_verified and caller_consumers and match_kind == "split_struct":
+            function_data_status["return_split_projection_not_member_route"] += 1
+
     function_interprocedural_edge_kinds = collections.Counter(
         str(row.get("edge_kind", "") or "<empty>")
         for row in function_interprocedural_edges
@@ -1002,6 +1531,50 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
         "interprocedural_data_kinds": top(interprocedural_data_kinds),
         "interprocedural_data_value_kinds": top(interprocedural_data_value_kinds),
         "interprocedural_data_stream_alignment": interprocedural_data_stream_alignment,
+        "function_data_binding_count": function_data_binding_count,
+        "function_data_binding_schema_versions": top(function_data_binding_schema_versions),
+        "function_data_binding_schema_current": function_data_binding_schema_current,
+        "function_data_target_kinds": top(function_data_target_kinds),
+        "function_data_directions": top(function_data_directions),
+        "function_data_match_kinds": top(function_data_match_kinds),
+        "function_data_status": top(function_data_status),
+        "function_data_mismatches": top(function_data_mismatches),
+        "function_data_mismatch_count": sum(function_data_mismatches.values()),
+        "function_data_parameter_identity_count": function_data_parameter_identity_count,
+        "function_data_member_identity_exact_count": function_data_member_identity_exact_count,
+        "function_data_split_parent_projection_count": function_data_split_parent_projection_count,
+        "function_data_value_type_verified_count": function_data_value_type_verified_count,
+        "function_data_type_verified_count": function_data_type_verified_count,
+        "function_data_qualifier_difference_count": function_data_qualifier_difference_count,
+        "function_data_exact_call_signature_equal_count": function_data_exact_call_signature_equal_count,
+        "function_data_exact_signature_pin_equal_count": function_data_exact_signature_pin_equal_count,
+        "function_data_exact_call_pin_equal_count": function_data_exact_call_pin_equal_count,
+        "function_data_type_diff_fields": top(function_data_type_diff_fields),
+        "function_data_type_surface_shapes": top(function_data_type_surface_shapes),
+        "function_data_split_member_resolved_count": function_data_split_member_resolved_count,
+        "function_data_split_member_unresolved_count": function_data_split_member_unresolved_count,
+        "function_data_split_parent_pin_count": function_data_split_parent_pin_count,
+        "function_data_split_exact_name_candidate_count": function_data_split_exact_name_candidate_count,
+        "function_data_split_suffix_candidate_count": function_data_split_suffix_candidate_count,
+        "function_data_split_prefixed_candidate_count": function_data_split_prefixed_candidate_count,
+        "function_data_split_candidate_shapes": top(function_data_split_candidate_shapes),
+        "function_data_split_candidate_examples": function_data_split_candidate_examples,
+        "function_data_argument_count": function_data_argument_count,
+        "function_data_argument_connected_value_count": function_data_argument_connected_value_count,
+        "function_data_argument_authored_value_count": function_data_argument_authored_value_count,
+        "function_data_argument_no_value_count": function_data_argument_no_value_count,
+        "function_data_argument_body_consumer_count": function_data_argument_body_consumer_count,
+        "function_data_argument_unused_count": function_data_argument_unused_count,
+        "function_data_argument_binding_verified_count": function_data_argument_binding_verified_count,
+        "function_data_argument_route_ready_count": function_data_argument_route_ready_count,
+        "function_data_return_count": function_data_return_count,
+        "function_data_return_dependency_count": function_data_return_dependency_count,
+        "function_data_return_authored_value_pin_count": function_data_return_authored_value_pin_count,
+        "function_data_return_missing_provenance_binding_count": function_data_return_missing_provenance_binding_count,
+        "function_data_return_caller_consumer_count": function_data_return_caller_consumer_count,
+        "function_data_return_unused_count": function_data_return_unused_count,
+        "function_data_return_binding_verified_count": function_data_return_binding_verified_count,
+        "function_data_return_route_ready_count": function_data_return_route_ready_count,
         "function_call_count": len(call_edges),
         "function_call_resolution": top(function_call_resolution),
         "function_call_internal_count": function_call_internal_count,
@@ -1190,6 +1763,77 @@ def print_report(report: dict) -> None:
     )
     section("interprocedural execution edge kinds", "interprocedural_execution_edge_kinds")
     section("interprocedural execution terminal kinds", "interprocedural_execution_terminal_kinds")
+
+    print("\n[Blueprint function interprocedural data binding audit]")
+    print(
+        f"bindings={int(report.get('function_data_binding_count', 0) or 0)} "
+        f"binding_schema_current={bool(report.get('function_data_binding_schema_current', False))} "
+        f"parameter_identity_verified={int(report.get('function_data_parameter_identity_count', 0) or 0)} "
+        f"exact_member_identity={int(report.get('function_data_member_identity_exact_count', 0) or 0)} "
+        f"split_parent_projections={int(report.get('function_data_split_parent_projection_count', 0) or 0)} "
+        f"value_type_verified={int(report.get('function_data_value_type_verified_count', 0) or 0)} "
+        f"qualifier_differences={int(report.get('function_data_qualifier_difference_count', 0) or 0)} "
+        f"split_member_resolved={int(report.get('function_data_split_member_resolved_count', 0) or 0)} "
+        f"split_member_unresolved={int(report.get('function_data_split_member_unresolved_count', 0) or 0)} "
+        f"mismatches={int(report.get('function_data_mismatch_count', 0) or 0)}"
+    )
+    print(
+        "exact type surfaces: "
+        f"call_signature_equal={int(report.get('function_data_exact_call_signature_equal_count', 0) or 0)} "
+        f"signature_pin_equal={int(report.get('function_data_exact_signature_pin_equal_count', 0) or 0)} "
+        f"call_pin_equal={int(report.get('function_data_exact_call_pin_equal_count', 0) or 0)}"
+    )
+    section("function binding schema versions", "function_data_binding_schema_versions")
+    section("function exact type surface shapes", "function_data_type_surface_shapes")
+    section("function exact type differing fields", "function_data_type_diff_fields")
+    print(
+        "split candidates: "
+        f"parent_pins={int(report.get('function_data_split_parent_pin_count', 0) or 0)} "
+        f"exact_name_candidates={int(report.get('function_data_split_exact_name_candidate_count', 0) or 0)} "
+        f"suffix_candidates={int(report.get('function_data_split_suffix_candidate_count', 0) or 0)} "
+        f"prefixed_candidates={int(report.get('function_data_split_prefixed_candidate_count', 0) or 0)}"
+    )
+    section("function split candidate shapes", "function_data_split_candidate_shapes")
+    print("\n[function split candidate examples]")
+    examples = report.get("function_data_split_candidate_examples", [])
+    if not examples:
+        print("<none>")
+    else:
+        for example in examples:
+            print(
+                f"{example.get('call_node_id','')} :: {example.get('direction','')}:"
+                f"{example.get('call_pin_name','')} -> {example.get('parameter_name','')} "
+                f"suffix={example.get('split_suffix','')} "
+                f"parent={example.get('parent_pin_names',[])} "
+                f"raw={example.get('raw_pin_names',[])}"
+            )
+    section("function data target kinds", "function_data_target_kinds")
+    section("function data directions", "function_data_directions")
+    section("function data match kinds", "function_data_match_kinds")
+    print("\n[Function argument provenance]")
+    print(
+        f"arguments={int(report.get('function_data_argument_count', 0) or 0)} "
+        f"connected_values={int(report.get('function_data_argument_connected_value_count', 0) or 0)} "
+        f"authored_values={int(report.get('function_data_argument_authored_value_count', 0) or 0)} "
+        f"without_value_evidence={int(report.get('function_data_argument_no_value_count', 0) or 0)} "
+        f"body_consumer_edges={int(report.get('function_data_argument_body_consumer_count', 0) or 0)} "
+        f"unused_arguments={int(report.get('function_data_argument_unused_count', 0) or 0)} "
+        f"binding_verified={int(report.get('function_data_argument_binding_verified_count', 0) or 0)} "
+        f"route_ready={int(report.get('function_data_argument_route_ready_count', 0) or 0)}"
+    )
+    print("\n[Function return provenance]")
+    print(
+        f"returns={int(report.get('function_data_return_count', 0) or 0)} "
+        f"dependency_rows={int(report.get('function_data_return_dependency_count', 0) or 0)} "
+        f"authored_result_pin_values={int(report.get('function_data_return_authored_value_pin_count', 0) or 0)} "
+        f"incomplete_internal_provenance={int(report.get('function_data_return_missing_provenance_binding_count', 0) or 0)} "
+        f"caller_consumer_edges={int(report.get('function_data_return_caller_consumer_count', 0) or 0)} "
+        f"unused_returns={int(report.get('function_data_return_unused_count', 0) or 0)} "
+        f"binding_verified={int(report.get('function_data_return_binding_verified_count', 0) or 0)} "
+        f"route_ready={int(report.get('function_data_return_route_ready_count', 0) or 0)}"
+    )
+    section("function data binding status", "function_data_status")
+    section("function data binding mismatches", "function_data_mismatches")
 
     print("\n[Blueprint function call target audit]")
     print(
