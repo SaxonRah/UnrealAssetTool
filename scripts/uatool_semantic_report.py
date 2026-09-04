@@ -581,6 +581,7 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
     function_interprocedural_data_path = (
         output / "blueprint_interprocedural_function_data_routes.jsonl"
     )
+    delegate_binding_path = output / "blueprint_delegate_bindings.jsonl"
     interprocedural_edges = (
         list(rows(interprocedural_edge_path)) if interprocedural_edge_path.is_file() else []
     )
@@ -603,6 +604,11 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
     function_interprocedural_data_routes = (
         list(rows(function_interprocedural_data_path))
         if function_interprocedural_data_path.is_file()
+        else []
+    )
+    delegate_binding_rows = (
+        list(rows(delegate_binding_path))
+        if delegate_binding_path.is_file()
         else []
     )
     interprocedural_data_kinds = collections.Counter(
@@ -974,6 +980,40 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
             delegate_data_source_status["mixed_or_multiple_with_create"] += 1
         else:
             delegate_data_source_status["non_create_delegate_source"] += 1
+
+    delegate_binding_operation_counts = collections.Counter(
+        str(row.get("bind_operation", "") or "<empty>")
+        for row in delegate_binding_rows
+    )
+    delegate_binding_basis_counts = collections.Counter(
+        str(row.get("resolution_basis", "") or "<empty>")
+        for row in delegate_binding_rows
+    )
+    delegate_binding_endpoint_kinds = collections.Counter(
+        str(row.get("endpoint_kind", "") or "<empty>")
+        for row in delegate_binding_rows
+    )
+    delegate_binding_create_route_count = int(
+        delegate_binding_basis_counts.get("selected_guid", 0)
+        + delegate_binding_basis_counts.get("selected_function_path", 0)
+    )
+    delegate_binding_direct_route_count = int(
+        delegate_binding_basis_counts.get("direct_event_node", 0)
+    )
+    delegate_binding_expected_direct_route_count = max(
+        0,
+        delegate_bind_assign_delegate_input_edge_count
+        - delegate_create_to_bind_assign_edge_count,
+    )
+    delegate_binding_alignment = bool(
+        len(delegate_binding_rows) == delegate_bind_assign_delegate_input_edge_count
+        and delegate_binding_create_route_count == delegate_create_to_bind_assign_edge_count
+        and delegate_binding_create_route_count == delegate_exact_bound_endpoint_chain_count
+        and delegate_binding_direct_route_count == delegate_binding_expected_direct_route_count
+        and int(delegate_binding_operation_counts.get("delegate_bind", 0))
+            + int(delegate_binding_operation_counts.get("delegate_assign", 0))
+            == len(delegate_binding_rows)
+    )
 
     event_rows_path = output / "blueprint_events.jsonl"
     event_rows = list(rows(event_rows_path)) if event_rows_path.is_file() else []
@@ -1944,6 +1984,14 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
         "delegate_exact_bound_endpoint_chain_count": delegate_exact_bound_endpoint_chain_count,
         "delegate_data_source_status": top(delegate_data_source_status),
         "delegate_data_source_operations": top(delegate_data_source_operations),
+        "delegate_binding_route_count": len(delegate_binding_rows),
+        "delegate_binding_operation_counts": top(delegate_binding_operation_counts),
+        "delegate_binding_basis_counts": top(delegate_binding_basis_counts),
+        "delegate_binding_endpoint_kinds": top(delegate_binding_endpoint_kinds),
+        "delegate_binding_create_route_count": delegate_binding_create_route_count,
+        "delegate_binding_direct_route_count": delegate_binding_direct_route_count,
+        "delegate_binding_expected_direct_route_count": delegate_binding_expected_direct_route_count,
+        "delegate_binding_alignment": delegate_binding_alignment,
         "delegate_component_bound_event_count": len(component_bound_events),
         "delegate_component_event_exact_identity_count": delegate_component_event_exact_identity_count,
         "delegate_component_event_join_count": delegate_component_event_join_count,
@@ -2222,6 +2270,20 @@ def print_report(report: dict) -> None:
     )
     section("delegate data source status", "delegate_data_source_status")
     section("delegate data source operations", "delegate_data_source_operations")
+    print("\n[Blueprint authored delegate bindings]")
+    print(
+        f"routes={int(report.get('delegate_binding_route_count', 0) or 0)} "
+        f"expected_routes={int(report.get('delegate_bind_assign_delegate_input_edge_count', 0) or 0)} "
+        f"create_routes={int(report.get('delegate_binding_create_route_count', 0) or 0)} "
+        f"expected_create_routes={int(report.get('delegate_create_to_bind_assign_edge_count', 0) or 0)} "
+        f"direct_routes={int(report.get('delegate_binding_direct_route_count', 0) or 0)} "
+        f"expected_direct_routes={int(report.get('delegate_binding_expected_direct_route_count', 0) or 0)} "
+        f"aligned={bool(report.get('delegate_binding_alignment', False))}"
+    )
+    section("delegate binding operations", "delegate_binding_operation_counts")
+    section("delegate binding endpoint basis", "delegate_binding_basis_counts")
+    section("delegate binding endpoint kinds", "delegate_binding_endpoint_kinds")
+
     print("\n[Component-bound delegate events]")
     print(
         f"events={int(report.get('delegate_component_bound_event_count', 0) or 0)} "
