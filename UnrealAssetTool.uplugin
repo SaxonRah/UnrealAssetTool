@@ -1,14 +1,14 @@
 {
   "FileVersion": 3,
-  "Version": 70,
-  "VersionName": "0.7.0",
+  "Version": 100001,
+  "VersionName": "1.0.0-beta.1",
   "FriendlyName": "Unreal Asset Tool",
   "Description": "AI-oriented structural indexer for Unreal Engine projects.",
   "Category": "Developer Tools",
   "CreatedBy": "SaxonRah",
   "EnabledByDefault": true,
   "CanContainContent": false,
-  "IsBetaVersion": false,
+  "IsBetaVersion": true,
   "Plugins": [
     {
       "Name": "RigVM",
