@@ -4,7 +4,9 @@
 This layer is intentionally gameplay-domain neutral. It normalizes Blueprint
 nodes into broad program roles, preserves canonical exec/data topology exactly,
 and joins Control Rig editor wrappers to the authoritative RigVM model through
-the already-derived rigvm_editor_links stream.
+the already-derived rigvm_editor_links stream. Project-authored macro instances
+are also joined to uniquely captured macro graphs and exact tunnel-interface
+pins when canonical graph/pin evidence proves those bindings.
 
 Mover, GAS, Smart Objects, and other gameplay systems should consume these
 facts instead of adding K2-node special cases here.
@@ -16,7 +18,7 @@ import hashlib
 import json
 from pathlib import Path
 
-SEMANTIC_SCHEMA_VERSION = 3
+SEMANTIC_SCHEMA_VERSION = 4
 DERIVED_FILES = (
     "blueprint_semantic_nodes.jsonl",
     "blueprint_semantic_edges.jsonl",
@@ -332,12 +334,161 @@ def _load_rigvm_links(output: Path, rows) -> dict[str, dict]:
     return links
 
 
+def _pin_is_output(pin: dict) -> bool:
+    return str(pin.get("direction", "") or "").lower() in {"output", "egpd_output", "1"}
+
+
+def _macro_pin_type_signature(pin: dict) -> tuple:
+    pin_type = pin.get("type", {}) if isinstance(pin.get("type"), dict) else {}
+    return (
+        str(pin_type.get("category", "") or ""),
+        str(pin_type.get("subcategory", "") or ""),
+        str(pin_type.get("subcategory_object", "") or ""),
+        int(pin_type.get("container_type", 0) or 0),
+        bool(pin_type.get("is_reference", False)),
+        bool(pin_type.get("is_const", False)),
+    )
+
+
+def _derive_macro_bridges(
+    raw_nodes: list[dict],
+    raw_pins: list[dict],
+    raw_graphs: list[dict],
+) -> dict[str, dict]:
+    graph_rows_by_path: dict[str, list[dict]] = collections.defaultdict(list)
+    for graph in raw_graphs:
+        graph_path = str(graph.get("graph_path", "") or "")
+        if graph_path:
+            graph_rows_by_path[graph_path].append(graph)
+
+    nodes_by_graph: dict[str, list[dict]] = collections.defaultdict(list)
+    for node in raw_nodes:
+        graph_id = str(node.get("graph_id", "") or "")
+        if graph_id:
+            nodes_by_graph[graph_id].append(node)
+
+    pins_by_node: dict[str, list[dict]] = collections.defaultdict(list)
+    for pin in raw_pins:
+        node_id = str(pin.get("node_id", "") or "")
+        if node_id:
+            pins_by_node[node_id].append(pin)
+
+    def tunnel_shape(node: dict) -> str:
+        pins = pins_by_node.get(str(node.get("node_id", "") or ""), [])
+        inputs = sum(int(not _pin_is_output(pin)) for pin in pins)
+        outputs = sum(int(_pin_is_output(pin)) for pin in pins)
+        if inputs and outputs:
+            return "bidirectional"
+        if outputs:
+            return "output_only"
+        if inputs:
+            return "input_only"
+        return "pinless"
+
+    bridges: dict[str, dict] = {}
+    for node in raw_nodes:
+        if str(node.get("operation", "") or "") != "macro_instance":
+            continue
+        node_id = str(node.get("node_id", "") or "")
+        sem = node.get("semantic", {}) if isinstance(node.get("semantic"), dict) else {}
+        macro_graph = str(sem.get("macro_graph", "") or "")
+        source_blueprint = str(sem.get("source_blueprint", "") or "")
+        bridge = {
+            "status": "missing_graph_identity",
+            "macro_graph": macro_graph,
+            "source_blueprint": source_blueprint,
+            "graph_id": "",
+            "interface_status": "unavailable",
+            "interface_pin_count": 0,
+            "binding_count": 0,
+            "bindings": [],
+        }
+        if not macro_graph:
+            bridges[node_id] = bridge
+            continue
+
+        graph_candidates = graph_rows_by_path.get(macro_graph, [])
+        if not graph_candidates:
+            bridge["status"] = "external_or_unscanned"
+            bridges[node_id] = bridge
+            continue
+        if len(graph_candidates) != 1:
+            bridge["status"] = "ambiguous_captured_graph_path"
+            bridges[node_id] = bridge
+            continue
+
+        graph = graph_candidates[0]
+        graph_id = str(graph.get("graph_id", "") or "")
+        bridge["status"] = "matched"
+        bridge["graph_id"] = graph_id
+
+        tunnels = [
+            candidate for candidate in nodes_by_graph.get(graph_id, [])
+            if str(candidate.get("operation", "") or "") == "tunnel"
+        ]
+        entries = [candidate for candidate in tunnels if tunnel_shape(candidate) == "output_only"]
+        exits = [candidate for candidate in tunnels if tunnel_shape(candidate) == "input_only"]
+        if len(entries) != 1 or len(exits) != 1:
+            bridge["interface_status"] = "unresolved_roles"
+            bridges[node_id] = bridge
+            continue
+
+        bridge["interface_status"] = "exact_roles"
+        entry_pins = [
+            pin for pin in pins_by_node.get(str(entries[0].get("node_id", "") or ""), [])
+            if _pin_is_output(pin)
+        ]
+        exit_pins = [
+            pin for pin in pins_by_node.get(str(exits[0].get("node_id", "") or ""), [])
+            if not _pin_is_output(pin)
+        ]
+        instance_pins = list(pins_by_node.get(node_id, []))
+        bridge["interface_pin_count"] = len(instance_pins)
+
+        bindings: list[dict] = []
+        for instance_pin in instance_pins:
+            relation = "binds_macro_output" if _pin_is_output(instance_pin) else "binds_macro_input"
+            candidates = exit_pins if _pin_is_output(instance_pin) else entry_pins
+            pin_name = str(instance_pin.get("name", "") or "")
+            same_name = [
+                candidate for candidate in candidates
+                if str(candidate.get("name", "") or "") == pin_name
+            ]
+            exact = [
+                candidate for candidate in same_name
+                if _macro_pin_type_signature(candidate) == _macro_pin_type_signature(instance_pin)
+            ]
+            if len(exact) != 1:
+                continue
+            target_pin = exact[0]
+            pin_type = instance_pin.get("type", {}) if isinstance(instance_pin.get("type"), dict) else {}
+            bindings.append({
+                "relation": relation,
+                "source_pin_id": str(instance_pin.get("pin_id", "") or ""),
+                "target_pin_id": str(target_pin.get("pin_id", "") or ""),
+                "source_pin_name": pin_name,
+                "target_pin_name": str(target_pin.get("name", "") or ""),
+                "pin_category": str(pin_type.get("category", "") or ""),
+            })
+
+        bridge["bindings"] = bindings
+        bridge["binding_count"] = len(bindings)
+        bridge["interface_status"] = (
+            "exact_bindings" if len(bindings) == len(instance_pins) else "partial_bindings"
+        )
+        bridges[node_id] = bridge
+
+    return bridges
+
+
 def derive(output: Path, rows) -> tuple[list[dict], list[dict], list[dict]]:
     output = Path(output)
     raw_nodes = list(rows(output / "blueprint_nodes.jsonl"))
     raw_pins = list(rows(output / "blueprint_pins.jsonl"))
     raw_edges = list(rows(output / "blueprint_edges.jsonl"))
+    raw_graphs = list(rows(output / "blueprint_graphs.jsonl"))
     rigvm_links = _load_rigvm_links(output, rows)
+    macro_bridges = _derive_macro_bridges(raw_nodes, raw_pins, raw_graphs)
 
     pins_by_node: dict[str, list[dict]] = collections.defaultdict(list)
     for pin in raw_pins:
@@ -442,6 +593,16 @@ def derive(output: Path, rows) -> tuple[list[dict], list[dict], list[dict]]:
                 "rigvm_function": str((rigvm_link or {}).get("resolved_function_name", "") or ""),
                 "rigvm_template": str((rigvm_link or {}).get("template_notation", "") or ""),
             })
+        if operation == "macro_instance":
+            macro_bridge = macro_bridges.get(node_id, {})
+            row.update({
+                "macro_bridge_status": str(macro_bridge.get("status", "") or "missing_graph_identity"),
+                "macro_graph_id": str(macro_bridge.get("graph_id", "") or ""),
+                "macro_source_blueprint": str(macro_bridge.get("source_blueprint", "") or ""),
+                "macro_interface_status": str(macro_bridge.get("interface_status", "") or "unavailable"),
+                "macro_interface_pin_count": int(macro_bridge.get("interface_pin_count", 0) or 0),
+                "macro_interface_binding_count": int(macro_bridge.get("binding_count", 0) or 0),
+            })
         semantic_nodes.append(row)
 
         graph_id = row["graph_id"]
@@ -517,6 +678,32 @@ def derive(output: Path, rows) -> tuple[list[dict], list[dict], list[dict]]:
                     source_node_id=node["node_id"], relation=relation,
                     target_kind=node["target_kind"], target=node["target"],
                     evidence_kind="node_semantic",
+                )
+
+        macro_bridge = macro_bridges.get(node["node_id"])
+        if macro_bridge and str(macro_bridge.get("status", "") or "") == "matched":
+            graph_id = str(macro_bridge.get("graph_id", "") or "")
+            if graph_id:
+                add_edge(
+                    blueprint_path=node["blueprint_path"], graph_id=node["graph_id"],
+                    source_node_id=node["node_id"], relation="maps_to_macro_graph",
+                    target_kind="blueprint_graph", target=graph_id,
+                    evidence_kind="macro_graph_exact",
+                )
+            for binding in macro_bridge.get("bindings", []):
+                target_pin_id = str(binding.get("target_pin_id", "") or "")
+                if not target_pin_id:
+                    continue
+                add_edge(
+                    blueprint_path=node["blueprint_path"], graph_id=node["graph_id"],
+                    source_node_id=node["node_id"], relation=str(binding.get("relation", "") or ""),
+                    target_kind="blueprint_pin", target=target_pin_id,
+                    source_pin_id=str(binding.get("source_pin_id", "") or ""),
+                    target_pin_id=target_pin_id,
+                    source_pin_name=str(binding.get("source_pin_name", "") or ""),
+                    target_pin_name=str(binding.get("target_pin_name", "") or ""),
+                    pin_category=str(binding.get("pin_category", "") or ""),
+                    evidence_kind="macro_interface_exact",
                 )
 
         if node.get("rigvm_object_id"):
@@ -651,6 +838,59 @@ def validation_error(output: Path, rows) -> str | None:
             )] += 1
     if raw_flow != semantic_flow:
         return "Blueprint semantic flow edges do not exactly reconstruct canonical Blueprint edges"
+
+    raw_pins = list(rows(output / "blueprint_pins.jsonl"))
+    raw_graphs = list(rows(output / "blueprint_graphs.jsonl"))
+    macro_bridges = _derive_macro_bridges(raw_nodes, raw_pins, raw_graphs)
+
+    expected_macro_edges = set()
+    for raw in raw_nodes:
+        if str(raw.get("operation", "") or "") != "macro_instance":
+            continue
+        node_id = str(raw.get("node_id", "") or "")
+        bridge = macro_bridges.get(node_id, {})
+        semantic = node_by_id[node_id]
+        expected_fields = {
+            "macro_bridge_status": str(bridge.get("status", "") or "missing_graph_identity"),
+            "macro_graph_id": str(bridge.get("graph_id", "") or ""),
+            "macro_source_blueprint": str(bridge.get("source_blueprint", "") or ""),
+            "macro_interface_status": str(bridge.get("interface_status", "") or "unavailable"),
+            "macro_interface_pin_count": int(bridge.get("interface_pin_count", 0) or 0),
+            "macro_interface_binding_count": int(bridge.get("binding_count", 0) or 0),
+        }
+        for field, expected in expected_fields.items():
+            if semantic.get(field) != expected:
+                return f"Blueprint macro semantic field mismatch: {node_id} {field}"
+
+        if str(bridge.get("status", "") or "") == "matched" and bridge.get("graph_id"):
+            expected_macro_edges.add((
+                node_id, "maps_to_macro_graph", "blueprint_graph",
+                str(bridge.get("graph_id", "") or ""), "", "",
+            ))
+        for binding in bridge.get("bindings", []):
+            expected_macro_edges.add((
+                node_id, str(binding.get("relation", "") or ""), "blueprint_pin",
+                str(binding.get("target_pin_id", "") or ""),
+                str(binding.get("source_pin_id", "") or ""),
+                str(binding.get("target_pin_id", "") or ""),
+            ))
+
+    actual_macro_edges = {
+        (
+            str(edge.get("source_node_id", "") or ""),
+            str(edge.get("relation", "") or ""),
+            str(edge.get("target_kind", "") or ""),
+            str(edge.get("target", "") or ""),
+            str(edge.get("source_pin_id", "") or ""),
+            str(edge.get("target_pin_id", "") or ""),
+        )
+        for edge in edges
+        if str(edge.get("relation", "") or "") in {
+            "maps_to_macro_graph", "binds_macro_input", "binds_macro_output"
+        }
+    }
+    if expected_macro_edges != actual_macro_edges:
+        return "Blueprint macro semantic proof edges do not exactly match canonical graph/pin evidence"
 
     rigvm_links = _load_rigvm_links(output, rows)
     edge_keys = {
