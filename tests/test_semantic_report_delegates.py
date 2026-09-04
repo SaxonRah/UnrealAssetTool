@@ -11,6 +11,7 @@ SCRIPTS = ROOT / "scripts"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
+import uatool_blueprint_delegates as delegates
 import uatool_semantic_report as report
 
 
@@ -203,16 +204,28 @@ class SemanticReportDelegateAuditTest(unittest.TestCase):
                 "target_pin_name": "Delegate",
             }])
             write_jsonl(root / "blueprint_data_dependencies.jsonl", [])
-            write_jsonl(root / "blueprint_functions.jsonl", [{
-                "function_id": "fn-do-thing",
-                "blueprint_path": bp,
-                "graph_id": "fn-do-thing",
-                "graph_name": "DoThing",
-                "name": "DoThing",
-                "resolved_function": "/Game/Test/BP.BP_C:DoThing",
-                "entry_node_id": "",
-                "result_node_ids": [],
-            }])
+            write_jsonl(root / "blueprint_functions.jsonl", [
+                {
+                    "function_id": "fn-do-thing-a",
+                    "blueprint_path": bp,
+                    "graph_id": "fn-do-thing-a",
+                    "graph_name": "DoThing",
+                    "name": "DoThing",
+                    "resolved_function": "/Game/Test/BP.BP_C:DoThing",
+                    "entry_node_id": "",
+                    "result_node_ids": [],
+                },
+                {
+                    "function_id": "fn-do-thing-b",
+                    "blueprint_path": bp,
+                    "graph_id": "fn-do-thing-b",
+                    "graph_name": "DoThing",
+                    "name": "DoThing",
+                    "resolved_function": "/Game/Test/BP.BP_C:DoThing",
+                    "entry_node_id": "",
+                    "result_node_ids": [],
+                },
+            ])
             write_jsonl(root / "blueprint_call_edges.jsonl", [])
             write_jsonl(root / "blueprint_call_bindings.jsonl", [])
             write_jsonl(root / "blueprints.jsonl", [{"object_path": bp, "blueprint_type": 0}])
@@ -246,6 +259,8 @@ class SemanticReportDelegateAuditTest(unittest.TestCase):
             ):
                 write_jsonl(root / name, [])
 
+            delegate_bindings, _delegate_stats = delegates.derive(root, rows)
+            write_jsonl(root / "blueprint_delegate_bindings.jsonl", delegate_bindings)
             result = report.build_report(root, rows)
 
             self.assertEqual(result["delegate_node_count"], 6)
@@ -277,6 +292,10 @@ class SemanticReportDelegateAuditTest(unittest.TestCase):
                 dict(result["delegate_create_target_operations"]),
                 {"custom_event": 1, "function": 1},
             )
+            self.assertEqual(
+                dict(result["delegate_create_function_local_resolution"]),
+                {"multiple_captured_function_rows": 1},
+            )
             self.assertEqual(result["delegate_bind_assign_node_count"], 1)
             self.assertEqual(result["delegate_bind_assign_delegate_input_edge_count"], 1)
             self.assertEqual(result["delegate_create_to_bind_assign_edge_count"], 1)
@@ -288,6 +307,22 @@ class SemanticReportDelegateAuditTest(unittest.TestCase):
             self.assertEqual(
                 dict(result["delegate_data_source_operations"]),
                 {"delegate_create": 1},
+            )
+            self.assertEqual(result["delegate_binding_route_count"], 1)
+            self.assertEqual(result["delegate_binding_create_route_count"], 1)
+            self.assertEqual(result["delegate_binding_direct_route_count"], 0)
+            self.assertTrue(result["delegate_binding_alignment"])
+            self.assertEqual(
+                dict(result["delegate_binding_operation_counts"]),
+                {"delegate_bind": 1},
+            )
+            self.assertEqual(
+                dict(result["delegate_binding_basis_counts"]),
+                {"selected_guid": 1},
+            )
+            self.assertEqual(
+                dict(result["delegate_binding_endpoint_kinds"]),
+                {"custom_event": 1},
             )
             self.assertEqual(result["delegate_component_bound_event_count"], 1)
             self.assertEqual(result["delegate_component_event_exact_identity_count"], 1)
