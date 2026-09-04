@@ -15,6 +15,7 @@ import uatool_vfx_stitch as vfx_stitch
 import uatool_systems as systems
 import uatool_blueprint_semantics as blueprint_semantics
 import uatool_blueprint_interprocedural as blueprint_interprocedural
+import uatool_blueprint_delegates as blueprint_delegates
 import uatool_blueprint_statements as blueprint_statements
 import uatool_semantic_report as semantic_report
 import uatool_blueprint_program_report as blueprint_program_report
@@ -28,10 +29,9 @@ import uatool_mover_behavior as mover_behavior
 import uatool_build_perf as build_perf
 import uatool_verify_bundle as bundle_verify
 
-# Public derived schema 36 adds first-class Blueprint function data provenance
-# on top of schema-35 direct-internal function execution topology. Exact member
-# bindings and split parent projections remain explicitly distinguished.
-FINAL_DERIVED_SCHEMA_VERSION = 36
+# Public derived schema 37 adds exact static Blueprint delegate binding
+# provenance on top of schema-36 function data provenance.
+FINAL_DERIVED_SCHEMA_VERSION = 37
 project_graph.DERIVED_SCHEMA_VERSION = FINAL_DERIVED_SCHEMA_VERSION
 SCRIPT_DIR = Path(__file__).resolve().parent
 
@@ -66,6 +66,7 @@ def create_schema(conn) -> None:
     systems.create_schema(conn)
     blueprint_semantics.create_schema(conn)
     blueprint_interprocedural.create_schema(conn)
+    blueprint_delegates.create_schema(conn)
     blueprint_statements.create_schema(conn)
     project_graph.create_schema(conn)
 
@@ -133,6 +134,12 @@ def _require_blueprint_interprocedural(output: Path) -> None:
     error = blueprint_interprocedural.validation_error(output, runtime._rows)
     if error:
         raise RuntimeError(f"Blueprint interprocedural derived incomplete: {error}")
+
+
+def _require_blueprint_delegates(output: Path) -> None:
+    error = blueprint_delegates.validation_error(output, runtime._rows)
+    if error:
+        raise RuntimeError(f"Blueprint delegate derived incomplete: {error}")
 
 
 def _require_blueprint_statements(output: Path) -> None:
@@ -307,6 +314,17 @@ def derive_output(output):
     }
     counts.update(interprocedural_counts)
 
+    delegate_bindings, delegate_binding_stats = blueprint_delegates.derive(
+        output, runtime._rows
+    )
+    delegate_counts = {
+        "blueprint_delegate_bindings": runtime._write(
+            output / "blueprint_delegate_bindings.jsonl",
+            delegate_bindings,
+        ),
+    }
+    counts.update(delegate_counts)
+
     statement_rows, semantic_blocks = blueprint_statements.derive(output, runtime._rows)
     statement_counts = {
         "blueprint_semantic_statements": runtime._write(output / "blueprint_semantic_statements.jsonl", statement_rows),
@@ -437,6 +455,29 @@ def derive_output(output):
                 function_data_route_stats.get("excluded_interface", 0) or 0
             ),
         }
+        manifest["blueprint_delegate_binding_schema_version"] = (
+            blueprint_delegates.DELEGATE_BINDING_SCHEMA_VERSION
+        )
+        manifest["blueprint_delegate_binding_summary"] = {
+            "binding_count": len(delegate_bindings),
+            "bind_count": int(delegate_binding_stats.get("operation:delegate_bind", 0) or 0),
+            "assign_count": int(delegate_binding_stats.get("operation:delegate_assign", 0) or 0),
+            "create_delegate_source_count": int(
+                delegate_binding_stats.get("create_delegate_sources", 0) or 0
+            ),
+            "direct_event_source_count": int(
+                delegate_binding_stats.get("direct_event_sources", 0) or 0
+            ),
+            "selected_guid_count": int(
+                delegate_binding_stats.get("basis:selected_guid", 0) or 0
+            ),
+            "selected_function_path_count": int(
+                delegate_binding_stats.get("basis:selected_function_path", 0) or 0
+            ),
+            "direct_event_node_count": int(
+                delegate_binding_stats.get("basis:direct_event_node", 0) or 0
+            ),
+        }
         manifest["blueprint_statement_schema_version"] = blueprint_statements.STATEMENT_SCHEMA_VERSION
         manifest["blueprint_statement_summary"] = {
             "statement_count": len(statement_rows),
@@ -450,6 +491,7 @@ def derive_output(output):
         declared.update(vfx_counts)
         declared.update(semantic_counts)
         declared.update(interprocedural_counts)
+        declared.update(delegate_counts)
         declared.update(statement_counts)
         declared.update(project_counts)
         manifest["derived_counts"] = declared
@@ -462,6 +504,7 @@ def derive_output(output):
     _require_vfx_derived(output)
     _require_blueprint_semantics(output)
     _require_blueprint_interprocedural(output)
+    _require_blueprint_delegates(output)
     _require_blueprint_statements(output)
     _require_mover_behavior(output)
     _require_project_graph(output)
@@ -494,6 +537,14 @@ def derive_output(output):
         f"function_data_member_ready={int(function_data_route_stats.get('member_route_ready', 0) or 0)}"
     )
     print(
+        "blueprint delegates: "
+        f"bindings={len(delegate_bindings)} "
+        f"binds={int(delegate_binding_stats.get('operation:delegate_bind', 0) or 0)} "
+        f"assigns={int(delegate_binding_stats.get('operation:delegate_assign', 0) or 0)} "
+        f"create_sources={int(delegate_binding_stats.get('create_delegate_sources', 0) or 0)} "
+        f"direct_event_sources={int(delegate_binding_stats.get('direct_event_sources', 0) or 0)}"
+    )
+    print(
         "blueprint statements: "
         f"statements={len(statement_rows)} blocks={len(semantic_blocks)} "
         f"with_dependencies={sum(int(bool(row.get('dependency_count', 0))) for row in statement_rows)} "
@@ -521,6 +572,7 @@ def build_database(output):
         _require_vfx_derived(output)
         _require_blueprint_semantics(output)
         _require_blueprint_interprocedural(output)
+        _require_blueprint_delegates(output)
         _require_blueprint_statements(output)
         _require_mover_behavior(output)
         _require_project_graph(output)
@@ -533,6 +585,7 @@ def build_database(output):
         systems.load_database(conn, output, runtime._rows)
         blueprint_semantics.load_database(conn, output, runtime._rows)
         blueprint_interprocedural.load_database(conn, output, runtime._rows)
+        blueprint_delegates.load_database(conn, output, runtime._rows)
         blueprint_statements.load_database(conn, output, runtime._rows)
         # project_neighborhoods loads compact JSON and an empty text field.
         # Readable text is reconstructed only when queried, avoiding another
@@ -565,6 +618,7 @@ def query(args):
             )
             blueprint_statements.query(conn, core._print_rows, pattern, args.limit)
             blueprint_interprocedural.query(conn, core._print_rows, pattern, args.limit)
+            blueprint_delegates.query(conn, core._print_rows, pattern, args.limit)
             blueprint_semantics.query(conn, core._print_rows, pattern, args.limit)
             systems.query(conn, core._print_rows, pattern, args.limit)
             vfx_stitch.query(conn, core._print_rows, pattern, args.limit)
@@ -746,6 +800,7 @@ def scan(args):
             _require_vfx_derived(output)
             _require_blueprint_semantics(output)
             _require_blueprint_interprocedural(output)
+            _require_blueprint_delegates(output)
             _require_blueprint_statements(output)
             _require_mover_behavior(output)
             _require_project_graph(output)
