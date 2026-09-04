@@ -5666,9 +5666,9 @@ def scan(args: argparse.Namespace) -> int:
     structural_schema = int(manifest.get("schema_version", 0) or 0)
     world_schema = int(world_manifest.get("schema_version", 0) or 0)
     world_structural_baseline = int(world_manifest.get("structural_schema_baseline", 0) or 0)
-    if structural_schema != 12 or world_schema != 12 or world_structural_baseline != structural_schema:
+    if structural_schema != 13 or world_schema != 12 or world_structural_baseline != structural_schema:
         print(
-            "ERROR: schema-12 pass mismatch: "
+            "ERROR: structural-schema-13/world-schema-12 pass mismatch: "
             f"structural={structural_schema} world={world_schema} "
             f"world_structural_baseline={world_structural_baseline}",
             file=sys.stderr,
