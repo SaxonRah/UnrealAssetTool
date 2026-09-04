@@ -11,6 +11,14 @@ import uatool_version as version
 
 RECORD_SCHEMA_VERSION = 1
 
+# These canonical companion passes are content-dependent. Their version in
+# CURRENT_SCHEMAS describes the current tool contract, while an individual
+# corpus legitimately reports schema 0 when no authored candidates exist.
+OPTIONAL_COMPANION_SCHEMAS = {
+    "mesh": "static_mesh",
+    "world_geometry": "world_geometry",
+}
+
 PROFILE_ALIASES = {
     "gasp": "gasp",
     "gameanimationsample": "gasp",
@@ -221,15 +229,30 @@ def check_corpus(
     observed_schemas["capabilities"] = int(
         capability.get("capability_schema_version", 0) or 0
     )
+    families = _family_map(capability)
     for name, expected in version.CURRENT_SCHEMAS.items():
         observed = int(observed_schemas.get(name, 0) or 0)
-        add_check(
-            f"schema:{name}",
-            observed == expected,
-            f"observed={observed} expected={expected}",
-        )
+        companion_family = OPTIONAL_COMPANION_SCHEMAS.get(name)
+        if companion_family:
+            row = families.get(companion_family, {})
+            available = bool(row.get("available_in_corpus", False))
+            coverage = str(row.get("corpus_coverage", "") or "")
+            explicitly_absent = (
+                bool(row)
+                and not available
+                and coverage == "external_or_excluded"
+            )
+            ok = observed == expected if available else observed == 0 and explicitly_absent
+            detail = (
+                f"observed={observed} expected={expected} "
+                f"family={companion_family} available={available} "
+                f"corpus_coverage={coverage or '<missing>'}"
+            )
+        else:
+            ok = observed == expected
+            detail = f"observed={observed} expected={expected}"
+        add_check(f"schema:{name}", ok, detail)
 
-    families = _family_map(capability)
     family_result = {}
     for name in spec["required_families"]:
         row = families.get(name, {})
