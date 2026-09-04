@@ -358,7 +358,7 @@ def build_manifest(output: Path) -> dict:
             "macro_data_output",
             "function_enter",
             "function_return",
-            "function_argument",
+            "function_argument_data",
             "function_return_data",
         ),
     )
