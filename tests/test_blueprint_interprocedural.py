@@ -243,6 +243,8 @@ class BlueprintInterproceduralExecutionTest(unittest.TestCase):
             self.output / "blueprint_interprocedural_data_routes.jsonl",
             data_routes,
         )
+        write_jsonl(self.output / interproc.DERIVED_FILES[3], [])
+        write_jsonl(self.output / interproc.DERIVED_FILES[4], [])
         self.assertIsNone(interproc.validation_error(self.output, rows))
 
     def test_validation_rejects_changed_cross_graph_target(self) -> None:
@@ -261,6 +263,8 @@ class BlueprintInterproceduralExecutionTest(unittest.TestCase):
             self.output / "blueprint_interprocedural_data_routes.jsonl",
             data_routes,
         )
+        write_jsonl(self.output / interproc.DERIVED_FILES[3], [])
+        write_jsonl(self.output / interproc.DERIVED_FILES[4], [])
         self.assertIn(
             "do not exactly match",
             str(interproc.validation_error(self.output, rows)),
@@ -291,6 +295,8 @@ class BlueprintInterproceduralExecutionTest(unittest.TestCase):
             self.output / "blueprint_interprocedural_data_routes.jsonl",
             data_routes,
         )
+        write_jsonl(self.output / interproc.DERIVED_FILES[3], [])
+        write_jsonl(self.output / interproc.DERIVED_FILES[4], [])
 
         conn = sqlite3.connect(":memory:")
         try:
@@ -321,9 +327,9 @@ class BlueprintInterproceduralExecutionTest(unittest.TestCase):
 
 
 class BlueprintInterproceduralCompositionTest(unittest.TestCase):
-    def test_schema34_and_bundle_membership_are_composed_without_global_import_side_effects(self) -> None:
+    def test_schema35_and_bundle_membership_are_composed_without_global_import_side_effects(self) -> None:
         facade = (SCRIPTS / "uatool.py").read_text(encoding="utf-8")
-        self.assertIn("FINAL_DERIVED_SCHEMA_VERSION = 34", facade)
+        self.assertIn("FINAL_DERIVED_SCHEMA_VERSION = 35", facade)
         self.assertIn("import uatool_blueprint_interprocedural as blueprint_interprocedural", facade)
         self.assertIn("*blueprint_interprocedural.DERIVED_FILES", facade)
         self.assertIn("_require_blueprint_interprocedural(output)", facade)

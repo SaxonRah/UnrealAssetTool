@@ -331,6 +331,8 @@ def build_manifest(output: Path) -> dict:
             "blueprint_interprocedural_execution_edges.jsonl",
             "blueprint_interprocedural_execution_terminals.jsonl",
             "blueprint_interprocedural_data_routes.jsonl",
+            "blueprint_interprocedural_function_execution_edges.jsonl",
+            "blueprint_interprocedural_function_execution_terminals.jsonl",
         )
         if (output / name).is_file()
     ]
@@ -340,8 +342,8 @@ def build_manifest(output: Path) -> dict:
         (
             "Authored Blueprint/K2/UMG/RigVM structure plus static semantic/control-flow "
             "derivation; exact project macro interfaces, cross-graph basic-block flow and "
-            "joined macro data-provenance routes are preserved without simulating runtime "
-            "Blueprint VM execution."
+            "joined macro data-provenance routes and exact direct-internal function "
+            "call/return topology are preserved without simulating runtime Blueprint VM execution."
         ),
         derived_streams=blueprint_derived_streams,
         derived_relations=(
@@ -352,6 +354,8 @@ def build_manifest(output: Path) -> dict:
             "macro_return",
             "macro_data_input",
             "macro_data_output",
+            "function_enter",
+            "function_return",
         ),
     )
     ai_streams = []

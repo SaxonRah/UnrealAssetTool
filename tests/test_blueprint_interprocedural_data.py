@@ -211,7 +211,7 @@ class BlueprintInterproceduralDataRouteTest(unittest.TestCase):
         self.assertEqual(edges, [])
         self.assertEqual(terminals, [])
         self.assertEqual(len(routes), 3)
-        self.assertEqual(interproc.INTERPROCEDURAL_SCHEMA_VERSION, 2)
+        self.assertEqual(interproc.INTERPROCEDURAL_SCHEMA_VERSION, 3)
 
         by_pin = {row["call_pin_id"]: row for row in routes}
 
@@ -245,6 +245,8 @@ class BlueprintInterproceduralDataRouteTest(unittest.TestCase):
         write_jsonl(self.output / interproc.DERIVED_FILES[0], edges)
         write_jsonl(self.output / interproc.DERIVED_FILES[1], terminals)
         write_jsonl(self.output / interproc.DERIVED_FILES[2], routes)
+        write_jsonl(self.output / interproc.DERIVED_FILES[3], [])
+        write_jsonl(self.output / interproc.DERIVED_FILES[4], [])
         self.assertIsNone(interproc.validation_error(self.output, rows))
 
     def test_validation_rejects_changed_route_provenance(self) -> None:
@@ -253,6 +255,8 @@ class BlueprintInterproceduralDataRouteTest(unittest.TestCase):
         write_jsonl(self.output / interproc.DERIVED_FILES[0], edges)
         write_jsonl(self.output / interproc.DERIVED_FILES[1], terminals)
         write_jsonl(self.output / interproc.DERIVED_FILES[2], routes)
+        write_jsonl(self.output / interproc.DERIVED_FILES[3], [])
+        write_jsonl(self.output / interproc.DERIVED_FILES[4], [])
         self.assertIn(
             "data routes do not exactly match",
             str(interproc.validation_error(self.output, rows)),
@@ -263,6 +267,8 @@ class BlueprintInterproceduralDataRouteTest(unittest.TestCase):
         write_jsonl(self.output / interproc.DERIVED_FILES[0], edges)
         write_jsonl(self.output / interproc.DERIVED_FILES[1], terminals)
         write_jsonl(self.output / interproc.DERIVED_FILES[2], routes)
+        write_jsonl(self.output / interproc.DERIVED_FILES[3], [])
+        write_jsonl(self.output / interproc.DERIVED_FILES[4], [])
 
         conn = sqlite3.connect(":memory:")
         try:

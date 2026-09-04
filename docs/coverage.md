@@ -26,7 +26,7 @@ mesh=1
 world_geometry=1
 vfx=1
 systems=11
-derived=34
+derived=35
 capabilities=1
 ```
 
@@ -38,7 +38,7 @@ capabilities=1
 | --- | --- | --- | --- |
 | Files/source/config | `first_class` | Physical files, kinds, bounded text chunks | Not a C++ semantic compiler/indexer |
 | Asset Registry | `first_class` fallback | Asset identity/class/package/tags/dependencies | Package dependency is not semantic object linkage |
-| Blueprint/K2 | `first_class` | Graphs, nodes, pins, links, state, refs, functions/events/calls/data provenance/execution blocks plus generic semantic statements/control flow; exact project-authored macro graph/interface bindings, schema-33 cross-graph macro execution edges and schema-34 joined macro data-provenance routes | Static authored topology only: macro bodies are not inlined/simulated, cross-graph expressions are not executed/substituted, engine StandardMacros remain external unless captured, and runtime Blueprint VM state is not executed |
+| Blueprint/K2 | `first_class` | Graphs, nodes, pins, links, state, refs, functions/events/calls/data provenance/execution blocks plus generic semantic statements/control flow; exact project-authored macro graph/interface bindings, schema-33 cross-graph macro execution edges, schema-34 joined macro data-provenance routes, and schema-35 direct-internal Blueprint function call/return topology | Static authored topology only: macro/function bodies are not inlined/simulated, cross-graph expressions are not executed/substituted, interface dispatch implementations and latent scheduling are not guessed, engine StandardMacros remain external unless captured, and runtime Blueprint VM state is not executed |
 | Blueprint user-defined enums | `first_class` | Enum identity, entries, raw/authored/display names and conservative readable enum decoration | Ambiguous enum typing is left raw rather than guessed |
 | Animation Blueprint state machines | `first_class` | Machines, states, aliases/conduits, transitions, transition rules, pose/cache/link nodes | Runtime generated/compiled VM behavior is not simulated |
 | UMG Widget Blueprint | `first_class_depth_pending` | Widget tree, properties, bindings, animations, animation bindings plus Blueprint graphs | Slate/runtime rendering/style semantics are not modeled as a separate graph |
@@ -269,7 +269,23 @@ The accepted GASP evidence behind the promotion contains 46 exact macro data inp
 
 The route stream deliberately does not substitute expressions across graph boundaries, inline macro bodies, manufacture values for unconnected pins, or claim Blueprint VM evaluation. Graph-local `blueprint_edges.jsonl` and `blueprint_data_dependencies.jsonl` remain the authoritative topology/provenance inputs.
 
+## 19. Blueprint function execution requires an executable callsite and a reachable callee frontier
+
+Derived schema 35 advances Blueprint interprocedural schema to version 3 and materializes exact static call/return topology for direct internal Blueprint function calls.
+
+The accepted GASP target audit distinguishes 466 uniquely captured internal function targets into 25 interface dispatch/declaration targets, 162 pure calls, 0 latent calls and 279 impure call nodes. Three impure call nodes are disconnected/dead authored callsites and therefore have no caller basic block. The remaining 276 executable callsites have exact caller blocks, exact callee entry blocks, entry-reachable return frontiers and exact connected caller continuations where present.
+
+Schema 35 adds:
+
+- `blueprint_interprocedural_function_execution_edges.jsonl` with `function_enter` and `function_return` block edges;
+- `blueprint_interprocedural_function_execution_terminals.jsonl` for executable direct calls whose caller side has no continuation.
+
+Return edges originate from every entry-reachable terminal block in the callee graph rather than assuming every function owns a `FunctionResult` node. This preserves valid void functions. Declared result nodes that are off the reachable exec path remain authored structure but are not used as fabricated return edges.
+
+Eligibility follows the actual call node: an impure call node remains executable even when its target function is default-pure, because UE supports a node-level purity override. Interface dispatch/declarations, pure calls, latent calls and unreachable/dead callsites are excluded from the direct execution stream. The tool does not guess interface implementations, latent scheduler continuations or runtime Blueprint VM behavior.
+
 ---
+
 
 
 
