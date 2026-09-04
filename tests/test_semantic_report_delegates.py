@@ -340,6 +340,7 @@ class SemanticReportDelegateAuditTest(unittest.TestCase):
                 {"multiple_captured_function_rows": 1},
             )
             self.assertEqual(result["delegate_bind_assign_node_count"], 2)
+            self.assertEqual(result["delegate_unbound_bind_assign_node_count"], 1)
             self.assertEqual(result["delegate_bind_assign_delegate_input_edge_count"], 1)
             self.assertEqual(result["delegate_create_to_bind_assign_edge_count"], 1)
             self.assertEqual(result["delegate_exact_bound_endpoint_chain_count"], 1)
