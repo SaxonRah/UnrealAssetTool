@@ -203,10 +203,11 @@ class BlueprintInterproceduralExecutionTest(unittest.TestCase):
 
     def test_derives_enter_return_and_terminal_without_flattening(self) -> None:
         self._write_fixture()
-        edges, terminals = interproc.derive(self.output, rows)
+        edges, terminals, data_routes = interproc.derive(self.output, rows)
 
         self.assertEqual(len(edges), 2)
         self.assertEqual(len(terminals), 1)
+        self.assertEqual(data_routes, [])
         by_kind = {row["edge_kind"]: row for row in edges}
 
         enter = by_kind["macro_enter"]
@@ -238,11 +239,15 @@ class BlueprintInterproceduralExecutionTest(unittest.TestCase):
             self.output / "blueprint_interprocedural_execution_terminals.jsonl",
             terminals,
         )
+        write_jsonl(
+            self.output / "blueprint_interprocedural_data_routes.jsonl",
+            data_routes,
+        )
         self.assertIsNone(interproc.validation_error(self.output, rows))
 
     def test_validation_rejects_changed_cross_graph_target(self) -> None:
         self._write_fixture()
-        edges, terminals = interproc.derive(self.output, rows)
+        edges, terminals, data_routes = interproc.derive(self.output, rows)
         edges[0]["target_block_id"] = "invented"
         write_jsonl(
             self.output / "blueprint_interprocedural_execution_edges.jsonl",
@@ -251,6 +256,10 @@ class BlueprintInterproceduralExecutionTest(unittest.TestCase):
         write_jsonl(
             self.output / "blueprint_interprocedural_execution_terminals.jsonl",
             terminals,
+        )
+        write_jsonl(
+            self.output / "blueprint_interprocedural_data_routes.jsonl",
+            data_routes,
         )
         self.assertIn(
             "do not exactly match",
@@ -269,7 +278,7 @@ class BlueprintInterproceduralExecutionTest(unittest.TestCase):
 
     def test_sqlite_round_trip(self) -> None:
         self._write_fixture()
-        edges, terminals = interproc.derive(self.output, rows)
+        edges, terminals, data_routes = interproc.derive(self.output, rows)
         write_jsonl(
             self.output / "blueprint_interprocedural_execution_edges.jsonl",
             edges,
@@ -277,6 +286,10 @@ class BlueprintInterproceduralExecutionTest(unittest.TestCase):
         write_jsonl(
             self.output / "blueprint_interprocedural_execution_terminals.jsonl",
             terminals,
+        )
+        write_jsonl(
+            self.output / "blueprint_interprocedural_data_routes.jsonl",
+            data_routes,
         )
 
         conn = sqlite3.connect(":memory:")
@@ -308,9 +321,9 @@ class BlueprintInterproceduralExecutionTest(unittest.TestCase):
 
 
 class BlueprintInterproceduralCompositionTest(unittest.TestCase):
-    def test_schema33_and_bundle_membership_are_composed_without_global_import_side_effects(self) -> None:
+    def test_schema34_and_bundle_membership_are_composed_without_global_import_side_effects(self) -> None:
         facade = (SCRIPTS / "uatool.py").read_text(encoding="utf-8")
-        self.assertIn("FINAL_DERIVED_SCHEMA_VERSION = 33", facade)
+        self.assertIn("FINAL_DERIVED_SCHEMA_VERSION = 34", facade)
         self.assertIn("import uatool_blueprint_interprocedural as blueprint_interprocedural", facade)
         self.assertIn("*blueprint_interprocedural.DERIVED_FILES", facade)
         self.assertIn("_require_blueprint_interprocedural(output)", facade)
