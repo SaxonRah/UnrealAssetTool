@@ -2706,7 +2706,8 @@ def _render_data_expression(expr: dict, depth: int = 0, max_depth: int = 8) -> s
         ]
         child_text = [value for value in child_text if value]
         if child_text:
-            args.append(f"{pin_name}={' | '.join(child_text)}")
+            rendered_sources = child_text[0] if len(child_text) == 1 else "multi(" + ", ".join(child_text) + ")"
+            args.append(f"{pin_name}={rendered_sources}")
 
     suffix = f".{output_pin}" if output_pin else ""
     if args:
