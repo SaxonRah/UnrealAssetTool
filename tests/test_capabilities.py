@@ -43,7 +43,13 @@ class CapabilityManifestTest(unittest.TestCase):
                     "gas_gameplay_effects.jsonl",
                 ],
             })
-            for filename in ("project_nodes.jsonl", "project_edges.jsonl", "project_neighborhoods.jsonl"):
+            for filename in (
+                "project_nodes.jsonl",
+                "project_edges.jsonl",
+                "project_neighborhoods.jsonl",
+                "blueprint_interprocedural_execution_edges.jsonl",
+                "blueprint_interprocedural_execution_terminals.jsonl",
+            ):
                 (root / filename).write_text("", encoding="utf-8")
 
             path = capabilities.write_manifest(root)
@@ -64,6 +70,12 @@ class CapabilityManifestTest(unittest.TestCase):
             self.assertEqual(by_family["smart_objects"]["corpus_coverage"], "generic_only")
             self.assertTrue(by_family["project_graph"]["available_in_corpus"])
             self.assertIn("project_edges.jsonl", by_family["project_graph"]["derived_streams"])
+            self.assertIn(
+                "blueprint_interprocedural_execution_edges.jsonl",
+                by_family["blueprint"]["derived_streams"],
+            )
+            self.assertIn("macro_enter", by_family["blueprint"]["derived_relations"])
+            self.assertIn("macro_return", by_family["blueprint"]["derived_relations"])
             self.assertTrue(all(row["runtime_state_captured"] is False for row in manifest["families"]))
 
     def test_focused_systems_corpus_does_not_claim_absent_passes(self) -> None:
