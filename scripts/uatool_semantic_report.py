@@ -693,6 +693,295 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
     # UE 5.8 declares BPTYPE_Interface after Normal, Const and MacroLibrary.
     BPTYPE_INTERFACE = 3
 
+    delegate_operations = {
+        "delegate_bind",
+        "delegate_assign",
+        "delegate_create",
+        "delegate_call",
+        "delegate_clear",
+    }
+    delegate_nodes = [
+        node for node in raw_nodes
+        if str(node.get("operation", "") or "") in delegate_operations
+    ]
+    delegate_node_by_id = {
+        str(node.get("node_id", "") or ""): node
+        for node in delegate_nodes
+        if node.get("node_id")
+    }
+    raw_node_by_id = {
+        str(node.get("node_id", "") or ""): node
+        for node in raw_nodes
+        if node.get("node_id")
+    }
+    delegate_operation_counts = collections.Counter(
+        str(node.get("operation", "") or "<empty>")
+        for node in delegate_nodes
+    )
+    delegate_dispatcher_identity_status = collections.Counter()
+    delegate_dispatcher_operations = collections.Counter()
+    delegate_dispatcher_identities: dict[tuple[str, str], collections.Counter] = collections.defaultdict(collections.Counter)
+    delegate_mismatches = collections.Counter()
+    delegate_dispatcher_node_count = 0
+    delegate_exact_dispatcher_identity_count = 0
+
+    def delegate_semantic(node: dict) -> dict:
+        value = node.get("semantic", {})
+        return value if isinstance(value, dict) else {}
+
+    for node in delegate_nodes:
+        operation = str(node.get("operation", "") or "")
+        if operation == "delegate_create":
+            continue
+        delegate_dispatcher_node_count += 1
+        sem = delegate_semantic(node)
+        delegate_name = str(sem.get("delegate_name", "") or "")
+        delegate_owner = str(sem.get("delegate_owner", "") or "")
+        if delegate_name and delegate_owner:
+            status = "exact_owner_and_name"
+            delegate_exact_dispatcher_identity_count += 1
+            delegate_dispatcher_identities[(delegate_owner, delegate_name)][operation] += 1
+            delegate_dispatcher_operations[
+                f"{operation} :: {delegate_owner}::{delegate_name}"
+            ] += 1
+        elif delegate_name:
+            status = "name_only"
+        elif delegate_owner:
+            status = "owner_only"
+        else:
+            status = "missing_identity"
+        delegate_dispatcher_identity_status[status] += 1
+        if status != "exact_owner_and_name":
+            delegate_mismatches[
+                f"{node.get('node_id','')} :: {operation} :: dispatcher_{status}"
+            ] += 1
+
+    def guid_key(value: str) -> str:
+        value = str(value or "").strip().lower()
+        for token in ("{", "}", "(", ")", "-", " "):
+            value = value.replace(token, "")
+        if len(value) == 32 and all(ch in "0123456789abcdef" for ch in value):
+            return value
+        return ""
+
+    def node_guid_key(node: dict) -> str:
+        node_id = str(node.get("node_id", "") or "")
+        marker = "::node::"
+        return guid_key(node_id.rsplit(marker, 1)[1] if marker in node_id else "")
+
+    guid_nodes_by_blueprint: dict[tuple[str, str], list[dict]] = collections.defaultdict(list)
+    event_name_nodes_by_blueprint: dict[tuple[str, str], list[dict]] = collections.defaultdict(list)
+    for node in raw_nodes:
+        bp = str(node.get("blueprint_path", "") or "")
+        guid = node_guid_key(node)
+        if bp and guid:
+            guid_nodes_by_blueprint[(bp, guid)].append(node)
+        if str(node.get("operation", "") or "") in {"custom_event", "event"}:
+            name = str(node.get("symbol", "") or "")
+            if bp and name:
+                event_name_nodes_by_blueprint[(bp, name)].append(node)
+
+    function_name_rows_by_blueprint: dict[tuple[str, str], list[dict]] = collections.defaultdict(list)
+    for function in function_rows:
+        bp = str(function.get("blueprint_path", "") or "")
+        name = str(function.get("name", "") or "")
+        if bp and name:
+            function_name_rows_by_blueprint[(bp, name)].append(function)
+
+    delegate_create_status = collections.Counter()
+    delegate_create_target_operations = collections.Counter()
+    delegate_create_selected_name_count = 0
+    delegate_create_selected_guid_count = 0
+    delegate_create_exact_endpoint_count = 0
+    delegate_create_examples: list[dict] = []
+    delegate_create_status_by_node: dict[str, str] = {}
+
+    create_nodes = [
+        node for node in delegate_nodes
+        if str(node.get("operation", "") or "") == "delegate_create"
+    ]
+    for node in create_nodes:
+        node_id = str(node.get("node_id", "") or "")
+        bp = str(node.get("blueprint_path", "") or "")
+        sem = delegate_semantic(node)
+        selected_name = str(sem.get("selected_function", "") or "")
+        selected_guid_raw = str(sem.get("selected_function_guid", "") or "")
+        selected_guid = guid_key(selected_guid_raw)
+        if selected_name:
+            delegate_create_selected_name_count += 1
+        if selected_guid_raw:
+            delegate_create_selected_guid_count += 1
+
+        guid_candidates = (
+            guid_nodes_by_blueprint.get((bp, selected_guid), [])
+            if selected_guid else []
+        )
+        status = ""
+        target_operation = ""
+        target_node_id = ""
+        if len(guid_candidates) == 1:
+            candidate = guid_candidates[0]
+            target_operation = str(candidate.get("operation", "") or "<empty>")
+            target_node_id = str(candidate.get("node_id", "") or "")
+            candidate_name = str(candidate.get("symbol", "") or "")
+            if selected_name and candidate_name and selected_name != candidate_name:
+                status = "exact_guid_name_mismatch"
+                delegate_mismatches[
+                    f"{node_id} :: create :: selected_name={selected_name} "
+                    f"guid_target_name={candidate_name}"
+                ] += 1
+            elif selected_name and candidate_name:
+                status = "exact_guid_name_match"
+                delegate_create_exact_endpoint_count += 1
+            else:
+                status = "exact_guid_only"
+                delegate_create_exact_endpoint_count += 1
+        elif len(guid_candidates) > 1:
+            status = "ambiguous_guid"
+            delegate_mismatches[f"{node_id} :: create :: ambiguous_selected_guid"] += 1
+        else:
+            event_candidates = (
+                event_name_nodes_by_blueprint.get((bp, selected_name), [])
+                if selected_name else []
+            )
+            function_candidates = (
+                function_name_rows_by_blueprint.get((bp, selected_name), [])
+                if selected_name else []
+            )
+            name_candidate_count = len(event_candidates) + len(function_candidates)
+            if name_candidate_count == 1:
+                status = "unique_name_candidate"
+                if event_candidates:
+                    target_operation = str(event_candidates[0].get("operation", "") or "<empty>")
+                    target_node_id = str(event_candidates[0].get("node_id", "") or "")
+                else:
+                    target_operation = "function"
+                    target_node_id = str(function_candidates[0].get("function_id", "") or "")
+            elif name_candidate_count > 1:
+                status = "ambiguous_name_candidate"
+            elif selected_guid_raw and not selected_guid:
+                status = "unparsed_guid_unresolved"
+            elif selected_name or selected_guid_raw:
+                status = "unresolved"
+            else:
+                status = "missing_selected_endpoint"
+        delegate_create_status[status] += 1
+        delegate_create_status_by_node[node_id] = status
+        if target_operation:
+            delegate_create_target_operations[target_operation] += 1
+        if len(delegate_create_examples) < limit:
+            delegate_create_examples.append({
+                "node_id": node_id,
+                "blueprint_path": bp,
+                "selected_function": selected_name,
+                "selected_function_guid": selected_guid_raw,
+                "status": status,
+                "target_operation": target_operation,
+                "target_node_id": target_node_id,
+            })
+
+    delegate_data_source_status = collections.Counter()
+    delegate_data_source_operations = collections.Counter()
+    delegate_bind_assign_node_count = 0
+    delegate_bind_assign_delegate_input_edge_count = 0
+    delegate_create_to_bind_assign_edge_count = 0
+    delegate_exact_bound_endpoint_chain_count = 0
+    delegate_input_edges_by_target: dict[str, list[dict]] = collections.defaultdict(list)
+    for edge in raw_data_edges:
+        target_pin_id = str(edge.get("target_pin_id", "") or "")
+        target_pin = pin_by_id.get(target_pin_id, {})
+        pin_type = (
+            target_pin.get("type", {})
+            if isinstance(target_pin.get("type"), dict)
+            else {}
+        )
+        category = str(pin_type.get("category", "") or "").lower()
+        if category not in {"delegate", "mcdelegate", "multicastdelegate"}:
+            continue
+        target_node_id = str(edge.get("target_node_id", "") or "")
+        if target_node_id:
+            delegate_input_edges_by_target[target_node_id].append(edge)
+
+    for node in delegate_nodes:
+        operation = str(node.get("operation", "") or "")
+        if operation not in {"delegate_bind", "delegate_assign"}:
+            continue
+        delegate_bind_assign_node_count += 1
+        node_id = str(node.get("node_id", "") or "")
+        incoming = delegate_input_edges_by_target.get(node_id, [])
+        delegate_bind_assign_delegate_input_edge_count += len(incoming)
+        create_sources = 0
+        for edge in incoming:
+            source_node_id = str(edge.get("source_node_id", "") or "")
+            source_node = raw_node_by_id.get(source_node_id, {})
+            source_operation = str(source_node.get("operation", "") or "<missing>")
+            delegate_data_source_operations[source_operation] += 1
+            if source_operation == "delegate_create":
+                create_sources += 1
+                delegate_create_to_bind_assign_edge_count += 1
+                if delegate_create_status_by_node.get(source_node_id, "").startswith("exact_guid"):
+                    delegate_exact_bound_endpoint_chain_count += 1
+        if not incoming:
+            delegate_data_source_status["no_delegate_input_edge"] += 1
+        elif create_sources == len(incoming) == 1:
+            delegate_data_source_status["single_create_delegate_source"] += 1
+        elif create_sources:
+            delegate_data_source_status["mixed_or_multiple_with_create"] += 1
+        else:
+            delegate_data_source_status["non_create_delegate_source"] += 1
+
+    event_rows_path = output / "blueprint_events.jsonl"
+    event_rows = list(rows(event_rows_path)) if event_rows_path.is_file() else []
+    component_bound_events = [
+        event for event in event_rows
+        if str(event.get("event_kind", "") or "") == "component_bound"
+    ]
+    delegate_component_event_status = collections.Counter()
+    delegate_component_event_exact_identity_count = 0
+    delegate_component_event_join_count = 0
+    for event in component_bound_events:
+        delegate_name = str(event.get("delegate_name", "") or "")
+        delegate_owner = str(event.get("delegate_owner", "") or "")
+        if delegate_name and delegate_owner:
+            delegate_component_event_exact_identity_count += 1
+            identity = (delegate_owner, delegate_name)
+            if identity in delegate_dispatcher_identities:
+                delegate_component_event_status["exact_dispatcher_join"] += 1
+                delegate_component_event_join_count += 1
+            else:
+                delegate_component_event_status["exact_identity_no_dispatcher_node"] += 1
+        elif delegate_name:
+            delegate_component_event_status["name_only"] += 1
+        elif delegate_owner:
+            delegate_component_event_status["owner_only"] += 1
+        else:
+            delegate_component_event_status["missing_identity"] += 1
+
+    delegate_dispatcher_shapes = collections.Counter()
+    delegate_call_identity_status = collections.Counter()
+    for identity, operations in delegate_dispatcher_identities.items():
+        shape = " ".join(
+            f"{operation}={int(operations.get(operation, 0))}"
+            for operation in (
+                "delegate_bind",
+                "delegate_assign",
+                "delegate_call",
+                "delegate_clear",
+            )
+        )
+        delegate_dispatcher_shapes[shape] += 1
+        call_count = int(operations.get("delegate_call", 0) or 0)
+        if call_count:
+            has_binding = bool(
+                operations.get("delegate_bind", 0)
+                or operations.get("delegate_assign", 0)
+            )
+            delegate_call_identity_status[
+                "call_identity_has_binding_site"
+                if has_binding
+                else "call_identity_without_binding_site"
+            ] += call_count
+
     function_call_resolution = collections.Counter()
     function_internal_kinds = collections.Counter()
     function_call_mismatches = collections.Counter()
@@ -1586,6 +1875,33 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
         "interprocedural_data_kinds": top(interprocedural_data_kinds),
         "interprocedural_data_value_kinds": top(interprocedural_data_value_kinds),
         "interprocedural_data_stream_alignment": interprocedural_data_stream_alignment,
+        "delegate_node_count": len(delegate_nodes),
+        "delegate_operation_counts": top(delegate_operation_counts),
+        "delegate_dispatcher_node_count": delegate_dispatcher_node_count,
+        "delegate_exact_dispatcher_identity_count": delegate_exact_dispatcher_identity_count,
+        "delegate_dispatcher_identity_status": top(delegate_dispatcher_identity_status),
+        "delegate_dispatcher_operations": top(delegate_dispatcher_operations),
+        "delegate_dispatcher_shapes": top(delegate_dispatcher_shapes),
+        "delegate_create_count": len(create_nodes),
+        "delegate_create_selected_name_count": delegate_create_selected_name_count,
+        "delegate_create_selected_guid_count": delegate_create_selected_guid_count,
+        "delegate_create_exact_endpoint_count": delegate_create_exact_endpoint_count,
+        "delegate_create_status": top(delegate_create_status),
+        "delegate_create_target_operations": top(delegate_create_target_operations),
+        "delegate_create_examples": delegate_create_examples,
+        "delegate_bind_assign_node_count": delegate_bind_assign_node_count,
+        "delegate_bind_assign_delegate_input_edge_count": delegate_bind_assign_delegate_input_edge_count,
+        "delegate_create_to_bind_assign_edge_count": delegate_create_to_bind_assign_edge_count,
+        "delegate_exact_bound_endpoint_chain_count": delegate_exact_bound_endpoint_chain_count,
+        "delegate_data_source_status": top(delegate_data_source_status),
+        "delegate_data_source_operations": top(delegate_data_source_operations),
+        "delegate_component_bound_event_count": len(component_bound_events),
+        "delegate_component_event_exact_identity_count": delegate_component_event_exact_identity_count,
+        "delegate_component_event_join_count": delegate_component_event_join_count,
+        "delegate_component_event_status": top(delegate_component_event_status),
+        "delegate_call_identity_status": top(delegate_call_identity_status),
+        "delegate_mismatch_count": sum(delegate_mismatches.values()),
+        "delegate_mismatches": top(delegate_mismatches),
         "function_data_binding_count": function_data_binding_count,
         "function_data_binding_schema_versions": top(function_data_binding_schema_versions),
         "function_data_binding_schema_current": function_data_binding_schema_current,
@@ -1828,6 +2144,53 @@ def print_report(report: dict) -> None:
     )
     section("interprocedural execution edge kinds", "interprocedural_execution_edge_kinds")
     section("interprocedural execution terminal kinds", "interprocedural_execution_terminal_kinds")
+
+    print("\n[Blueprint delegate/dispatcher evidence]")
+    print(
+        f"nodes={int(report.get('delegate_node_count', 0) or 0)} "
+        f"dispatcher_nodes={int(report.get('delegate_dispatcher_node_count', 0) or 0)} "
+        f"exact_dispatcher_identity={int(report.get('delegate_exact_dispatcher_identity_count', 0) or 0)} "
+        f"create_nodes={int(report.get('delegate_create_count', 0) or 0)} "
+        f"create_with_name={int(report.get('delegate_create_selected_name_count', 0) or 0)} "
+        f"create_with_guid={int(report.get('delegate_create_selected_guid_count', 0) or 0)} "
+        f"exact_create_endpoints={int(report.get('delegate_create_exact_endpoint_count', 0) or 0)} "
+        f"mismatches={int(report.get('delegate_mismatch_count', 0) or 0)}"
+    )
+    section("delegate operations", "delegate_operation_counts")
+    section("delegate dispatcher identity status", "delegate_dispatcher_identity_status")
+    section("delegate dispatcher shapes", "delegate_dispatcher_shapes")
+    section("delegate create endpoint status", "delegate_create_status")
+    section("delegate create endpoint operations", "delegate_create_target_operations")
+    print("\n[Delegate bind/assign canonical data evidence]")
+    print(
+        f"bind_assign_nodes={int(report.get('delegate_bind_assign_node_count', 0) or 0)} "
+        f"delegate_input_edges={int(report.get('delegate_bind_assign_delegate_input_edge_count', 0) or 0)} "
+        f"create_to_bind_edges={int(report.get('delegate_create_to_bind_assign_edge_count', 0) or 0)} "
+        f"exact_bound_endpoint_chains={int(report.get('delegate_exact_bound_endpoint_chain_count', 0) or 0)}"
+    )
+    section("delegate data source status", "delegate_data_source_status")
+    section("delegate data source operations", "delegate_data_source_operations")
+    print("\n[Component-bound delegate events]")
+    print(
+        f"events={int(report.get('delegate_component_bound_event_count', 0) or 0)} "
+        f"exact_identity={int(report.get('delegate_component_event_exact_identity_count', 0) or 0)} "
+        f"joined_dispatcher_identity={int(report.get('delegate_component_event_join_count', 0) or 0)}"
+    )
+    section("component-bound delegate event status", "delegate_component_event_status")
+    section("delegate call identity status", "delegate_call_identity_status")
+    print("\n[delegate create endpoint examples]")
+    delegate_examples = report.get("delegate_create_examples", [])
+    if not delegate_examples:
+        print("<none>")
+    else:
+        for example in delegate_examples:
+            print(
+                f"{example.get('node_id','')} :: selected={example.get('selected_function','')} "
+                f"guid={example.get('selected_function_guid','')} status={example.get('status','')} "
+                f"target_op={example.get('target_operation','')} "
+                f"target={example.get('target_node_id','')}"
+            )
+    section("delegate audit mismatches", "delegate_mismatches")
 
     print("\n[Blueprint function interprocedural data binding audit]")
     print(
