@@ -964,7 +964,7 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
             if source_operation == "delegate_create":
                 create_sources += 1
                 delegate_create_to_bind_assign_edge_count += 1
-                if delegate_create_status_by_node.get(source_node_id, "").startswith("exact_guid"):
+                if delegate_create_status_by_node.get(source_node_id, "").startswith("exact_"):
                     delegate_exact_bound_endpoint_chain_count += 1
         if not incoming:
             delegate_data_source_status["no_delegate_input_edge"] += 1
@@ -989,7 +989,7 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
         delegate_owner = str(event.get("delegate_owner", "") or "")
         if delegate_name and delegate_owner:
             delegate_component_event_exact_identity_count += 1
-            identity = (delegate_owner, delegate_name)
+            identity = (delegate_owner, delegate_name.casefold())
             if identity in delegate_dispatcher_identities:
                 delegate_component_event_status["exact_dispatcher_join"] += 1
                 delegate_component_event_join_count += 1
@@ -1010,6 +1010,7 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
             for operation in (
                 "delegate_bind",
                 "delegate_assign",
+                "delegate_unbind",
                 "delegate_call",
                 "delegate_clear",
             )
@@ -1924,6 +1925,9 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
         "delegate_operation_counts": top(delegate_operation_counts),
         "delegate_dispatcher_node_count": delegate_dispatcher_node_count,
         "delegate_exact_dispatcher_identity_count": delegate_exact_dispatcher_identity_count,
+        "delegate_member_guid_count": delegate_member_guid_count,
+        "delegate_self_context_count": delegate_self_context_count,
+        "delegate_external_context_count": delegate_external_context_count,
         "delegate_dispatcher_identity_status": top(delegate_dispatcher_identity_status),
         "delegate_dispatcher_operations": top(delegate_dispatcher_operations),
         "delegate_dispatcher_shapes": top(delegate_dispatcher_shapes),
@@ -2195,6 +2199,9 @@ def print_report(report: dict) -> None:
         f"nodes={int(report.get('delegate_node_count', 0) or 0)} "
         f"dispatcher_nodes={int(report.get('delegate_dispatcher_node_count', 0) or 0)} "
         f"exact_dispatcher_identity={int(report.get('delegate_exact_dispatcher_identity_count', 0) or 0)} "
+        f"member_guids={int(report.get('delegate_member_guid_count', 0) or 0)} "
+        f"self_context={int(report.get('delegate_self_context_count', 0) or 0)} "
+        f"external_context={int(report.get('delegate_external_context_count', 0) or 0)} "
         f"create_nodes={int(report.get('delegate_create_count', 0) or 0)} "
         f"create_with_name={int(report.get('delegate_create_selected_name_count', 0) or 0)} "
         f"create_with_guid={int(report.get('delegate_create_selected_guid_count', 0) or 0)} "
@@ -2231,7 +2238,10 @@ def print_report(report: dict) -> None:
         for example in delegate_examples:
             print(
                 f"{example.get('node_id','')} :: selected={example.get('selected_function','')} "
-                f"guid={example.get('selected_function_guid','')} status={example.get('status','')} "
+                f"guid={example.get('selected_function_guid','')} "
+                f"path={example.get('selected_function_path','')} "
+                f"scope={example.get('selected_scope_class','')} "
+                f"status={example.get('status','')} "
                 f"target_op={example.get('target_operation','')} "
                 f"target={example.get('target_node_id','')}"
             )
