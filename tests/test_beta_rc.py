@@ -1,0 +1,123 @@
+from __future__ import annotations
+
+import json
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPTS = ROOT / "scripts"
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
+
+import uatool_beta_rc as beta_rc
+import uatool_capabilities as capabilities
+import uatool_version as version
+
+
+def write_json(path: Path, value: dict) -> None:
+    path.write_text(json.dumps(value), encoding="utf-8", newline="\n")
+
+
+def write_jsonl(path: Path, count: int) -> None:
+    path.write_text("{}\n" * count, encoding="utf-8", newline="\n")
+
+
+class BetaReleaseCandidateTest(unittest.TestCase):
+    def _current_cropout_fixture(self, root: Path) -> None:
+        write_json(root / "manifest.json", {
+            "schema_version": version.CURRENT_SCHEMAS["structural"],
+            "derived_schema_version": version.CURRENT_SCHEMAS["derived"],
+        })
+        schemas = {
+            key: value
+            for key, value in version.CURRENT_SCHEMAS.items()
+            if key != "capabilities"
+        }
+        families = []
+        for name in ("blueprint", "world", "project_graph"):
+            families.append({
+                "family": name,
+                "contract_coverage": "first_class",
+                "corpus_coverage": "first_class",
+                "available_in_corpus": True,
+                "runtime_state_captured": False,
+            })
+        write_json(root / capabilities.CAPABILITIES_FILE, {
+            "capability_schema_version": version.CURRENT_SCHEMAS["capabilities"],
+            "tool": {
+                "version": version.RELEASE_VERSION,
+                "release_line": version.RELEASE_VERSION,
+                "validated_engine": version.VALIDATED_ENGINE,
+            },
+            "coverage_levels": list(capabilities.COVERAGE_LEVELS),
+            "schemas": schemas,
+            "families": families,
+        })
+        for name in (
+            "blueprint_nodes.jsonl",
+            "blueprint_semantic_nodes.jsonl",
+            "world_actors.jsonl",
+            "project_edges.jsonl",
+        ):
+            write_jsonl(root / name, 1)
+
+    def test_cropout_profile_accepts_current_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._current_cropout_fixture(root)
+            record = beta_rc.check_corpus(
+                root,
+                "cropout",
+                repo_root=ROOT,
+            )
+            self.assertTrue(record["accepted"])
+            self.assertEqual(record["release_version"], version.RELEASE_VERSION)
+            self.assertEqual(record["profile"], "cropout")
+            self.assertEqual(record["schemas"], version.CURRENT_SCHEMAS)
+            self.assertEqual(record["failures"], [])
+            self.assertTrue(all(value == 1 for value in record["metrics"].values()))
+            self.assertEqual(len(record["git_commit"]), 40)
+
+    def test_schema_regression_fails_record(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._current_cropout_fixture(root)
+            manifest = json.loads((root / capabilities.CAPABILITIES_FILE).read_text(encoding="utf-8"))
+            manifest["schemas"]["derived"] = version.CURRENT_SCHEMAS["derived"] - 1
+            write_json(root / capabilities.CAPABILITIES_FILE, manifest)
+
+            record = beta_rc.check_corpus(root, "cropout", repo_root=ROOT)
+            self.assertFalse(record["accepted"])
+            self.assertTrue(
+                any(failure.startswith("schema:derived:") for failure in record["failures"])
+            )
+
+    def test_missing_profile_family_fails_record(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._current_cropout_fixture(root)
+            manifest = json.loads((root / capabilities.CAPABILITIES_FILE).read_text(encoding="utf-8"))
+            manifest["families"] = [
+                row for row in manifest["families"]
+                if row["family"] != "world"
+            ]
+            write_json(root / capabilities.CAPABILITIES_FILE, manifest)
+
+            record = beta_rc.check_corpus(root, "cropout", repo_root=ROOT)
+            self.assertFalse(record["accepted"])
+            self.assertTrue(
+                any(failure.startswith("family:world:") for failure in record["failures"])
+            )
+
+    def test_profile_aliases_are_stable(self) -> None:
+        self.assertEqual(beta_rc.normalize_profile("Game-Animation-Sample"), "gasp")
+        self.assertEqual(beta_rc.normalize_profile("ContentExamples"), "contentexamples")
+        self.assertEqual(beta_rc.normalize_profile("City-Sample"), "citysample")
+        with self.assertRaises(ValueError):
+            beta_rc.normalize_profile("unknown")
+
+
+if __name__ == "__main__":
+    unittest.main()

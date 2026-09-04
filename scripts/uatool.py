@@ -29,6 +29,7 @@ import uatool_mover_behavior as mover_behavior
 import uatool_build_perf as build_perf
 import uatool_verify_bundle as bundle_verify
 import uatool_version as version
+import uatool_beta_rc as beta_rc
 
 # Public derived schema 37 adds exact static Blueprint delegate binding
 # provenance on top of schema-36 function data provenance.
@@ -865,6 +866,53 @@ core.DEFAULT_BUNDLE_FILES = tuple(dict.fromkeys((
 )))
 
 
+def _beta_rc_cli(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="uatool beta-rc-check",
+        description="validate one current corpus against a 1.0 beta release-candidate profile",
+    )
+    parser.add_argument("output", help="source .uatool directory")
+    parser.add_argument(
+        "--profile",
+        required=True,
+        choices=sorted(beta_rc.PROFILE_SPECS),
+        help="representative release-candidate corpus profile",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="emit the complete RC record as JSON",
+    )
+    parser.add_argument(
+        "--record",
+        help="optional JSON file to write with the complete RC record",
+    )
+    args = parser.parse_args(argv)
+
+    output = _require_current_derive(Path(args.output))
+    record = beta_rc.check_corpus(
+        output,
+        args.profile,
+        repo_root=Path(__file__).resolve().parents[1],
+    )
+
+    if args.record:
+        record_path = Path(args.record).expanduser().resolve()
+        record_path.parent.mkdir(parents=True, exist_ok=True)
+        record_path.write_text(
+            json.dumps(record, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+
+    if args.json:
+        print(json.dumps(record, indent=2, sort_keys=True))
+    else:
+        beta_rc.print_record(record)
+
+    return 0 if record.get("accepted", False) else 47
+
+
 def _version_cli(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="uatool version",
@@ -965,6 +1013,12 @@ def _verify_bundle_cli(argv: list[str]) -> int:
 
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "beta-rc-check":
+        try:
+            return _beta_rc_cli(sys.argv[2:])
+        except Exception as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 47
     if len(sys.argv) > 1 and sys.argv[1] == "--version":
         print(f"UnrealAssetTool {version.RELEASE_VERSION}")
         return 0
