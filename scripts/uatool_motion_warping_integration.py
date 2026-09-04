@@ -8,6 +8,7 @@ import sqlite3
 from pathlib import Path
 
 import uatool_animation as animation
+import uatool_animation_mesh_physics as mesh_physics
 import uatool_motion_warping_schema as motion_schema
 import uatool_motion_warping_graph as motion_graph
 import uatool_motion_warping_accept as motion_accept
@@ -28,7 +29,22 @@ def _read_json(path: Path) -> dict | None:
 
 
 def _base_animation_schema(output: Path) -> int:
-    return 3 if (Path(output) / "animation_mesh_physics_manifest.json").is_file() else 2
+    manifest = _read_json(Path(output) / "animation_manifest.json")
+    return int(manifest.get("schema_version", 0) or 0) if manifest is not None else 0
+
+
+def _promote_base_animation_schema(output: Path) -> int:
+    """Compose an authored mesh/physics sidecar before Motion Warping promotion.
+
+    The normal World pass writes animation schema 2 plus the schema-3
+    SkeletalMesh/PhysicsAsset sidecar in the same editor process. Motion Warping
+    is an outer derive wrapper, so it must promote that sidecar before attempting
+    to compose public animation schema 4.
+    """
+    output = Path(output).expanduser().resolve()
+    if (output / "animation_mesh_physics_manifest.json").is_file():
+        mesh_physics.normalize_output(output)
+    return _base_animation_schema(output)
 
 
 def _promote_pending_capture(output: Path) -> bool:
@@ -49,9 +65,11 @@ def _promote_pending_capture(output: Path) -> bool:
     if int(counts.get("load_failures", -1)) != 0:
         raise RuntimeError("normal Motion Warping pass reports animation load failures")
 
+    base_animation_schema = _promote_base_animation_schema(output)
+
     windows = int(counts.get("motion_warping_windows", 0) or 0)
     if windows == 0:
-        motion_schema.clear_schema(output, base_animation_schema=_base_animation_schema(output))
+        motion_schema.clear_schema(output, base_animation_schema=base_animation_schema)
         shutil.rmtree(capture_dir)
         print("Motion Warping pass: project contains no authored Motion Warping windows; stale schema cleared")
         return False
