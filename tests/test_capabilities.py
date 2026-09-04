@@ -50,6 +50,8 @@ class CapabilityManifestTest(unittest.TestCase):
                 "blueprint_interprocedural_execution_edges.jsonl",
                 "blueprint_interprocedural_execution_terminals.jsonl",
                 "blueprint_interprocedural_data_routes.jsonl",
+                "blueprint_interprocedural_function_execution_edges.jsonl",
+                "blueprint_interprocedural_function_execution_terminals.jsonl",
             ):
                 (root / filename).write_text("", encoding="utf-8")
 
@@ -83,6 +85,12 @@ class CapabilityManifestTest(unittest.TestCase):
             )
             self.assertIn("macro_data_input", by_family["blueprint"]["derived_relations"])
             self.assertIn("macro_data_output", by_family["blueprint"]["derived_relations"])
+            self.assertIn(
+                "blueprint_interprocedural_function_execution_edges.jsonl",
+                by_family["blueprint"]["derived_streams"],
+            )
+            self.assertIn("function_enter", by_family["blueprint"]["derived_relations"])
+            self.assertIn("function_return", by_family["blueprint"]["derived_relations"])
             self.assertTrue(all(row["runtime_state_captured"] is False for row in manifest["families"]))
 
     def test_focused_systems_corpus_does_not_claim_absent_passes(self) -> None:
