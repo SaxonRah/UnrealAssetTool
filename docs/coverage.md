@@ -26,7 +26,7 @@ mesh=1
 world_geometry=1
 vfx=1
 systems=11
-derived=35
+derived=36
 capabilities=1
 ```
 
@@ -38,7 +38,7 @@ capabilities=1
 | --- | --- | --- | --- |
 | Files/source/config | `first_class` | Physical files, kinds, bounded text chunks | Not a C++ semantic compiler/indexer |
 | Asset Registry | `first_class` fallback | Asset identity/class/package/tags/dependencies | Package dependency is not semantic object linkage |
-| Blueprint/K2 | `first_class` | Graphs, nodes, pins, links, state, refs, functions/events/calls/data provenance/execution blocks plus generic semantic statements/control flow; exact project-authored macro graph/interface bindings, schema-33 cross-graph macro execution edges, schema-34 joined macro data-provenance routes, and schema-35 direct-internal Blueprint function call/return topology | Static authored topology only: macro/function bodies are not inlined/simulated, cross-graph expressions are not executed/substituted, interface dispatch implementations and latent scheduling are not guessed, engine StandardMacros remain external unless captured, and runtime Blueprint VM state is not executed |
+| Blueprint/K2 | `first_class` | Graphs, nodes, pins, links, state, refs, functions/events/calls/data provenance/execution blocks plus generic semantic statements/control flow; exact project-authored macro graph/interface bindings, schema-33 cross-graph macro execution edges, schema-34 joined macro data-provenance routes, schema-35 direct-internal Blueprint function call/return topology, and schema-36 function data provenance | Static authored topology only: macro/function bodies are not inlined/simulated, cross-graph expressions are not executed/substituted, split call-site struct projections do not claim uncaptured callee member identity, interface dispatch implementations and latent scheduling are not guessed, engine StandardMacros remain external unless captured, and runtime Blueprint VM state is not executed |
 | Blueprint user-defined enums | `first_class` | Enum identity, entries, raw/authored/display names and conservative readable enum decoration | Ambiguous enum typing is left raw rather than guessed |
 | Animation Blueprint state machines | `first_class` | Machines, states, aliases/conduits, transitions, transition rules, pose/cache/link nodes | Runtime generated/compiled VM behavior is not simulated |
 | UMG Widget Blueprint | `first_class_depth_pending` | Widget tree, properties, bindings, animations, animation bindings plus Blueprint graphs | Slate/runtime rendering/style semantics are not modeled as a separate graph |
@@ -284,7 +284,25 @@ Return edges originate from every entry-reachable terminal block in the callee g
 
 Eligibility follows the actual call node: an impure call node remains executable even when its target function is default-pure, because UE supports a node-level purity override. Interface dispatch/declarations, pure calls, latent calls and unreachable/dead callsites are excluded from the direct execution stream. The tool does not guess interface implementations, latent scheduler continuations or runtime Blueprint VM behavior.
 
+## 20. Blueprint function data provenance separates exact members from split parent projections
+
+Derived schema 36 advances Blueprint interprocedural schema to version 4 and adds `blueprint_interprocedural_function_data_routes.jsonl`.
+
+The prerequisite call-binding schema-2 audit is accepted on GASP with 908 bindings: all 908 have exact parent-parameter identity and structural value-type compatibility; 886 have exact member identity; 22 are split call-site projections to exact unsplit parent parameters. The 138 differences observed between call/signature/parameter pin surfaces are limited to `is_reference`/`is_const` presentation and are retained as provenance rather than treated as transported value-type mismatches.
+
+Schema 36 materializes one static function-data row per non-interface, non-latent exact-internal binding. Each row preserves call/function identity, argument-vs-return direction, target kind, exact-member-vs-split-parent identity, structural value-type proof, qualifier surfaces, caller source/default evidence, callee parameter/body provenance, caller result consumers and readiness state.
+
+Two readiness levels are deliberate:
+
+- `boundary_ready` means the function boundary mapping and required value/provenance evidence are exact enough for the captured parameter identity;
+- `member_route_ready` additionally requires exact member identity and a canonical consumer across the boundary.
+
+Split bindings remain queryable as `split_parent_projection` rows with `member_identity_exact=false`. They can never become member-route-ready merely from a lexical suffix. The representative GASP callee boundaries expose only the unsplit parent parameter for all 22 split cases, so no callee child-pin/member identity is manufactured.
+
+Pure functions remain valid data-provenance targets. Unreachable/dead impure callsites remain authored data topology and can retain data routes. Blueprint Interface declarations/dispatches and latent calls are excluded from schema-36 implementation provenance. No expression substitution, function-body inlining, scheduler simulation or runtime Blueprint VM execution is claimed.
+
 ---
+
 
 
 
