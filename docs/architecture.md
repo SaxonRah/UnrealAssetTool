@@ -15,7 +15,7 @@ A generic package dependency is useful fallback evidence, but it is never promot
 ## Current schemas
 
 ```text
-structural schema: 12
+structural schema: 13
 world schema:      12
 animation schema:   1
 VFX schema:         1
@@ -87,7 +87,7 @@ VFX and systems piggyback the world Editor process rather than launching separat
 
 ## Canonical extraction layers
 
-### Structural schema 12
+### Structural schema 13
 
 The structural commandlet owns project-wide content that does not require loading every world:
 
