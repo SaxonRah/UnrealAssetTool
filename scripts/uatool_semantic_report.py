@@ -154,6 +154,17 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
         b = normalized_type(right)
         return tuple(field for field in TYPE_FIELDS if a[field] != b[field])
 
+    VALUE_TYPE_FIELDS = (
+        "category",
+        "subcategory",
+        "subcategory_object",
+        "container_type",
+    )
+
+    def value_type_key(pin_type: dict) -> tuple:
+        normalized = normalized_type(pin_type)
+        return tuple(normalized[field] for field in VALUE_TYPE_FIELDS)
+
     def tunnel_shape(node: dict) -> str:
         pins = pins_by_node.get(str(node.get("node_id", "") or ""), [])
         inputs = sum(int(not pin_is_output(pin)) for pin in pins)
@@ -916,7 +927,11 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
     function_data_mismatches = collections.Counter()
     function_data_binding_count = len(call_bindings)
     function_data_parameter_identity_count = 0
+    function_data_member_identity_exact_count = 0
+    function_data_split_parent_projection_count = 0
+    function_data_value_type_verified_count = 0
     function_data_type_verified_count = 0
+    function_data_qualifier_difference_count = 0
     function_data_exact_call_signature_equal_count = 0
     function_data_exact_signature_pin_equal_count = 0
     function_data_exact_call_pin_equal_count = 0
@@ -1096,14 +1111,31 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
                         for field in type_diff_fields(call_type, pin_type):
                             function_data_type_diff_fields[f"call_vs_pin:{field}"] += 1
 
-            type_ok = bool(identity_ok and call_signature_equal and signature_pin_equal and call_pin_equal)
+            value_type_ok = bool(
+                identity_ok
+                and value_type_key(call_type) == value_type_key(expected_type)
+                and all(
+                    value_type_key(
+                        pin.get("type", {}) if isinstance(pin.get("type"), dict) else {}
+                    ) == value_type_key(expected_type)
+                    for pin in exact_parameter_pins
+                )
+            )
+            type_ok = value_type_ok
+            if identity_ok:
+                function_data_member_identity_exact_count += 1
+            if value_type_ok:
+                function_data_value_type_verified_count += 1
+                if not (call_signature_equal and signature_pin_equal and call_pin_equal):
+                    function_data_qualifier_difference_count += 1
+                    function_data_status["qualifier_presentation_differs"] += 1
             if not identity_ok:
                 function_data_mismatches[
                     f"{call_node_id} :: {direction}:{call_pin_name} :: exact_parameter_pin_missing"
                 ] += 1
-            elif not type_ok:
+            elif not value_type_ok:
                 function_data_mismatches[
-                    f"{call_node_id} :: {direction}:{call_pin_name} :: exact_type_mismatch"
+                    f"{call_node_id} :: {direction}:{call_pin_name} :: structural_value_type_mismatch"
                 ] += 1
         elif match_kind == "split_struct":
             member_pins = parameter_candidate_pins(target, direction, call_pin_name)
@@ -1186,24 +1218,50 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
                     ),
                 })
 
-            call_type = binding.get("call_pin_type", {})
-            type_ok = bool(
-                identity_ok
-                and all(pin_type_key(pin) == type_key(call_type) for pin in member_pins)
+            # UE keeps these members split only at the call site in the
+            # representative GASP corpus. The callee boundary exposes the exact
+            # unsplit parent parameter. Treat that as an authored parent
+            # projection, not as a missing child-pin defect.
+            expected_type = binding.get("parameter_type", {})
+            parent_identity_ok = bool(
+                parameter_pin_ids
+                and len(parent_pins) == len(parameter_pin_ids)
             )
-            if identity_ok:
+            parent_value_type_ok = bool(
+                parent_identity_ok
+                and all(
+                    value_type_key(
+                        pin.get("type", {}) if isinstance(pin.get("type"), dict) else {}
+                    ) == value_type_key(expected_type)
+                    for pin in parent_pins
+                )
+            )
+            identity_ok = parent_identity_ok
+            type_ok = parent_value_type_ok
+            exact_parameter_pins = parent_pins
+
+            if parent_identity_ok:
+                function_data_split_parent_projection_count += 1
+                function_data_status["split_parent_projection"] += 1
+            else:
+                function_data_mismatches[
+                    f"{call_node_id} :: {direction}:{call_pin_name} :: split_parent_parameter_missing"
+                ] += 1
+            if parent_value_type_ok:
+                function_data_value_type_verified_count += 1
+            elif parent_identity_ok:
+                function_data_mismatches[
+                    f"{call_node_id} :: {direction}:{call_pin_name} :: split_parent_value_type_mismatch"
+                ] += 1
+
+            # Keep the diagnostic counts from the first pass explicit: no
+            # exact member pin is claimed unless one is actually captured.
+            if member_pins:
                 function_data_split_member_resolved_count += 1
                 function_data_status["split_member_exact_pin_resolved"] += 1
             else:
                 function_data_split_member_unresolved_count += 1
-                function_data_status["split_member_exact_pin_unresolved"] += 1
-                function_data_mismatches[
-                    f"{call_node_id} :: {direction}:{call_pin_name} :: split_member_pin_unresolved"
-                ] += 1
-            if identity_ok and not type_ok:
-                function_data_mismatches[
-                    f"{call_node_id} :: {direction}:{call_pin_name} :: split_member_type_mismatch"
-                ] += 1
+                function_data_status["split_member_identity_not_captured"] += 1
         else:
             function_data_mismatches[
                 f"{call_node_id} :: {direction}:{call_pin_name} :: unexpected_match_kind:{match_kind or '<empty>'}"
@@ -1211,10 +1269,27 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
 
         if identity_ok:
             function_data_parameter_identity_count += 1
-            function_data_status["exact_parameter_identity"] += 1
+            function_data_status["parameter_identity_verified"] += 1
         if type_ok:
             function_data_type_verified_count += 1
-            function_data_status["full_type_verified"] += 1
+            function_data_status["value_type_verified"] += 1
+
+        binding_contract_kind = str(binding.get("parameter_identity_kind", "") or "")
+        binding_contract_type = binding.get("value_type_compatible")
+        if binding_contract_kind:
+            expected_kind = (
+                "exact_parameter" if match_kind == "exact"
+                else "split_parent_projection" if match_kind == "split_struct"
+                else ""
+            )
+            if expected_kind and binding_contract_kind != expected_kind:
+                function_data_mismatches[
+                    f"{call_node_id} :: {direction}:{call_pin_name} :: binding_identity_contract_mismatch"
+                ] += 1
+        if binding_contract_type is not None and bool(binding_contract_type) != bool(type_ok):
+            function_data_mismatches[
+                f"{call_node_id} :: {direction}:{call_pin_name} :: binding_value_type_contract_mismatch"
+            ] += 1
 
         implementation_target = target_kind not in {
             "interface_dispatch_or_declaration",
@@ -1265,9 +1340,12 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
             if binding_verified:
                 function_data_argument_binding_verified_count += 1
                 function_data_status["argument_binding_verified"] += 1
-            if binding_verified and consumers:
+            member_route_exact = match_kind == "exact"
+            if binding_verified and consumers and member_route_exact:
                 function_data_argument_route_ready_count += 1
                 function_data_status["argument_route_ready"] += 1
+            elif binding_verified and consumers and match_kind == "split_struct":
+                function_data_status["argument_split_projection_not_member_route"] += 1
             continue
 
         function_data_return_count += 1
@@ -1310,9 +1388,12 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
         if binding_verified:
             function_data_return_binding_verified_count += 1
             function_data_status["return_binding_verified"] += 1
-        if binding_verified and caller_consumers:
+        member_route_exact = match_kind == "exact"
+        if binding_verified and caller_consumers and member_route_exact:
             function_data_return_route_ready_count += 1
             function_data_status["return_route_ready"] += 1
+        elif binding_verified and caller_consumers and match_kind == "split_struct":
+            function_data_status["return_split_projection_not_member_route"] += 1
 
     function_interprocedural_edge_kinds = collections.Counter(
         str(row.get("edge_kind", "") or "<empty>")
@@ -1449,7 +1530,11 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
         "function_data_mismatches": top(function_data_mismatches),
         "function_data_mismatch_count": sum(function_data_mismatches.values()),
         "function_data_parameter_identity_count": function_data_parameter_identity_count,
+        "function_data_member_identity_exact_count": function_data_member_identity_exact_count,
+        "function_data_split_parent_projection_count": function_data_split_parent_projection_count,
+        "function_data_value_type_verified_count": function_data_value_type_verified_count,
         "function_data_type_verified_count": function_data_type_verified_count,
+        "function_data_qualifier_difference_count": function_data_qualifier_difference_count,
         "function_data_exact_call_signature_equal_count": function_data_exact_call_signature_equal_count,
         "function_data_exact_signature_pin_equal_count": function_data_exact_signature_pin_equal_count,
         "function_data_exact_call_pin_equal_count": function_data_exact_call_pin_equal_count,
@@ -1671,8 +1756,11 @@ def print_report(report: dict) -> None:
     print("\n[Blueprint function interprocedural data binding audit]")
     print(
         f"bindings={int(report.get('function_data_binding_count', 0) or 0)} "
-        f"exact_parameter_identity={int(report.get('function_data_parameter_identity_count', 0) or 0)} "
-        f"full_type_verified={int(report.get('function_data_type_verified_count', 0) or 0)} "
+        f"parameter_identity_verified={int(report.get('function_data_parameter_identity_count', 0) or 0)} "
+        f"exact_member_identity={int(report.get('function_data_member_identity_exact_count', 0) or 0)} "
+        f"split_parent_projections={int(report.get('function_data_split_parent_projection_count', 0) or 0)} "
+        f"value_type_verified={int(report.get('function_data_value_type_verified_count', 0) or 0)} "
+        f"qualifier_differences={int(report.get('function_data_qualifier_difference_count', 0) or 0)} "
         f"split_member_resolved={int(report.get('function_data_split_member_resolved_count', 0) or 0)} "
         f"split_member_unresolved={int(report.get('function_data_split_member_unresolved_count', 0) or 0)} "
         f"mismatches={int(report.get('function_data_mismatch_count', 0) or 0)}"
