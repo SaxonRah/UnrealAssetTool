@@ -867,31 +867,47 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
             status = "ambiguous_guid"
             delegate_mismatches[f"{node_id} :: create :: ambiguous_selected_guid"] += 1
         else:
-            event_candidates = (
-                event_name_nodes_by_blueprint.get((bp, selected_name), [])
-                if selected_name else []
+            resolved_function_candidates = (
+                function_rows_by_resolved.get(selected_function_path, [])
+                if selected_function_path else []
             )
-            function_candidates = (
-                function_name_rows_by_blueprint.get((bp, selected_name), [])
-                if selected_name else []
-            )
-            name_candidate_count = len(event_candidates) + len(function_candidates)
-            if name_candidate_count == 1:
-                status = "unique_name_candidate"
-                if event_candidates:
-                    target_operation = str(event_candidates[0].get("operation", "") or "<empty>")
-                    target_node_id = str(event_candidates[0].get("node_id", "") or "")
-                else:
-                    target_operation = "function"
-                    target_node_id = str(function_candidates[0].get("function_id", "") or "")
-            elif name_candidate_count > 1:
-                status = "ambiguous_name_candidate"
-            elif selected_guid_raw and not selected_guid:
-                status = "unparsed_guid_unresolved"
-            elif selected_name or selected_guid_raw:
-                status = "unresolved"
+            if len(resolved_function_candidates) == 1:
+                target = resolved_function_candidates[0]
+                status = "exact_function_path"
+                target_operation = "function"
+                target_node_id = str(target.get("function_id", "") or "")
+                delegate_create_exact_endpoint_count += 1
+            elif len(resolved_function_candidates) > 1:
+                status = "ambiguous_function_path"
+                delegate_mismatches[
+                    f"{node_id} :: create :: ambiguous_selected_function_path={selected_function_path}"
+                ] += 1
             else:
-                status = "missing_selected_endpoint"
+                event_candidates = (
+                    event_name_nodes_by_blueprint.get((bp, selected_name.casefold()), [])
+                    if selected_name else []
+                )
+                function_candidates = (
+                    function_name_rows_by_blueprint.get((bp, selected_name.casefold()), [])
+                    if selected_name else []
+                )
+                name_candidate_count = len(event_candidates) + len(function_candidates)
+                if name_candidate_count == 1:
+                    status = "unique_name_candidate"
+                    if event_candidates:
+                        target_operation = str(event_candidates[0].get("operation", "") or "<empty>")
+                        target_node_id = str(event_candidates[0].get("node_id", "") or "")
+                    else:
+                        target_operation = "function"
+                        target_node_id = str(function_candidates[0].get("function_id", "") or "")
+                elif name_candidate_count > 1:
+                    status = "ambiguous_name_candidate"
+                elif selected_guid_raw and not selected_guid:
+                    status = "unparsed_guid_unresolved"
+                elif selected_name or selected_guid_raw:
+                    status = "unresolved"
+                else:
+                    status = "missing_selected_endpoint"
         delegate_create_status[status] += 1
         delegate_create_status_by_node[node_id] = status
         if target_operation:
@@ -902,6 +918,8 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
                 "blueprint_path": bp,
                 "selected_function": selected_name,
                 "selected_function_guid": selected_guid_raw,
+                "selected_function_path": selected_function_path,
+                "selected_scope_class": selected_scope_class,
                 "status": status,
                 "target_operation": target_operation,
                 "target_node_id": target_node_id,
