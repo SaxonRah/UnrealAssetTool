@@ -16,7 +16,7 @@
 - systems scanner schema: **11**
 - mesh companion schema: **1**
 - world-geometry companion schema: **1**
-- derived schema: **37**
+- derived schema: **38**
 - capability contract schema: **1**
 
 The schemas are independently versioned because they represent different extraction lifecycles. A change to a Python-only derived view does not require renumbering canonical Unreal scanner output.
@@ -91,7 +91,7 @@ The `.uatool` directory contains canonical JSONL, deterministic derived JSONL, m
 Important schema layers:
 
 ```text
-manifest.json                 structural schema 13 + derived schema 37
+manifest.json                 structural schema 13 + derived schema 38
 world_manifest.json           world schema 12 / structural baseline 13
 animation_manifest.json       animation schema 4
 vfx_manifest.json             VFX schema 1
@@ -101,7 +101,7 @@ world_geometry_manifest.json  world-geometry schema 1
 capabilities.json             capability contract schema 1
 ```
 
-Derived schema 37 is the current deterministic layer. It includes the typed project graph plus Blueprint macro/function interprocedural execution and data provenance, exact authored delegate bindings, and the accepted Chooser/Mover/Gameplay Camera/Mass/ZoneGraph/GAS/animation/system relationships while preserving earlier derived streams:
+Derived schema 38 is the current deterministic layer. It includes the typed project graph plus Blueprint macro/function interprocedural execution and data provenance, exact authored delegate bindings with authored event-node identity preferred over compiled UFunction aliases, and the accepted Chooser/Mover/Gameplay Camera/Mass/ZoneGraph/GAS/animation/system relationships while preserving earlier derived streams:
 
 ```text
 project_nodes.jsonl
