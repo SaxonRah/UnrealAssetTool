@@ -9,10 +9,13 @@ Current schemas:
 ```text
 structural=13
 world=12
-animation=1
+animation=4
 vfx=1
-systems=4
-derived=20
+systems=11
+mesh=1
+world_geometry=1
+derived=37
+capabilities=1
 ```
 
 ## Why one checkout
