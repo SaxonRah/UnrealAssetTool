@@ -2075,6 +2075,9 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
         "delegate_create_function_local_resolution": top(delegate_create_function_local_resolution),
         "delegate_create_examples": delegate_create_examples,
         "delegate_bind_assign_node_count": delegate_bind_assign_node_count,
+        "delegate_unbound_bind_assign_node_count": int(
+            delegate_data_source_status.get("no_delegate_input_edge", 0) or 0
+        ),
         "delegate_bind_assign_delegate_input_edge_count": delegate_bind_assign_delegate_input_edge_count,
         "delegate_create_to_bind_assign_edge_count": delegate_create_to_bind_assign_edge_count,
         "delegate_exact_bound_endpoint_chain_count": delegate_exact_bound_endpoint_chain_count,
@@ -2371,6 +2374,7 @@ def print_report(report: dict) -> None:
     print("\n[Delegate bind/assign canonical data evidence]")
     print(
         f"bind_assign_nodes={int(report.get('delegate_bind_assign_node_count', 0) or 0)} "
+        f"unbound_sites={int(report.get('delegate_unbound_bind_assign_node_count', 0) or 0)} "
         f"delegate_input_edges={int(report.get('delegate_bind_assign_delegate_input_edge_count', 0) or 0)} "
         f"create_to_bind_edges={int(report.get('delegate_create_to_bind_assign_edge_count', 0) or 0)} "
         f"exact_bound_endpoint_chains={int(report.get('delegate_exact_bound_endpoint_chain_count', 0) or 0)}"
