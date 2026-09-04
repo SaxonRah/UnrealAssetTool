@@ -116,6 +116,19 @@ class BlueprintDependencySemanticsTest(unittest.TestCase):
         }
         self.assertEqual(core._render_data_expression(expression), "multi(A, B)")
 
+        nested = {
+            "kind": "expression",
+            "label": "Consumer",
+            "inputs": [{
+                "pin": "self",
+                "sources": [
+                    {"kind": "expression", "label": "A"},
+                    {"kind": "expression", "label": "B"},
+                ],
+            }],
+        }
+        self.assertEqual(core._render_data_expression(nested), "Consumer(self=multi(A, B))")
+
 
 if __name__ == "__main__":
     unittest.main()
