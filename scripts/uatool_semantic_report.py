@@ -967,6 +967,8 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
     delegate_exact_bound_endpoint_chain_count = 0
     delegate_expected_binding_basis_counts = collections.Counter()
     delegate_expected_binding_endpoint_kinds = collections.Counter()
+    delegate_expected_source_resolution_counts = collections.Counter()
+    delegate_expected_reroute_hops = 0
     delegate_input_edges_by_target: dict[str, list[dict]] = collections.defaultdict(list)
     for edge in raw_data_edges:
         target_pin_id = str(edge.get("target_pin_id", "") or "")
@@ -983,6 +985,25 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
         if target_node_id:
             delegate_input_edges_by_target[target_node_id].append(edge)
 
+    def resolve_expected_delegate_source(edge: dict, bind_node_id: str):
+        current = edge
+        seen: set[str] = set()
+        reroute_count = 0
+        while True:
+            source_node_id = str(current.get("source_node_id", "") or "")
+            source_node = raw_node_by_id.get(source_node_id, {})
+            source_operation = str(source_node.get("operation", "") or "<missing>")
+            if source_operation != "reroute":
+                return source_node_id, source_node, reroute_count, ""
+            if source_node_id in seen:
+                return "", {}, reroute_count, "reroute_cycle"
+            seen.add(source_node_id)
+            reroute_count += 1
+            upstream = delegate_input_edges_by_target.get(source_node_id, [])
+            if len(upstream) != 1:
+                return "", {}, reroute_count, f"reroute_incoming_{len(upstream)}"
+            current = upstream[0]
+
     for node in delegate_nodes:
         operation = str(node.get("operation", "") or "")
         if operation not in {"delegate_bind", "delegate_assign"}:
@@ -992,11 +1013,22 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
         incoming = delegate_input_edges_by_target.get(node_id, [])
         delegate_bind_assign_delegate_input_edge_count += len(incoming)
         create_sources = 0
+        resolved_sources = 0
         for edge in incoming:
-            source_node_id = str(edge.get("source_node_id", "") or "")
-            source_node = raw_node_by_id.get(source_node_id, {})
+            source_node_id, source_node, reroute_count, route_error = (
+                resolve_expected_delegate_source(edge, node_id)
+            )
+            if route_error:
+                delegate_data_source_status[f"unresolved_{route_error}"] += 1
+                continue
+            resolved_sources += 1
             source_operation = str(source_node.get("operation", "") or "<missing>")
             delegate_data_source_operations[source_operation] += 1
+            source_basis = (
+                "transparent_reroute_chain" if reroute_count else "direct"
+            )
+            delegate_expected_source_resolution_counts[source_basis] += 1
+            delegate_expected_reroute_hops += reroute_count
             if source_operation == "delegate_create":
                 create_sources += 1
                 delegate_create_to_bind_assign_edge_count += 1
@@ -1015,6 +1047,8 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
                 ] += 1
         if not incoming:
             delegate_data_source_status["no_delegate_input_edge"] += 1
+        elif resolved_sources != len(incoming):
+            delegate_data_source_status["unresolved_delegate_source"] += 1
         elif create_sources == len(incoming) == 1:
             delegate_data_source_status["single_create_delegate_source"] += 1
         elif create_sources:
@@ -1033,6 +1067,15 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
     delegate_binding_endpoint_kinds = collections.Counter(
         str(row.get("endpoint_kind", "") or "<empty>")
         for row in delegate_binding_rows
+    )
+    delegate_binding_source_resolution_counts = collections.Counter(
+        str(row.get("source_resolution_basis", "") or "<empty>")
+        for row in delegate_binding_rows
+    )
+    delegate_binding_reroute_hops = sum(
+        len(row.get("source_reroute_node_ids", []))
+        for row in delegate_binding_rows
+        if isinstance(row.get("source_reroute_node_ids", []), list)
     )
     delegate_binding_schema_versions = collections.Counter(
         int(row.get("schema_version", 0) or 0)
@@ -1060,8 +1103,11 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
             == len(delegate_binding_rows)
         and delegate_binding_basis_counts == delegate_expected_binding_basis_counts
         and delegate_binding_endpoint_kinds == delegate_expected_binding_endpoint_kinds
+        and delegate_binding_source_resolution_counts
+            == delegate_expected_source_resolution_counts
+        and delegate_binding_reroute_hops == delegate_expected_reroute_hops
         and delegate_binding_schema_versions
-            == collections.Counter({2: len(delegate_binding_rows)})
+            == collections.Counter({3: len(delegate_binding_rows)})
     )
 
     event_rows_path = output / "blueprint_events.jsonl"
@@ -2040,6 +2086,10 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
         "delegate_binding_endpoint_kinds": top(delegate_binding_endpoint_kinds),
         "delegate_binding_expected_basis_counts": top(delegate_expected_binding_basis_counts),
         "delegate_binding_expected_endpoint_kinds": top(delegate_expected_binding_endpoint_kinds),
+        "delegate_binding_source_resolution_counts": top(delegate_binding_source_resolution_counts),
+        "delegate_binding_expected_source_resolution_counts": top(delegate_expected_source_resolution_counts),
+        "delegate_binding_reroute_hops": delegate_binding_reroute_hops,
+        "delegate_binding_expected_reroute_hops": delegate_expected_reroute_hops,
         "delegate_binding_schema_versions": top(delegate_binding_schema_versions),
         "delegate_binding_create_route_count": delegate_binding_create_route_count,
         "delegate_binding_direct_route_count": delegate_binding_direct_route_count,
@@ -2343,6 +2393,12 @@ def print_report(report: dict) -> None:
     section("expected delegate binding endpoint basis", "delegate_binding_expected_basis_counts")
     section("delegate binding endpoint kinds", "delegate_binding_endpoint_kinds")
     section("expected delegate binding endpoint kinds", "delegate_binding_expected_endpoint_kinds")
+    section("delegate binding source resolution", "delegate_binding_source_resolution_counts")
+    section("expected delegate binding source resolution", "delegate_binding_expected_source_resolution_counts")
+    print(
+        f"delegate binding reroute hops: actual={report.get('delegate_binding_reroute_hops', 0)} "
+        f"expected={report.get('delegate_binding_expected_reroute_hops', 0)}"
+    )
 
     print("\n[Component-bound delegate events]")
     print(
