@@ -155,12 +155,38 @@ class SemanticQualityTest(unittest.TestCase):
             self.assertEqual(report["defect_counts"]["control_identity_mismatch"], 0)
             self.assertEqual(report["counts"]["control_edges"], 2)
             self.assertEqual(report["endpoint_relation_counts"], {"calls": 1, "writes": 1})
+            self.assertEqual(report["dependency_flags"], {
+                "cyclic_dependencies": 0,
+                "truncated_dependencies": 0,
+                "multi_source_dependencies": 0,
+            })
             rendered = quality.render_case(report)
             self.assertIn("if IsReady", rendered)
             self.assertIn("DoThing(Value=Health)", rendered)
             self.assertIn("b1.execute", rendered)
             self.assertIn("runtime_state_captured=False", rendered)
             self.assertIn("human_semantic_review_required=True", rendered)
+
+    def test_dependency_ambiguity_is_visible_but_not_structural_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            bp, _ = self._fixture(root)
+            dependencies = list(rows(root / "blueprint_data_dependencies.jsonl"))
+            dependencies[0]["source_count"] = 2
+            dependencies[0]["expression"] = {
+                "kind": "multi",
+                "sources": [
+                    {"kind": "expression", "label": "A"},
+                    {"kind": "expression", "label": "B"},
+                ],
+            }
+            write_jsonl(root / "blueprint_data_dependencies.jsonl", dependencies)
+
+            report = quality.quality_case(root, rows, bp)
+            self.assertTrue(report["structural_quality_ok"])
+            self.assertEqual(report["dependency_flags"]["multi_source_dependencies"], 1)
+            rendered = quality.render_case(report)
+            self.assertIn("multi_source_dependencies=1", rendered)
 
     def test_missing_call_identity_is_a_machine_quality_defect(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
