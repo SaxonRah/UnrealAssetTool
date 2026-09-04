@@ -819,6 +819,8 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
     delegate_create_exact_endpoint_count = 0
     delegate_create_examples: list[dict] = []
     delegate_create_status_by_node: dict[str, str] = {}
+    delegate_create_binding_basis_by_node: dict[str, str] = {}
+    delegate_create_binding_kind_by_node: dict[str, str] = {}
 
     create_nodes = [
         node for node in delegate_nodes
@@ -932,6 +934,16 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
                     status = "missing_selected_endpoint"
         delegate_create_status[status] += 1
         delegate_create_status_by_node[node_id] = status
+
+        if len(guid_candidates) == 1 and target_operation in {"custom_event", "event"}:
+            delegate_create_binding_basis_by_node[node_id] = "selected_guid"
+            delegate_create_binding_kind_by_node[node_id] = (
+                "custom_event" if target_operation == "custom_event" else "event"
+            )
+        elif selected_function_path:
+            delegate_create_binding_basis_by_node[node_id] = "selected_function_path"
+            delegate_create_binding_kind_by_node[node_id] = "function"
+
         if target_operation:
             delegate_create_target_operations[target_operation] += 1
         if len(delegate_create_examples) < limit:
@@ -953,6 +965,8 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
     delegate_bind_assign_delegate_input_edge_count = 0
     delegate_create_to_bind_assign_edge_count = 0
     delegate_exact_bound_endpoint_chain_count = 0
+    delegate_expected_binding_basis_counts = collections.Counter()
+    delegate_expected_binding_endpoint_kinds = collections.Counter()
     delegate_input_edges_by_target: dict[str, list[dict]] = collections.defaultdict(list)
     for edge in raw_data_edges:
         target_pin_id = str(edge.get("target_pin_id", "") or "")
@@ -988,6 +1002,17 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
                 delegate_create_to_bind_assign_edge_count += 1
                 if delegate_create_status_by_node.get(source_node_id, "").startswith("exact_"):
                     delegate_exact_bound_endpoint_chain_count += 1
+                expected_basis = delegate_create_binding_basis_by_node.get(source_node_id, "")
+                expected_kind = delegate_create_binding_kind_by_node.get(source_node_id, "")
+                if expected_basis:
+                    delegate_expected_binding_basis_counts[expected_basis] += 1
+                if expected_kind:
+                    delegate_expected_binding_endpoint_kinds[expected_kind] += 1
+            elif source_operation in {"custom_event", "event"}:
+                delegate_expected_binding_basis_counts["direct_event_node"] += 1
+                delegate_expected_binding_endpoint_kinds[
+                    "custom_event" if source_operation == "custom_event" else "event"
+                ] += 1
         if not incoming:
             delegate_data_source_status["no_delegate_input_edge"] += 1
         elif create_sources == len(incoming) == 1:
@@ -1007,6 +1032,10 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
     )
     delegate_binding_endpoint_kinds = collections.Counter(
         str(row.get("endpoint_kind", "") or "<empty>")
+        for row in delegate_binding_rows
+    )
+    delegate_binding_schema_versions = collections.Counter(
+        int(row.get("schema_version", 0) or 0)
         for row in delegate_binding_rows
     )
     delegate_binding_create_route_count = int(
@@ -1029,6 +1058,10 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
         and int(delegate_binding_operation_counts.get("delegate_bind", 0))
             + int(delegate_binding_operation_counts.get("delegate_assign", 0))
             == len(delegate_binding_rows)
+        and delegate_binding_basis_counts == delegate_expected_binding_basis_counts
+        and delegate_binding_endpoint_kinds == delegate_expected_binding_endpoint_kinds
+        and delegate_binding_schema_versions
+            == collections.Counter({2: len(delegate_binding_rows)})
     )
 
     event_rows_path = output / "blueprint_events.jsonl"
@@ -2005,6 +2038,9 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
         "delegate_binding_operation_counts": top(delegate_binding_operation_counts),
         "delegate_binding_basis_counts": top(delegate_binding_basis_counts),
         "delegate_binding_endpoint_kinds": top(delegate_binding_endpoint_kinds),
+        "delegate_binding_expected_basis_counts": top(delegate_expected_binding_basis_counts),
+        "delegate_binding_expected_endpoint_kinds": top(delegate_expected_binding_endpoint_kinds),
+        "delegate_binding_schema_versions": top(delegate_binding_schema_versions),
         "delegate_binding_create_route_count": delegate_binding_create_route_count,
         "delegate_binding_direct_route_count": delegate_binding_direct_route_count,
         "delegate_binding_expected_direct_route_count": delegate_binding_expected_direct_route_count,
@@ -2302,8 +2338,11 @@ def print_report(report: dict) -> None:
         f"aligned={bool(report.get('delegate_binding_alignment', False))}"
     )
     section("delegate binding operations", "delegate_binding_operation_counts")
+    section("delegate binding schema versions", "delegate_binding_schema_versions")
     section("delegate binding endpoint basis", "delegate_binding_basis_counts")
+    section("expected delegate binding endpoint basis", "delegate_binding_expected_basis_counts")
     section("delegate binding endpoint kinds", "delegate_binding_endpoint_kinds")
+    section("expected delegate binding endpoint kinds", "delegate_binding_expected_endpoint_kinds")
 
     print("\n[Component-bound delegate events]")
     print(
