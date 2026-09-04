@@ -123,6 +123,7 @@ class BlueprintCallBindingTypeProvenanceTest(unittest.TestCase):
             by_pin = {row["call_pin_id"]: row for row in bindings}
 
             a = by_pin["call-a"]
+            self.assertEqual(a["schema_version"], core.BLUEPRINT_CALL_BINDING_SCHEMA_VERSION)
             self.assertEqual(a["parameter_identity_kind"], "exact_parameter")
             self.assertTrue(a["member_identity_exact"])
             self.assertTrue(a["value_type_compatible"])
@@ -144,6 +145,7 @@ class BlueprintCallBindingTypeProvenanceTest(unittest.TestCase):
             self.assertEqual(b["qualifier_surfaces"]["parameter_pins"][0]["is_reference"], True)
 
             split = by_pin["call-speed"]
+            self.assertEqual(split["schema_version"], core.BLUEPRINT_CALL_BINDING_SCHEMA_VERSION)
             self.assertEqual(split["match_kind"], "split_struct")
             self.assertEqual(split["split_suffix"], "Speed")
             self.assertEqual(split["parameter_identity_kind"], "split_parent_projection")
