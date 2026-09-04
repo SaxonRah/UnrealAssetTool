@@ -26,7 +26,7 @@ mesh=1
 world_geometry=1
 vfx=1
 systems=11
-derived=33
+derived=34
 capabilities=1
 ```
 
@@ -38,7 +38,7 @@ capabilities=1
 | --- | --- | --- | --- |
 | Files/source/config | `first_class` | Physical files, kinds, bounded text chunks | Not a C++ semantic compiler/indexer |
 | Asset Registry | `first_class` fallback | Asset identity/class/package/tags/dependencies | Package dependency is not semantic object linkage |
-| Blueprint/K2 | `first_class` | Graphs, nodes, pins, links, state, refs, functions/events/calls/data provenance/execution blocks plus generic semantic statements/control flow; exact project-authored macro graph/interface bindings and schema-33 cross-graph macro execution edges | Static authored topology only: macro bodies are not inlined/simulated, engine StandardMacros remain external unless captured, and runtime Blueprint VM state is not executed |
+| Blueprint/K2 | `first_class` | Graphs, nodes, pins, links, state, refs, functions/events/calls/data provenance/execution blocks plus generic semantic statements/control flow; exact project-authored macro graph/interface bindings, schema-33 cross-graph macro execution edges and schema-34 joined macro data-provenance routes | Static authored topology only: macro bodies are not inlined/simulated, cross-graph expressions are not executed/substituted, engine StandardMacros remain external unless captured, and runtime Blueprint VM state is not executed |
 | Blueprint user-defined enums | `first_class` | Enum identity, entries, raw/authored/display names and conservative readable enum decoration | Ambiguous enum typing is left raw rather than guessed |
 | Animation Blueprint state machines | `first_class` | Machines, states, aliases/conduits, transitions, transition rules, pose/cache/link nodes | Runtime generated/compiled VM behavior is not simulated |
 | UMG Widget Blueprint | `first_class_depth_pending` | Widget tree, properties, bindings, animations, animation bindings plus Blueprint graphs | Slate/runtime rendering/style semantics are not modeled as a separate graph |
@@ -261,7 +261,16 @@ Derived schema 33 adds:
 
 Graph-local `blueprint_execution_block_edges.jsonl` remains unchanged and authoritative within each graph. The interprocedural layer does not inline macro bodies, execute Blueprint VM code, infer engine StandardMacros behavior, or invent a continuation for an unconnected output.
 
+## 18. Blueprint macro data provenance is joined evidence, not cross-graph evaluation
+
+Derived schema 34 advances Blueprint interprocedural schema to version 2 and materializes one `blueprint_interprocedural_data_routes.jsonl` row per exact non-exec project-macro binding. The route joins existing canonical evidence without replacing it: schema-4 call/interface pin identity, caller-side data edges or authored call-site defaults, macro-body consumer edges, output dependency provenance and caller-side output consumers.
+
+The accepted GASP evidence behind the promotion contains 46 exact macro data inputs and 1 exact macro data output. All 46 inputs are bridge-ready: 40 have connected caller sources and 6 use authored call-site values, all 46 are consumed by macro bodies, and those interface pins fan out through 94 canonical body-consumer edges. The single output has one internal source edge, one exact dependency-provenance row and one caller consumer. No data-provenance mismatches were observed.
+
+The route stream deliberately does not substitute expressions across graph boundaries, inline macro bodies, manufacture values for unconnected pins, or claim Blueprint VM evaluation. Graph-local `blueprint_edges.jsonl` and `blueprint_data_dependencies.jsonl` remain the authoritative topology/provenance inputs.
+
 ---
+
 
 
 # Issue #14 status

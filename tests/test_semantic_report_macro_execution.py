@@ -144,9 +144,10 @@ class SemanticReportMacroExecutionTest(unittest.TestCase):
         )
 
     def _write_interprocedural_streams(self, root: Path) -> None:
-        edges, terminals = interproc.derive(root, rows)
+        edges, terminals, data_routes = interproc.derive(root, rows)
         write_jsonl(root / interproc.DERIVED_FILES[0], edges)
         write_jsonl(root / interproc.DERIVED_FILES[1], terminals)
+        write_jsonl(root / interproc.DERIVED_FILES[2], data_routes)
 
     def test_connected_macro_exec_output_has_exact_entry_and_return_block_bridges(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
