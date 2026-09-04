@@ -28,7 +28,7 @@ mesh=1
 world_geometry=1
 vfx=1
 systems=11
-derived=39
+derived=40
 capabilities=1
 ```
 
@@ -305,11 +305,11 @@ Pure functions remain valid data-provenance targets. Unreachable/dead impure cal
 
 ## 21. Blueprint delegate bindings preserve authored subscriptions without simulating multicast runtime state
 
-Derived schema 37 introduced `blueprint_delegate_bindings.jsonl`; derived schema 38 tightened endpoint identity precedence; derived schema 39 additionally resolves exact delegate data paths through transparent Blueprint Reroute nodes while preserving every reroute hop as provenance.
+Derived schema 37 introduced `blueprint_delegate_bindings.jsonl`; derived schema 38 tightened endpoint identity precedence; derived schema 39 additionally resolves exact delegate data paths through transparent Blueprint Reroute nodes while preserving every reroute hop as provenance. Derived schema 40 distinguishes authored Bind/Assign sites from resolved subscriptions: zero-input sites remain visible in structural facts and semantic-report diagnostics but emit no binding row.
 
 Structural schema 13 is the prerequisite evidence layer. It preserves exact multicast-delegate `FMemberReference` provenance (resolved owner/name, member GUID, self/local scope) plus both `CreateDelegate` selected-function GUID and resolved UFunction path evidence.
 
-Schema 39 materializes one row per canonical delegate-typed data path into `Bind Event` / `Assign` only when the dispatcher, endpoint and any intervening Reroute chain are exact. When UE exposes both an exact selected event-node GUID and a compiled/skeleton UFunction path for the same CreateDelegate, the authored event node is the primary endpoint and the UFunction path is retained as supporting provenance. Exact UFunction path remains the fallback endpoint when no exact authored event-node GUID target is captured. A row preserves:
+Schema 40 materializes one row per resolved canonical delegate-typed data path into `Bind Event` / `Assign` only when the dispatcher, endpoint and any intervening Reroute chain are exact. A Bind/Assign node with no delegate input route is an authored site, not proof of a subscription, and is therefore reported but not materialized. When UE exposes both an exact selected event-node GUID and a compiled/skeleton UFunction path for the same CreateDelegate, the authored event node is the primary endpoint and the UFunction path is retained as supporting provenance. Exact UFunction path remains the fallback endpoint when no exact authored event-node GUID target is captured. A row preserves:
 
 - exact dispatcher owner/name/member GUID and scope provenance;
 - bind-vs-assign operation and caller graph/node identity;
@@ -317,7 +317,7 @@ Schema 39 materializes one row per canonical delegate-typed data path into `Bind
 - endpoint resolution basis: selected event GUID, selected function path, or direct captured event node;
 - source/target delegate pin identity and static evidence kind.
 
-The relation is intentionally an authored subscription declaration, not a runtime subscriber set. `Unbind Event`, `Clear`, and dispatcher `Call` remain separately captured authored operations; schema 39 does not simulate their temporal effects, multicast ordering, duplicate-subscription behavior, object lifetime, or broadcast execution.
+The relation is intentionally an authored subscription declaration, not a runtime subscriber set. `Unbind Event`, `Clear`, and dispatcher `Call` remain separately captured authored operations; schema 40 does not simulate their temporal effects, multicast ordering, duplicate-subscription behavior, object lifetime, or broadcast execution.
 
 Name-only endpoint matching is never promoted. Missing delegate owner information is never reinterpreted as self-context. Runtime delegate object state remains outside the contract.
 

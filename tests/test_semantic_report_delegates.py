@@ -67,6 +67,7 @@ class SemanticReportDelegateAuditTest(unittest.TestCase):
             create_id = f"{bp}::graph::caller::node::aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
             event_id = f"{bp}::graph::caller::node::{guid}"
             bind_id = f"{bp}::graph::caller::node::bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
+            unbound_assign_id = f"{bp}::graph::caller::node::12121212-3434-5656-7878-909090909090"
             reroute_id = f"{bp}::graph::caller::node::abababab-cdcd-efef-0101-23456789abcd"
             call_id = f"{bp}::graph::caller::node::cccccccc-dddd-eeee-ffff-000000000000"
             clear_id = f"{bp}::graph::caller::node::dddddddd-eeee-ffff-0000-111111111111"
@@ -116,6 +117,21 @@ class SemanticReportDelegateAuditTest(unittest.TestCase):
                     "graph_name": "EventGraph",
                     "node_class": "/Script/BlueprintGraph.K2Node_AddDelegate",
                     "operation": "delegate_bind",
+                    "symbol": "OnReadyDelegate",
+                    "semantic": {
+                        "delegate_name": "OnReadyDelegate",
+                        "delegate_owner": owner,
+                        "delegate_member_guid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                        "delegate_self_context": True,
+                    },
+                },
+                {
+                    "node_id": unbound_assign_id,
+                    "blueprint_path": bp,
+                    "graph_id": "caller",
+                    "graph_name": "EventGraph",
+                    "node_class": "/Script/BlueprintGraph.K2Node_AssignDelegate",
+                    "operation": "delegate_assign",
                     "symbol": "OnReadyDelegate",
                     "semantic": {
                         "delegate_name": "OnReadyDelegate",
@@ -289,22 +305,23 @@ class SemanticReportDelegateAuditTest(unittest.TestCase):
             write_jsonl(root / "blueprint_delegate_bindings.jsonl", delegate_bindings)
             result = report.build_report(root, rows)
 
-            self.assertEqual(result["delegate_node_count"], 6)
+            self.assertEqual(result["delegate_node_count"], 7)
             self.assertEqual(dict(result["delegate_operation_counts"]), {
+                "delegate_assign": 1,
                 "delegate_bind": 1,
                 "delegate_call": 1,
                 "delegate_clear": 1,
                 "delegate_create": 2,
                 "delegate_unbind": 1,
             })
-            self.assertEqual(result["delegate_dispatcher_node_count"], 4)
-            self.assertEqual(result["delegate_exact_dispatcher_identity_count"], 4)
-            self.assertEqual(result["delegate_member_guid_count"], 4)
-            self.assertEqual(result["delegate_self_context_count"], 4)
+            self.assertEqual(result["delegate_dispatcher_node_count"], 5)
+            self.assertEqual(result["delegate_exact_dispatcher_identity_count"], 5)
+            self.assertEqual(result["delegate_member_guid_count"], 5)
+            self.assertEqual(result["delegate_self_context_count"], 5)
             self.assertEqual(result["delegate_external_context_count"], 0)
             self.assertEqual(
                 dict(result["delegate_dispatcher_identity_status"]),
-                {"exact_owner_and_name": 4},
+                {"exact_owner_and_name": 5},
             )
             self.assertEqual(result["delegate_create_count"], 2)
             self.assertEqual(result["delegate_create_selected_name_count"], 2)
@@ -322,13 +339,14 @@ class SemanticReportDelegateAuditTest(unittest.TestCase):
                 dict(result["delegate_create_function_local_resolution"]),
                 {"multiple_captured_function_rows": 1},
             )
-            self.assertEqual(result["delegate_bind_assign_node_count"], 1)
+            self.assertEqual(result["delegate_bind_assign_node_count"], 2)
+            self.assertEqual(result["delegate_unbound_bind_assign_node_count"], 1)
             self.assertEqual(result["delegate_bind_assign_delegate_input_edge_count"], 1)
             self.assertEqual(result["delegate_create_to_bind_assign_edge_count"], 1)
             self.assertEqual(result["delegate_exact_bound_endpoint_chain_count"], 1)
             self.assertEqual(
                 dict(result["delegate_data_source_status"]),
-                {"single_create_delegate_source": 1},
+                {"no_delegate_input_edge": 1, "single_create_delegate_source": 1},
             )
             self.assertEqual(
                 dict(result["delegate_data_source_operations"]),

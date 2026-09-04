@@ -74,7 +74,7 @@ class ReleaseContractTest(unittest.TestCase):
                 msg=f"missing current schema token {token}",
             )
 
-        self.assertIn("derived schema:    39", architecture)
+        self.assertIn("derived schema:    40", architecture)
         self.assertIn("systems schema:    11", architecture)
         self.assertIn("animation schema:   4", architecture)
 

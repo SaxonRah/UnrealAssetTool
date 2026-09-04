@@ -347,8 +347,8 @@ def build_manifest(output: Path) -> dict:
             "Authored Blueprint/K2/UMG/RigVM structure plus static semantic/control-flow "
             "derivation; exact project macro interfaces, cross-graph basic-block flow and "
             "joined macro data-provenance routes, exact direct-internal function "
-            "call/return topology, schema-36 function data provenance, and schema-39 exact "
-            "authored delegate binding provenance (preferring authored event-node identity and preserving transparent reroute chains "
+            "call/return topology, schema-36 function data provenance, and schema-40 exact "
+            "authored resolved-delegate binding provenance (preferring authored event-node identity, preserving transparent reroute chains, and excluding zero-input Bind/Assign sites from subscription rows "
             "over compiled UFunction aliases) are preserved without simulating runtime "
             "Blueprint VM or multicast delegate execution."
         ),

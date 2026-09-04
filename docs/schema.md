@@ -12,7 +12,7 @@ VFX scanner schema:         1
 systems scanner schema:    11
 mesh companion schema:      1
 world-geometry schema:      1
-derived schema:            39
+derived schema:            40
 capability schema:          1
 ```
 
