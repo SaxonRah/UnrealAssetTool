@@ -258,6 +258,23 @@ def _control_endpoint_key(row: dict) -> tuple[str, ...]:
     )
 
 
+def _expression_contains_kind(value: object, kind: str) -> bool:
+    if not isinstance(value, dict):
+        return False
+    if str(value.get("kind", "") or "") == kind:
+        return True
+    for child in value.get("sources", []) if isinstance(value.get("sources", []), list) else []:
+        if _expression_contains_kind(child, kind):
+            return True
+    for item in value.get("inputs", []) if isinstance(value.get("inputs", []), list) else []:
+        if not isinstance(item, dict):
+            continue
+        for child in item.get("sources", []) if isinstance(item.get("sources", []), list) else []:
+            if _expression_contains_kind(child, kind):
+                return True
+    return False
+
+
 def quality_case(output: Path, rows, blueprint_path: str, *, example_limit: int = 40) -> dict:
     if example_limit < 1:
         raise ValueError("example_limit must be >= 1")
@@ -307,6 +324,21 @@ def quality_case(output: Path, rows, blueprint_path: str, *, example_limit: int 
         and str(row.get("semantic_kind", "") or "") == "classified"
     ]
     opaque_nodes = [row for row in nodes if bool(row.get("opaque", False))]
+
+    dependency_flags = {
+        "cyclic_dependencies": sum(
+            int(bool(row.get("cycle", False)) or _expression_contains_kind(row.get("expression"), "cycle"))
+            for row in dependencies
+        ),
+        "truncated_dependencies": sum(
+            int(bool(row.get("truncated", False)) or _expression_contains_kind(row.get("expression"), "truncated"))
+            for row in dependencies
+        ),
+        "multi_source_dependencies": sum(
+            int(int(row.get("source_count", 0) or 0) > 1 or _expression_contains_kind(row.get("expression"), "multi"))
+            for row in dependencies
+        ),
+    }
 
     missing_control_blocks = []
     for row in control_edges:
@@ -412,6 +444,7 @@ def quality_case(output: Path, rows, blueprint_path: str, *, example_limit: int 
         "human_semantic_review_required": True,
         "structural_quality_ok": bool(structural_quality_ok),
         "defect_counts": defect_counts,
+        "dependency_flags": dependency_flags,
         "counts": {
             "semantic_nodes": len(nodes),
             "semantic_statements": len(statements),
@@ -495,6 +528,9 @@ def render_case(report: dict) -> str:
         print(f"structural_quality_ok={report['structural_quality_ok']}")
         print("counts: " + " ".join(f"{k}={v}" for k, v in report["counts"].items()))
         print("defects: " + " ".join(f"{k}={v}" for k, v in report["defect_counts"].items()))
+        print("dependency_flags: " + " ".join(
+            f"{k}={v}" for k, v in report.get("dependency_flags", {}).items()
+        ))
 
         print("\n[operation counts]")
         for name, count in report.get("operation_counts", {}).items():
