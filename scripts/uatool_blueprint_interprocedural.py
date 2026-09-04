@@ -1019,8 +1019,9 @@ def derive_function_data_routes(output: Path, rows) -> tuple[list[dict], dict]:
             continue
 
         if bool(call.get("latent", False)):
-            target_kind = "latent_internal"
-        elif bool(call.get("pure", False)):
+            stats["excluded_latent"] += 1
+            continue
+        if bool(call.get("pure", False)):
             target_kind = "pure_internal"
         else:
             target_kind = (
