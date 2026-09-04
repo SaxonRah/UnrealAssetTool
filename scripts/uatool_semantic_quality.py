@@ -48,6 +48,9 @@ HIGH_SIGNAL_OPERATIONS = {
     "input_debug_key",
     "delegate_bind",
     "delegate_assign",
+    "delegate_unbind",
+    "delegate_call",
+    "delegate_clear",
     "timeline",
 }
 CALL_OPERATIONS = {"function_call"}

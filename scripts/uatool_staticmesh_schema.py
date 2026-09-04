@@ -3,7 +3,7 @@
 
 The focused UE commandlet is an evidence/capture mechanism. This module turns
 that bounded capture into the durable corpus contract used by derive, SQLite,
-query, capabilities and graph semantics. Structural schema 12 remains unchanged.
+query, capabilities and graph semantics. Structural schema 13 is the current compatible structural baseline.
 """
 from __future__ import annotations
 

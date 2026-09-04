@@ -131,6 +131,7 @@ _OPERATION_MODEL = {
     "get_class_defaults": ("type_operation", "read", "read", "class"),
     "delegate_bind": ("delegate", "bind", "write", "delegate"),
     "delegate_assign": ("delegate", "bind", "write", "delegate"),
+    "delegate_unbind": ("delegate", "unbind", "write", "delegate"),
     "delegate_create": ("delegate", "construct", "", "delegate"),
     "delegate_call": ("delegate", "call", "", "delegate"),
     "delegate_clear": ("delegate", "clear", "write", "delegate"),
@@ -238,7 +239,7 @@ def _target_for(node: dict, symbol_kind: str) -> tuple[str, str]:
         return "input", symbol
     if operation in ("legacy_input_action", "enhanced_input_event", "enhanced_input_value"):
         return "input_action", str(sem.get("input_action", "") or sem.get("input_action_name", "") or owner or symbol)
-    if operation in ("delegate_bind", "delegate_assign", "delegate_create", "delegate_call", "delegate_clear"):
+    if operation in ("delegate_bind", "delegate_assign", "delegate_unbind", "delegate_create", "delegate_call", "delegate_clear"):
         delegate = str(sem.get("delegate_name", "") or symbol)
         delegate_owner = str(sem.get("delegate_owner", "") or owner)
         return "delegate", f"{delegate_owner}::{delegate}" if delegate_owner and delegate else delegate or delegate_owner
@@ -292,6 +293,7 @@ def _endpoint_relation(operation: str, access_kind: str, target_kind: str) -> st
         "macro_instance": "invokes_macro",
         "delegate_bind": "binds_delegate",
         "delegate_assign": "binds_delegate",
+        "delegate_unbind": "unbinds_delegate",
         "delegate_create": "creates_delegate",
         "delegate_call": "calls_delegate",
         "delegate_clear": "clears_delegate",

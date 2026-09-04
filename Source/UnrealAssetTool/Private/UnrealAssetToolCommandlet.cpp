@@ -46,6 +46,8 @@
 #include "K2Node_Knot.h"
 #include "K2Node_MacroInstance.h"
 #include "K2Node_BreakStruct.h"
+#include "K2Node_BaseMCDelegate.h"
+#include "K2Node_CreateDelegate.h"
 #include "K2Node_MakeStruct.h"
 #include "K2Node_SetFieldsInStruct.h"
 #include "K2Node_StructOperation.h"
@@ -71,7 +73,7 @@
 
 namespace UnrealAssetTool
 {
-    static constexpr int32 SchemaVersion = 12;
+    static constexpr int32 SchemaVersion = 13;
     static constexpr int32 SourceChunkLines = 200;
 
     class FJsonlWriter
@@ -815,33 +817,96 @@ namespace UnrealAssetTool
                 Semantic->SetStringField(TEXT("row_name"), RowName);
             }
         }
-        else if (OutOperation == TEXT("delegate_clear"))
-        {
-            OutSymbol = ExportReflectedStructFieldText(Node, TEXT("DelegateReference"), TEXT("MemberName"));
-            Semantic->SetStringField(TEXT("delegate_name"), OutSymbol);
-            if (UObject* Parent = GetReflectedStructObjectProperty(Node, TEXT("DelegateReference"), TEXT("MemberParent")))
-            {
-                OutOwner = Parent->GetPathName();
-                Semantic->SetStringField(TEXT("delegate_owner"), OutOwner);
-            }
-        }
-        else if (OutOperation == TEXT("delegate_bind") ||
+        else if (OutOperation == TEXT("delegate_clear") ||
+                 OutOperation == TEXT("delegate_bind") ||
+                 OutOperation == TEXT("delegate_unbind") ||
                  OutOperation == TEXT("delegate_call") ||
                  OutOperation == TEXT("delegate_assign"))
         {
-            OutSymbol = ExportReflectedStructFieldText(Node, TEXT("DelegateReference"), TEXT("MemberName"));
-            Semantic->SetStringField(TEXT("delegate_name"), OutSymbol);
-            if (UObject* Parent = GetReflectedStructObjectProperty(Node, TEXT("DelegateReference"), TEXT("MemberParent")))
+            if (UK2Node_BaseMCDelegate* DelegateNode = Cast<UK2Node_BaseMCDelegate>(Node))
             {
-                OutOwner = Parent->GetPathName();
+                UClass* SelfScope = Blueprint
+                    ? (Blueprint->SkeletonGeneratedClass
+                        ? Blueprint->SkeletonGeneratedClass
+                        : Blueprint->GeneratedClass)
+                    : nullptr;
+                AddMemberReferenceFields(
+                    DelegateNode->DelegateReference,
+                    SelfScope,
+                    Semantic,
+                    OutSymbol,
+                    OutOwner);
+
+                Semantic->SetStringField(TEXT("delegate_name"), OutSymbol);
                 Semantic->SetStringField(TEXT("delegate_owner"), OutOwner);
+                Semantic->SetStringField(
+                    TEXT("delegate_member_guid"),
+                    DelegateNode->DelegateReference.GetMemberGuid().ToString(
+                        EGuidFormats::DigitsWithHyphensLower));
+                Semantic->SetStringField(
+                    TEXT("delegate_member_scope"),
+                    DelegateNode->DelegateReference.GetMemberScopeName());
+                Semantic->SetBoolField(
+                    TEXT("delegate_self_context"),
+                    DelegateNode->DelegateReference.IsSelfContext());
+                Semantic->SetBoolField(
+                    TEXT("delegate_local_scope"),
+                    DelegateNode->DelegateReference.IsLocalScope());
+            }
+            else
+            {
+                // Retain reflected fallback for unexpected plugin-derived
+                // delegate nodes that serialize the standard reference shape.
+                OutSymbol = ExportReflectedStructFieldText(
+                    Node, TEXT("DelegateReference"), TEXT("MemberName"));
+                Semantic->SetStringField(TEXT("delegate_name"), OutSymbol);
+                if (UObject* Parent = GetReflectedStructObjectProperty(
+                        Node, TEXT("DelegateReference"), TEXT("MemberParent")))
+                {
+                    OutOwner = Parent->GetPathName();
+                    Semantic->SetStringField(TEXT("delegate_owner"), OutOwner);
+                }
             }
         }
         else if (OutOperation == TEXT("delegate_create"))
         {
-            OutSymbol = ExportReflectedPropertyText(Node, TEXT("SelectedFunctionName"));
-            Semantic->SetStringField(TEXT("selected_function"), OutSymbol);
-            Semantic->SetStringField(TEXT("selected_function_guid"), ExportReflectedPropertyText(Node, TEXT("SelectedFunctionGuid")));
+            if (UK2Node_CreateDelegate* CreateDelegate = Cast<UK2Node_CreateDelegate>(Node))
+            {
+                OutSymbol = CreateDelegate->SelectedFunctionName.ToString();
+                Semantic->SetStringField(TEXT("selected_function"), OutSymbol);
+                Semantic->SetStringField(
+                    TEXT("selected_function_guid"),
+                    CreateDelegate->SelectedFunctionGuid.ToString(
+                        EGuidFormats::DigitsWithHyphensLower));
+
+                if (UClass* ScopeClass = CreateDelegate->GetScopeClass(false))
+                {
+                    Semantic->SetStringField(
+                        TEXT("selected_function_scope_class"),
+                        ScopeClass->GetPathName());
+                    if (UFunction* SelectedFunction =
+                            ScopeClass->FindFunctionByName(CreateDelegate->SelectedFunctionName))
+                    {
+                        Semantic->SetStringField(
+                            TEXT("selected_function_path"),
+                            SelectedFunction->GetPathName());
+                        if (UObject* SelectedOwner = SelectedFunction->GetOuter())
+                        {
+                            Semantic->SetStringField(
+                                TEXT("selected_function_owner"),
+                                SelectedOwner->GetPathName());
+                        }
+                    }
+                }
+            }
+            else
+            {
+                OutSymbol = ExportReflectedPropertyText(Node, TEXT("SelectedFunctionName"));
+                Semantic->SetStringField(TEXT("selected_function"), OutSymbol);
+                Semantic->SetStringField(
+                    TEXT("selected_function_guid"),
+                    ExportReflectedPropertyText(Node, TEXT("SelectedFunctionGuid")));
+            }
         }
         else if (OutOperation == TEXT("timeline"))
         {
@@ -1010,6 +1075,7 @@ namespace UnrealAssetTool
             { TEXT("K2Node_MakeArray"), TEXT("make_array") },
             { TEXT("K2Node_GetArrayItem"), TEXT("array_get") },
             { TEXT("K2Node_AddDelegate"), TEXT("delegate_bind") },
+            { TEXT("K2Node_RemoveDelegate"), TEXT("delegate_unbind") },
             { TEXT("K2Node_CreateDelegate"), TEXT("delegate_create") },
             { TEXT("K2Node_CallDelegate"), TEXT("delegate_call") },
             { TEXT("K2Node_GetEnumeratorNameAsString"), TEXT("enum_to_string") },

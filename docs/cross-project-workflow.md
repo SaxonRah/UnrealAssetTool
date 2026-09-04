@@ -7,7 +7,7 @@ Validated engine: **UE 5.8.2**.
 Current schemas:
 
 ```text
-structural=12
+structural=13
 world=12
 animation=1
 vfx=1

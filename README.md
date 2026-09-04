@@ -9,7 +9,7 @@
 - release line: **0.8.0**
 - Unreal target: **UE 5.8+**
 - validated engine: **UE 5.8.2**
-- structural scanner schema: **12**
+- structural scanner schema: **13**
 - world scanner schema: **12**
 - animation scanner schema: **1**
 - VFX scanner schema: **1**
@@ -88,7 +88,7 @@ The `.uatool` directory contains canonical JSONL, deterministic derived JSONL, m
 Important schema layers:
 
 ```text
-manifest.json             structural schema 12 + derived schema 22
+manifest.json             structural schema 13 + derived schema 22
 world_manifest.json       world schema 12
 animation_manifest.json   animation schema 1
 vfx_manifest.json         VFX schema 1
