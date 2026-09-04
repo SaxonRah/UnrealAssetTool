@@ -11,6 +11,7 @@ SCRIPTS = ROOT / "scripts"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
+import uatool_blueprint_delegates as delegates
 import uatool_semantic_report as report
 
 
@@ -246,6 +247,8 @@ class SemanticReportDelegateAuditTest(unittest.TestCase):
             ):
                 write_jsonl(root / name, [])
 
+            delegate_bindings, _delegate_stats = delegates.derive(root, rows)
+            write_jsonl(root / "blueprint_delegate_bindings.jsonl", delegate_bindings)
             result = report.build_report(root, rows)
 
             self.assertEqual(result["delegate_node_count"], 6)
@@ -288,6 +291,22 @@ class SemanticReportDelegateAuditTest(unittest.TestCase):
             self.assertEqual(
                 dict(result["delegate_data_source_operations"]),
                 {"delegate_create": 1},
+            )
+            self.assertEqual(result["delegate_binding_route_count"], 1)
+            self.assertEqual(result["delegate_binding_create_route_count"], 1)
+            self.assertEqual(result["delegate_binding_direct_route_count"], 0)
+            self.assertTrue(result["delegate_binding_alignment"])
+            self.assertEqual(
+                dict(result["delegate_binding_operation_counts"]),
+                {"delegate_bind": 1},
+            )
+            self.assertEqual(
+                dict(result["delegate_binding_basis_counts"]),
+                {"selected_guid": 1},
+            )
+            self.assertEqual(
+                dict(result["delegate_binding_endpoint_kinds"]),
+                {"custom_event": 1},
             )
             self.assertEqual(result["delegate_component_bound_event_count"], 1)
             self.assertEqual(result["delegate_component_event_exact_identity_count"], 1)
