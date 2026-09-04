@@ -204,9 +204,13 @@ def derive(output: Path, rows) -> tuple[list[dict], dict]:
         incoming = incoming_delegate_edges.get(bind_node_id, [])
         stats["delegate_input_edges"] += len(incoming)
         if not incoming:
-            raise RuntimeError(
-                f"delegate bind/assign lacks canonical delegate input edge: {bind_node_id}"
-            )
+            # An authored Bind/Assign node is only a resolved subscription when
+            # a canonical delegate-typed data route reaches its delegate pin.
+            # Keep zero-input sites visible in structural/semantic evidence,
+            # but do not fabricate an endpoint or binding row.
+            stats["unbound_bind_assign_nodes"] += 1
+            stats[f"unbound_operation:{bind_operation}"] += 1
+            continue
 
         for edge in incoming:
             source_node, source_reroute_node_ids, source_route = resolve_delegate_source(
