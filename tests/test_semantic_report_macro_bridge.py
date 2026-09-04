@@ -137,6 +137,170 @@ class SemanticReportMacroBridgeTest(unittest.TestCase):
             self.assertIn("missing_graph_identity=1", rendered)
             self.assertIn("ambiguous_graph_paths=1", rendered)
 
+    def test_exact_macro_interface_roles_and_pin_bindings_are_structural(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            macro_graph = "/Game/Test/BPL.BPL:ToggleValue"
+
+            write_jsonl(root / "blueprint_semantic_nodes.jsonl", [{
+                "node_id": "macro-instance",
+                "operation": "macro_instance",
+                "semantic_kind": "call",
+                "opaque": False,
+                "blueprint_path": "/Game/Test/BP_User.BP_User",
+            }])
+            write_jsonl(root / "blueprint_nodes.jsonl", [
+                {
+                    "node_id": "macro-instance",
+                    "graph_id": "caller",
+                    "operation": "macro_instance",
+                    "semantic": {
+                        "macro_graph": macro_graph,
+                        "source_blueprint": "/Game/Test/BPL.BPL",
+                    },
+                },
+                {
+                    "node_id": "entry",
+                    "graph_id": "macro-graph-id",
+                    "operation": "tunnel",
+                    "semantic": {},
+                },
+                {
+                    "node_id": "exit",
+                    "graph_id": "macro-graph-id",
+                    "operation": "tunnel",
+                    "semantic": {},
+                },
+            ])
+            write_jsonl(root / "blueprint_graphs.jsonl", [{
+                "graph_id": "macro-graph-id",
+                "graph_path": macro_graph,
+            }])
+
+            bool_type = {
+                "category": "boolean",
+                "subcategory": "",
+                "container_type": 0,
+                "is_reference": False,
+                "is_const": False,
+                "subcategory_object": "",
+            }
+            exec_type = {
+                "category": "exec",
+                "subcategory": "",
+                "container_type": 0,
+                "is_reference": False,
+                "is_const": False,
+                "subcategory_object": "",
+            }
+            pins = [
+                # Macro instance call surface.
+                ("mi-exec-in", "macro-instance", "execute", "input", exec_type),
+                ("mi-value-in", "macro-instance", "Value", "input", bool_type),
+                ("mi-exec-out", "macro-instance", "then", "output", exec_type),
+                ("mi-value-out", "macro-instance", "Result", "output", bool_type),
+                # Macro input tunnel exposes values into the macro body.
+                ("entry-exec", "entry", "execute", "output", exec_type),
+                ("entry-value", "entry", "Value", "output", bool_type),
+                # Macro output tunnel consumes values from the macro body.
+                ("exit-exec", "exit", "then", "input", exec_type),
+                ("exit-value", "exit", "Result", "input", bool_type),
+            ]
+            write_jsonl(root / "blueprint_pins.jsonl", [
+                {
+                    "pin_id": pin_id,
+                    "node_id": node_id,
+                    "blueprint_path": "/Game/Test/BP_User.BP_User",
+                    "graph_id": "caller" if node_id == "macro-instance" else "macro-graph-id",
+                    "graph_name": "EventGraph" if node_id == "macro-instance" else "ToggleValue",
+                    "pin_index": index,
+                    "name": name,
+                    "direction": direction,
+                    "type": pin_type,
+                    "default_value": "",
+                    "default_object": "",
+                    "default_text": "",
+                    "hidden": False,
+                    "not_connectable": False,
+                    "linked_count": 0,
+                }
+                for index, (pin_id, node_id, name, direction, pin_type) in enumerate(pins)
+            ])
+
+            result = report.build_report(root, rows)
+            self.assertEqual(result["macro_interface_graph_count"], 1)
+            self.assertEqual(result["macro_interface_exact_role_graph_count"], 1)
+            self.assertEqual(result["macro_interface_unresolved_role_graph_count"], 0)
+            self.assertEqual(result["macro_binding_instance_count"], 1)
+            self.assertEqual(result["macro_binding_resolved_instance_count"], 1)
+            self.assertEqual(result["macro_binding_pin_count"], 4)
+            self.assertEqual(result["macro_binding_exact_pin_count"], 4)
+            self.assertEqual(dict(result["macro_binding_status"]), {"exact_pin_binding": 4})
+            self.assertEqual(result["macro_binding_mismatches"], [])
+
+    def test_macro_pin_name_match_with_type_mismatch_is_not_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            macro_graph = "/Game/Test/BPL.BPL:Typed"
+
+            write_jsonl(root / "blueprint_semantic_nodes.jsonl", [{
+                "node_id": "macro-instance",
+                "operation": "macro_instance",
+                "semantic_kind": "call",
+                "opaque": False,
+            }])
+            write_jsonl(root / "blueprint_nodes.jsonl", [
+                {
+                    "node_id": "macro-instance",
+                    "graph_id": "caller",
+                    "operation": "macro_instance",
+                    "semantic": {"macro_graph": macro_graph},
+                },
+                {"node_id": "entry", "graph_id": "g", "operation": "tunnel", "semantic": {}},
+                {"node_id": "exit", "graph_id": "g", "operation": "tunnel", "semantic": {}},
+            ])
+            write_jsonl(root / "blueprint_graphs.jsonl", [{
+                "graph_id": "g",
+                "graph_path": macro_graph,
+            }])
+
+            def pin(pin_id: str, node_id: str, name: str, direction: str, category: str) -> dict:
+                return {
+                    "pin_id": pin_id,
+                    "node_id": node_id,
+                    "blueprint_path": "/Game/Test/BP.BP",
+                    "graph_id": "caller" if node_id == "macro-instance" else "g",
+                    "graph_name": "EventGraph" if node_id == "macro-instance" else "Typed",
+                    "pin_index": 0,
+                    "name": name,
+                    "direction": direction,
+                    "type": {
+                        "category": category,
+                        "subcategory": "",
+                        "container_type": 0,
+                        "is_reference": False,
+                        "is_const": False,
+                        "subcategory_object": "",
+                    },
+                    "default_value": "",
+                    "default_object": "",
+                    "default_text": "",
+                    "hidden": False,
+                    "not_connectable": False,
+                    "linked_count": 0,
+                }
+
+            write_jsonl(root / "blueprint_pins.jsonl", [
+                pin("mi", "macro-instance", "Value", "input", "float"),
+                pin("entry", "entry", "Value", "output", "int"),
+                pin("exit", "exit", "Result", "input", "float"),
+            ])
+
+            result = report.build_report(root, rows)
+            self.assertEqual(result["macro_binding_pin_count"], 1)
+            self.assertEqual(result["macro_binding_exact_pin_count"], 0)
+            self.assertIn(("name_match_type_mismatch", 1), result["macro_binding_status"])
+
     def test_missing_semantic_macro_node_is_reported(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
