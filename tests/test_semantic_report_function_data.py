@@ -222,6 +222,7 @@ class SemanticReportFunctionDataAuditTest(unittest.TestCase):
 
             write_jsonl(root / "blueprint_call_bindings.jsonl", [
                 {
+                    "schema_version": 2,
                     "binding_id": "bind-value",
                     "call_node_id": "call-pure",
                     "target_function_id": "fn-pure",
@@ -238,6 +239,7 @@ class SemanticReportFunctionDataAuditTest(unittest.TestCase):
                     "consumer_pin_ids": ["body-value-in"],
                 },
                 {
+                    "schema_version": 2,
                     "binding_id": "bind-speed",
                     "call_node_id": "call-pure",
                     "target_function_id": "fn-pure",
@@ -254,6 +256,7 @@ class SemanticReportFunctionDataAuditTest(unittest.TestCase):
                     "consumer_pin_ids": [],
                 },
                 {
+                    "schema_version": 2,
                     "binding_id": "bind-result",
                     "call_node_id": "call-pure",
                     "target_function_id": "fn-pure",
@@ -270,6 +273,7 @@ class SemanticReportFunctionDataAuditTest(unittest.TestCase):
                     "consumer_pin_ids": ["caller-result-in"],
                 },
                 {
+                    "schema_version": 2,
                     "binding_id": "bind-interface",
                     "call_node_id": "call-interface",
                     "target_function_id": "fn-interface",
@@ -290,6 +294,11 @@ class SemanticReportFunctionDataAuditTest(unittest.TestCase):
             result = report.build_report(root, rows)
 
             self.assertEqual(result["function_data_binding_count"], 4)
+            self.assertTrue(result["function_data_binding_schema_current"])
+            self.assertEqual(
+                dict(result["function_data_binding_schema_versions"]),
+                {2: 4},
+            )
             self.assertEqual(result["function_data_parameter_identity_count"], 4)
             self.assertEqual(result["function_data_member_identity_exact_count"], 3)
             self.assertEqual(result["function_data_split_parent_projection_count"], 1)
