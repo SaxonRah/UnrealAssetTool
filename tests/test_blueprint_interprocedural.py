@@ -330,9 +330,9 @@ class BlueprintInterproceduralExecutionTest(unittest.TestCase):
 
 
 class BlueprintInterproceduralCompositionTest(unittest.TestCase):
-    def test_schema37_and_bundle_membership_are_composed_without_global_import_side_effects(self) -> None:
+    def test_schema38_and_bundle_membership_are_composed_without_global_import_side_effects(self) -> None:
         facade = (SCRIPTS / "uatool.py").read_text(encoding="utf-8")
-        self.assertIn("FINAL_DERIVED_SCHEMA_VERSION = 37", facade)
+        self.assertIn("FINAL_DERIVED_SCHEMA_VERSION = 38", facade)
         self.assertIn("import uatool_blueprint_interprocedural as blueprint_interprocedural", facade)
         self.assertIn("import uatool_blueprint_delegates as blueprint_delegates", facade)
         self.assertIn("*blueprint_interprocedural.DERIVED_FILES", facade)
