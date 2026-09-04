@@ -413,7 +413,7 @@ def load_database(conn, output: Path, rows) -> None:
     for row in rows(Path(output) / DERIVED_FILES[1]):
         conn.execute(
             "INSERT OR REPLACE INTO blueprint_interprocedural_execution_terminals VALUES "
-            "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 row.get("terminal_id", ""), int(row.get("schema_version", 0) or 0),
                 row.get("terminal_kind", ""), row.get("macro_node_id", ""), row.get("macro_graph_id", ""),
