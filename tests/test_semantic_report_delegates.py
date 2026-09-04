@@ -67,6 +67,7 @@ class SemanticReportDelegateAuditTest(unittest.TestCase):
             create_id = f"{bp}::graph::caller::node::aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
             event_id = f"{bp}::graph::caller::node::{guid}"
             bind_id = f"{bp}::graph::caller::node::bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
+            reroute_id = f"{bp}::graph::caller::node::abababab-cdcd-efef-0101-23456789abcd"
             call_id = f"{bp}::graph::caller::node::cccccccc-dddd-eeee-ffff-000000000000"
             clear_id = f"{bp}::graph::caller::node::dddddddd-eeee-ffff-0000-111111111111"
             unbind_id = f"{bp}::graph::caller::node::eeeeeeee-ffff-0000-1111-222222222222"
@@ -96,6 +97,16 @@ class SemanticReportDelegateAuditTest(unittest.TestCase):
                     "node_class": "/Script/BlueprintGraph.K2Node_CustomEvent",
                     "operation": "custom_event",
                     "symbol": "OnReady",
+                    "semantic": {},
+                },
+                {
+                    "node_id": reroute_id,
+                    "blueprint_path": bp,
+                    "graph_id": "caller",
+                    "graph_name": "EventGraph",
+                    "node_class": "/Script/BlueprintGraph.K2Node_Knot",
+                    "operation": "reroute",
+                    "symbol": "",
                     "semantic": {},
                 },
                 {
@@ -194,17 +205,30 @@ class SemanticReportDelegateAuditTest(unittest.TestCase):
             write_jsonl(root / "blueprint_execution_block_edges.jsonl", [])
             write_jsonl(root / "blueprint_pins.jsonl", [
                 pin("create-out", create_id, "OutputDelegate", "output", "delegate"),
+                pin("reroute-in", reroute_id, "InputPin", "input", "delegate"),
+                pin("reroute-out", reroute_id, "OutputPin", "output", "delegate"),
                 pin("bind-in", bind_id, "Delegate", "input", "delegate"),
             ])
-            write_jsonl(root / "blueprint_edges.jsonl", [{
-                "edge_kind": "data",
-                "source_node_id": create_id,
-                "source_pin_id": "create-out",
-                "source_pin_name": "OutputDelegate",
-                "target_node_id": bind_id,
-                "target_pin_id": "bind-in",
-                "target_pin_name": "Delegate",
-            }])
+            write_jsonl(root / "blueprint_edges.jsonl", [
+                {
+                    "edge_kind": "data",
+                    "source_node_id": create_id,
+                    "source_pin_id": "create-out",
+                    "source_pin_name": "OutputDelegate",
+                    "target_node_id": reroute_id,
+                    "target_pin_id": "reroute-in",
+                    "target_pin_name": "InputPin",
+                },
+                {
+                    "edge_kind": "data",
+                    "source_node_id": reroute_id,
+                    "source_pin_id": "reroute-out",
+                    "source_pin_name": "OutputPin",
+                    "target_node_id": bind_id,
+                    "target_pin_id": "bind-in",
+                    "target_pin_name": "Delegate",
+                },
+            ])
             write_jsonl(root / "blueprint_data_dependencies.jsonl", [])
             write_jsonl(root / "blueprint_functions.jsonl", [
                 {
@@ -320,7 +344,7 @@ class SemanticReportDelegateAuditTest(unittest.TestCase):
             )
             self.assertEqual(
                 dict(result["delegate_binding_schema_versions"]),
-                {2: 1},
+                {3: 1},
             )
             self.assertEqual(
                 dict(result["delegate_binding_basis_counts"]),
@@ -338,6 +362,16 @@ class SemanticReportDelegateAuditTest(unittest.TestCase):
                 dict(result["delegate_binding_expected_endpoint_kinds"]),
                 {"custom_event": 1},
             )
+            self.assertEqual(
+                dict(result["delegate_binding_source_resolution_counts"]),
+                {"transparent_reroute_chain": 1},
+            )
+            self.assertEqual(
+                dict(result["delegate_binding_expected_source_resolution_counts"]),
+                {"transparent_reroute_chain": 1},
+            )
+            self.assertEqual(result["delegate_binding_reroute_hops"], 1)
+            self.assertEqual(result["delegate_binding_expected_reroute_hops"], 1)
             self.assertEqual(result["delegate_component_bound_event_count"], 1)
             self.assertEqual(result["delegate_component_event_exact_identity_count"], 1)
             self.assertEqual(result["delegate_component_event_join_count"], 1)
