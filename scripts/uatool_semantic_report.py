@@ -387,6 +387,32 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
                 macro_binding_status["missing_interface_pin"] += 1
                 macro_binding_mismatches[f"{macro_graph} :: {direction} :: {name} :: missing"] += 1
 
+    interprocedural_edge_path = output / "blueprint_interprocedural_execution_edges.jsonl"
+    interprocedural_terminal_path = output / "blueprint_interprocedural_execution_terminals.jsonl"
+    interprocedural_edges = (
+        list(rows(interprocedural_edge_path)) if interprocedural_edge_path.is_file() else []
+    )
+    interprocedural_terminals = (
+        list(rows(interprocedural_terminal_path)) if interprocedural_terminal_path.is_file() else []
+    )
+    interprocedural_edge_kinds = collections.Counter(
+        str(row.get("edge_kind", "") or "<empty>") for row in interprocedural_edges
+    )
+    interprocedural_terminal_kinds = collections.Counter(
+        str(row.get("terminal_kind", "") or "<empty>") for row in interprocedural_terminals
+    )
+    interprocedural_expected_edge_count = (
+        macro_exec_exact_entry_bridge_count + macro_exec_exact_return_bridge_count
+    )
+    interprocedural_stream_alignment = bool(
+        len(interprocedural_edges) == interprocedural_expected_edge_count
+        and int(interprocedural_edge_kinds.get("macro_enter", 0))
+            == macro_exec_exact_entry_bridge_count
+        and int(interprocedural_edge_kinds.get("macro_return", 0))
+            == macro_exec_exact_return_bridge_count
+        and len(interprocedural_terminals) == macro_exec_terminal_output_count
+    )
+
     control_rig_nodes = [row for row in all_nodes if str(row.get("operation", "") or "") == "control_rig_node"]
     control_rig_ids = {str(row.get("node_id", "") or "") for row in control_rig_nodes if row.get("node_id")}
     rigvm_path = output / "rigvm_editor_links.jsonl"
@@ -463,6 +489,12 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
         "macro_exec_duplicate_block_node_count": macro_exec_duplicate_block_node_count,
         "macro_exec_status": top(macro_exec_status),
         "macro_exec_mismatches": top(macro_exec_mismatches),
+        "interprocedural_execution_edge_count": len(interprocedural_edges),
+        "interprocedural_execution_edge_kinds": top(interprocedural_edge_kinds),
+        "interprocedural_execution_terminal_count": len(interprocedural_terminals),
+        "interprocedural_execution_terminal_kinds": top(interprocedural_terminal_kinds),
+        "interprocedural_expected_edge_count": interprocedural_expected_edge_count,
+        "interprocedural_stream_alignment": interprocedural_stream_alignment,
         "control_rig_node_count": len(control_rig_nodes),
         "rigvm_link_count": len(rigvm_links),
         "rigvm_duplicate_link_node_ids": len(rigvm_link_ids) - len(rigvm_link_id_set),
@@ -569,6 +601,16 @@ def print_report(report: dict) -> None:
     )
     section("macro execution bridge status", "macro_exec_status")
     section("macro execution bridge mismatches", "macro_exec_mismatches")
+
+    print("\n[Blueprint interprocedural execution streams]")
+    print(
+        f"edges={int(report.get('interprocedural_execution_edge_count', 0) or 0)} "
+        f"expected_edges={int(report.get('interprocedural_expected_edge_count', 0) or 0)} "
+        f"terminals={int(report.get('interprocedural_execution_terminal_count', 0) or 0)} "
+        f"aligned={bool(report.get('interprocedural_stream_alignment', False))}"
+    )
+    section("interprocedural execution edge kinds", "interprocedural_execution_edge_kinds")
+    section("interprocedural execution terminal kinds", "interprocedural_execution_terminal_kinds")
 
     control_rig = int(report.get("control_rig_node_count", 0) or 0)
     rigvm_links = int(report.get("rigvm_link_count", 0) or 0)
