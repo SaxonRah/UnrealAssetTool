@@ -18,11 +18,13 @@ from pathlib import Path
 
 import uatool_core as core
 
-INTERPROCEDURAL_SCHEMA_VERSION = 2
+INTERPROCEDURAL_SCHEMA_VERSION = 3
 DERIVED_FILES = (
     "blueprint_interprocedural_execution_edges.jsonl",
     "blueprint_interprocedural_execution_terminals.jsonl",
     "blueprint_interprocedural_data_routes.jsonl",
+    "blueprint_interprocedural_function_execution_edges.jsonl",
+    "blueprint_interprocedural_function_execution_terminals.jsonl",
 )
 
 _SQL = """
@@ -79,6 +81,39 @@ CREATE INDEX bp_interproc_data_macro_idx
  ON blueprint_interprocedural_data_routes(macro_node_id,route_kind);
 CREATE INDEX bp_interproc_data_call_pin_idx
  ON blueprint_interprocedural_data_routes(call_pin_id);
+
+CREATE TABLE blueprint_interprocedural_function_execution_edges(
+ function_edge_id TEXT PRIMARY KEY,schema_version INTEGER NOT NULL,edge_kind TEXT NOT NULL,
+ call_node_id TEXT NOT NULL,target_function_id TEXT NOT NULL,
+ caller_blueprint_path TEXT NOT NULL,caller_graph_id TEXT NOT NULL,caller_block_id TEXT NOT NULL,
+ source_blueprint_path TEXT NOT NULL,source_graph_id TEXT NOT NULL,source_block_id TEXT NOT NULL,
+ source_node_id TEXT NOT NULL,target_blueprint_path TEXT NOT NULL,target_graph_id TEXT NOT NULL,
+ target_block_id TEXT NOT NULL,target_node_id TEXT NOT NULL,
+ continuation_node_id TEXT NOT NULL,continuation_pin_id TEXT NOT NULL,continuation_pin_name TEXT NOT NULL,
+ return_frontier_block_count INTEGER NOT NULL,call_binding_count INTEGER NOT NULL,
+ purity_override INTEGER NOT NULL,evidence_kind TEXT NOT NULL,json TEXT NOT NULL
+);
+CREATE INDEX bp_interproc_fn_exec_call_idx
+ ON blueprint_interprocedural_function_execution_edges(call_node_id,edge_kind);
+CREATE INDEX bp_interproc_fn_exec_source_idx
+ ON blueprint_interprocedural_function_execution_edges(source_block_id,edge_kind);
+CREATE INDEX bp_interproc_fn_exec_target_idx
+ ON blueprint_interprocedural_function_execution_edges(target_block_id,edge_kind);
+
+CREATE TABLE blueprint_interprocedural_function_execution_terminals(
+ terminal_id TEXT PRIMARY KEY,schema_version INTEGER NOT NULL,terminal_kind TEXT NOT NULL,
+ call_node_id TEXT NOT NULL,target_function_id TEXT NOT NULL,
+ caller_blueprint_path TEXT NOT NULL,caller_graph_id TEXT NOT NULL,caller_block_id TEXT NOT NULL,
+ target_blueprint_path TEXT NOT NULL,target_graph_id TEXT NOT NULL,
+ entry_block_id TEXT NOT NULL,entry_node_id TEXT NOT NULL,
+ return_frontier_block_count INTEGER NOT NULL,return_frontier_block_ids_json TEXT NOT NULL,
+ call_binding_count INTEGER NOT NULL,purity_override INTEGER NOT NULL,
+ canonical_outgoing_exec_count INTEGER NOT NULL,evidence_kind TEXT NOT NULL,json TEXT NOT NULL
+);
+CREATE INDEX bp_interproc_fn_terminal_call_idx
+ ON blueprint_interprocedural_function_execution_terminals(call_node_id);
+CREATE INDEX bp_interproc_fn_terminal_target_idx
+ ON blueprint_interprocedural_function_execution_terminals(target_function_id);
 """
 
 
@@ -516,6 +551,312 @@ def derive(output: Path, rows) -> tuple[list[dict], list[dict], list[dict]]:
         row["route_kind"], row["call_pin_id"], row["route_id"],
     ))
     return interprocedural_edges, terminals, data_routes
+
+
+def derive_function_execution(output: Path, rows) -> tuple[list[dict], list[dict], dict]:
+    """Materialize exact direct internal Blueprint function call/return topology.
+
+    Eligibility follows the accepted function-target audit:
+      - uniquely captured internal target,
+      - not interface dispatch/declaration,
+      - call node itself is impure,
+      - not latent,
+      - caller block and callee entry block are exact,
+      - callee has an entry-reachable terminal block frontier,
+      - every connected caller continuation maps to the caller graph.
+
+    Pure target metadata may coexist with an impure call node; UE supports a
+    node-level purity override and the call-site node governs exec participation.
+    """
+    output = Path(output)
+    functions = {
+        str(row.get("function_id", "") or ""): row
+        for row in rows(output / "blueprint_functions.jsonl")
+        if row.get("function_id")
+    }
+    blueprints = {
+        str(row.get("object_path", "") or ""): row
+        for row in rows(output / "blueprints.jsonl")
+        if row.get("object_path")
+    }
+    call_bindings_by_node: dict[str, list[dict]] = collections.defaultdict(list)
+    bindings_path = output / "blueprint_call_bindings.jsonl"
+    if bindings_path.is_file():
+        for binding in rows(bindings_path):
+            call_node_id = str(binding.get("call_node_id", "") or "")
+            if call_node_id:
+                call_bindings_by_node[call_node_id].append(binding)
+
+    block_by_node, duplicates = _block_membership(output, rows)
+    if duplicates:
+        sample = ", ".join(sorted(duplicates)[:5])
+        raise RuntimeError(f"Blueprint execution node belongs to multiple blocks: {sample}")
+
+    block_by_id: dict[str, dict] = {}
+    blocks_by_graph: dict[str, list[dict]] = collections.defaultdict(list)
+    for block in rows(output / "blueprint_execution_blocks.jsonl"):
+        block_id = str(block.get("block_id", "") or "")
+        graph_id = str(block.get("graph_id", "") or "")
+        if block_id:
+            block_by_id[block_id] = block
+        if graph_id:
+            blocks_by_graph[graph_id].append(block)
+
+    block_outgoing: dict[str, list[str]] = collections.defaultdict(list)
+    for edge in rows(output / "blueprint_execution_block_edges.jsonl"):
+        source_block_id = str(edge.get("source_block_id", "") or "")
+        target_block_id = str(edge.get("target_block_id", "") or "")
+        if source_block_id and target_block_id:
+            block_outgoing[source_block_id].append(target_block_id)
+
+    raw_exec_by_source_node: dict[str, list[dict]] = collections.defaultdict(list)
+    for edge in rows(output / "blueprint_edges.jsonl"):
+        if str(edge.get("edge_kind", "") or "") != "execution":
+            continue
+        source_node_id = str(edge.get("source_node_id", "") or "")
+        if source_node_id:
+            raw_exec_by_source_node[source_node_id].append(edge)
+
+    BPTYPE_INTERFACE = 3
+    execution_edges: list[dict] = []
+    terminals: list[dict] = []
+    stats = collections.Counter()
+
+    for call in rows(output / "blueprint_call_edges.jsonl"):
+        stats["calls"] += 1
+        if str(call.get("resolution", "") or "") != "internal":
+            continue
+        stats["internal"] += 1
+
+        call_node_id = str(call.get("call_node_id", "") or "")
+        target_function_id = str(call.get("target_function_id", "") or "")
+        target = functions.get(target_function_id)
+        if target is None:
+            raise RuntimeError(
+                f"internal Blueprint function call lacks target function row: {call_node_id}"
+            )
+
+        target_bp_path = str(
+            call.get("target_blueprint_path", "")
+            or target.get("blueprint_path", "")
+            or ""
+        )
+        target_bp = blueprints.get(target_bp_path)
+        if target_bp is None:
+            raise RuntimeError(
+                f"internal Blueprint function target lacks Blueprint row: {target_bp_path}"
+            )
+        try:
+            target_bp_type = int(target_bp.get("blueprint_type", -1))
+        except (TypeError, ValueError):
+            raise RuntimeError(
+                f"internal Blueprint function target has invalid Blueprint type: {target_bp_path}"
+            )
+
+        if bool(call.get("interface_call", False)) or target_bp_type == BPTYPE_INTERFACE:
+            stats["excluded_interface"] += 1
+            continue
+        if bool(call.get("latent", False)):
+            stats["excluded_latent"] += 1
+            continue
+        if bool(call.get("pure", False)):
+            stats["excluded_pure"] += 1
+            continue
+
+        stats["direct_impure"] += 1
+        caller_graph_id = str(call.get("graph_id", "") or "")
+        caller_blueprint_path = str(call.get("blueprint_path", "") or "")
+        caller_block = block_by_node.get(call_node_id)
+        if caller_block is None:
+            stats["excluded_unreachable_callsite"] += 1
+            continue
+        caller_block_id = str(caller_block.get("block_id", "") or "")
+        if str(caller_block.get("graph_id", "") or "") != caller_graph_id:
+            raise RuntimeError(
+                f"function caller block graph mismatch: {call_node_id}"
+            )
+
+        entry_node_id = str(target.get("entry_node_id", "") or "")
+        entry_block = block_by_node.get(entry_node_id)
+        if entry_block is None:
+            raise RuntimeError(
+                f"direct internal function lacks entry execution block: {target_function_id}"
+            )
+        entry_block_id = str(entry_block.get("block_id", "") or "")
+        if str(entry_block.get("graph_id", "") or "") != target_function_id:
+            raise RuntimeError(
+                f"function entry block graph mismatch: {target_function_id}"
+            )
+
+        reachable: set[str] = set()
+        pending = [entry_block_id]
+        while pending:
+            block_id = pending.pop()
+            if not block_id or block_id in reachable:
+                continue
+            block = block_by_id.get(block_id)
+            if block is None:
+                raise RuntimeError(
+                    f"function reachable block is missing: {target_function_id}:{block_id}"
+                )
+            if str(block.get("graph_id", "") or "") != target_function_id:
+                continue
+            reachable.add(block_id)
+            for target_block_id in block_outgoing.get(block_id, []):
+                if target_block_id not in reachable:
+                    pending.append(target_block_id)
+
+        frontier = sorted(
+            block_id for block_id in reachable
+            if not [
+                target_block_id
+                for target_block_id in block_outgoing.get(block_id, [])
+                if str(block_by_id.get(target_block_id, {}).get("graph_id", "") or "")
+                    == target_function_id
+            ]
+        )
+        if not frontier:
+            raise RuntimeError(
+                f"direct internal function lacks reachable return frontier: {target_function_id}"
+            )
+
+        target_blueprint_path = str(target.get("blueprint_path", "") or target_bp_path)
+        call_binding_count = len(call_bindings_by_node.get(call_node_id, []))
+        target_pure = bool(target.get("blueprint_pure", False))
+        purity_override = bool(target_pure and not bool(call.get("pure", False)))
+
+        enter_id = _id(
+            "bpinterfnexec:",
+            "function_enter", call_node_id, caller_block_id, entry_block_id,
+        )
+        execution_edges.append({
+            "function_edge_id": enter_id,
+            "schema_version": INTERPROCEDURAL_SCHEMA_VERSION,
+            "edge_kind": "function_enter",
+            "call_node_id": call_node_id,
+            "target_function_id": target_function_id,
+            "caller_blueprint_path": caller_blueprint_path,
+            "caller_graph_id": caller_graph_id,
+            "caller_block_id": caller_block_id,
+            "source_blueprint_path": caller_blueprint_path,
+            "source_graph_id": caller_graph_id,
+            "source_block_id": caller_block_id,
+            "source_node_id": call_node_id,
+            "target_blueprint_path": target_blueprint_path,
+            "target_graph_id": target_function_id,
+            "target_block_id": entry_block_id,
+            "target_node_id": entry_node_id,
+            "continuation_node_id": "",
+            "continuation_pin_id": "",
+            "continuation_pin_name": "",
+            "return_frontier_block_count": len(frontier),
+            "call_binding_count": call_binding_count,
+            "purity_override": purity_override,
+            "evidence_kind": "exact_internal_function_entry_block",
+        })
+        stats["function_enter"] += 1
+
+        outgoing = sorted(
+            raw_exec_by_source_node.get(call_node_id, []),
+            key=lambda edge: (
+                str(edge.get("target_node_id", "") or ""),
+                str(edge.get("target_pin_id", "") or ""),
+            ),
+        )
+        if not outgoing:
+            terminal_id = _id(
+                "bpinterfnterm:",
+                call_node_id, target_function_id, caller_block_id, *frontier,
+            )
+            terminals.append({
+                "terminal_id": terminal_id,
+                "schema_version": INTERPROCEDURAL_SCHEMA_VERSION,
+                "terminal_kind": "function_call_no_continuation",
+                "call_node_id": call_node_id,
+                "target_function_id": target_function_id,
+                "caller_blueprint_path": caller_blueprint_path,
+                "caller_graph_id": caller_graph_id,
+                "caller_block_id": caller_block_id,
+                "target_blueprint_path": target_blueprint_path,
+                "target_graph_id": target_function_id,
+                "entry_block_id": entry_block_id,
+                "entry_node_id": entry_node_id,
+                "return_frontier_block_count": len(frontier),
+                "return_frontier_block_ids": frontier,
+                "call_binding_count": call_binding_count,
+                "purity_override": purity_override,
+                "canonical_outgoing_exec_count": 0,
+                "evidence_kind": "exact_internal_function_no_caller_continuation",
+            })
+            stats["function_terminal"] += 1
+            stats["terminal_frontier_blocks"] += len(frontier)
+            continue
+
+        stats["connected_calls"] += 1
+        for raw_edge in outgoing:
+            continuation_node_id = str(raw_edge.get("target_node_id", "") or "")
+            continuation_pin_id = str(raw_edge.get("target_pin_id", "") or "")
+            continuation_pin_name = str(raw_edge.get("target_pin_name", "") or "")
+            continuation_block = block_by_node.get(continuation_node_id)
+            if continuation_block is None:
+                raise RuntimeError(
+                    f"function continuation node lacks execution block: {continuation_node_id}"
+                )
+            continuation_block_id = str(continuation_block.get("block_id", "") or "")
+            if str(continuation_block.get("graph_id", "") or "") != caller_graph_id:
+                raise RuntimeError(
+                    f"function continuation graph mismatch: {call_node_id}"
+                )
+            continuation_blueprint_path = str(
+                continuation_block.get("blueprint_path", "") or caller_blueprint_path
+            )
+
+            for frontier_block_id in frontier:
+                frontier_block = block_by_id.get(frontier_block_id, {})
+                frontier_node_id = str(frontier_block.get("exit_node_id", "") or "")
+                edge_id = _id(
+                    "bpinterfnexec:",
+                    "function_return", call_node_id, target_function_id,
+                    frontier_block_id, continuation_block_id,
+                    continuation_node_id, continuation_pin_id,
+                )
+                execution_edges.append({
+                    "function_edge_id": edge_id,
+                    "schema_version": INTERPROCEDURAL_SCHEMA_VERSION,
+                    "edge_kind": "function_return",
+                    "call_node_id": call_node_id,
+                    "target_function_id": target_function_id,
+                    "caller_blueprint_path": caller_blueprint_path,
+                    "caller_graph_id": caller_graph_id,
+                    "caller_block_id": caller_block_id,
+                    "source_blueprint_path": target_blueprint_path,
+                    "source_graph_id": target_function_id,
+                    "source_block_id": frontier_block_id,
+                    "source_node_id": frontier_node_id,
+                    "target_blueprint_path": continuation_blueprint_path,
+                    "target_graph_id": caller_graph_id,
+                    "target_block_id": continuation_block_id,
+                    "target_node_id": continuation_node_id,
+                    "continuation_node_id": continuation_node_id,
+                    "continuation_pin_id": continuation_pin_id,
+                    "continuation_pin_name": continuation_pin_name,
+                    "return_frontier_block_count": len(frontier),
+                    "call_binding_count": call_binding_count,
+                    "purity_override": purity_override,
+                    "evidence_kind": "reachable_function_frontier_canonical_continuation",
+                })
+                stats["function_return"] += 1
+
+    execution_edges.sort(key=lambda row: (
+        row["caller_blueprint_path"], row["caller_graph_id"], row["call_node_id"],
+        row["edge_kind"], row["source_block_id"], row["target_block_id"],
+        row["continuation_pin_id"], row["function_edge_id"],
+    ))
+    terminals.sort(key=lambda row: (
+        row["caller_blueprint_path"], row["caller_graph_id"], row["call_node_id"],
+        row["terminal_id"],
+    ))
+    return execution_edges, terminals, dict(stats)
 
 
 def validation_error(output: Path, rows) -> str | None:
