@@ -7,10 +7,12 @@ import json
 import sys
 from pathlib import Path
 
+import uatool_version as version
+
 CAPABILITY_SCHEMA_VERSION = 1
 CAPABILITIES_FILE = "capabilities.json"
-RELEASE_LINE = "0.8.0"
-VALIDATED_ENGINE = "UE 5.8.2"
+RELEASE_LINE = version.RELEASE_VERSION
+VALIDATED_ENGINE = version.VALIDATED_ENGINE
 
 COVERAGE_LEVELS = (
     "first_class",
@@ -439,8 +441,12 @@ def build_manifest(output: Path) -> dict:
     return {
         "capability_schema_version": CAPABILITY_SCHEMA_VERSION,
         "tool": {
+            "version": version.RELEASE_VERSION,
             "release_line": RELEASE_LINE,
             "validated_engine": VALIDATED_ENGINE,
+            "engine_target": version.ENGINE_TARGET,
+            "beta": True,
+            "compatibility_policy": version.BETA_COMPATIBILITY_POLICY,
         },
         "coverage_levels": list(COVERAGE_LEVELS),
         "corpus": {
@@ -470,6 +476,18 @@ def validation_error(output: Path) -> str | None:
         return f"expected capability schema {CAPABILITY_SCHEMA_VERSION}"
     if tuple(manifest.get("coverage_levels", [])) != COVERAGE_LEVELS:
         return "coverage level vocabulary mismatch"
+    tool = manifest.get("tool", {})
+    if not isinstance(tool, dict):
+        return "tool release contract missing or invalid"
+    if str(tool.get("version", "") or "") != version.RELEASE_VERSION:
+        return (
+            f"tool version mismatch: expected {version.RELEASE_VERSION}, "
+            f"got {tool.get('version')!r}"
+        )
+    if str(tool.get("release_line", "") or "") != version.RELEASE_VERSION:
+        return "tool release line mismatch"
+    if str(tool.get("validated_engine", "") or "") != version.VALIDATED_ENGINE:
+        return "validated engine mismatch"
     if not isinstance(manifest.get("schemas"), dict):
         return "schemas missing or invalid"
     families = manifest.get("families", [])

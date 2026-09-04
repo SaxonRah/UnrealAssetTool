@@ -28,6 +28,7 @@ import uatool_derived_freshness as derived_freshness
 import uatool_mover_behavior as mover_behavior
 import uatool_build_perf as build_perf
 import uatool_verify_bundle as bundle_verify
+import uatool_version as version
 
 # Public derived schema 37 adds exact static Blueprint delegate binding
 # provenance on top of schema-36 function data provenance.
@@ -864,6 +865,32 @@ core.DEFAULT_BUNDLE_FILES = tuple(dict.fromkeys((
 )))
 
 
+def _version_cli(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="uatool version",
+        description="print the UnrealAssetTool release and current schema contract",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="emit the release contract as JSON",
+    )
+    args = parser.parse_args(argv)
+    if args.json:
+        print(json.dumps({
+            "name": "UnrealAssetTool",
+            "version": version.RELEASE_VERSION,
+            "beta": True,
+            "engine_target": version.ENGINE_TARGET,
+            "validated_engine": version.VALIDATED_ENGINE,
+            "schemas": version.CURRENT_SCHEMAS,
+            "compatibility_policy": version.BETA_COMPATIBILITY_POLICY,
+        }, indent=2))
+    else:
+        print(version.version_line())
+    return 0
+
+
 def _semantic_report_cli(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="uatool semantic-report",
@@ -938,6 +965,15 @@ def _verify_bundle_cli(argv: list[str]) -> int:
 
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "--version":
+        print(f"UnrealAssetTool {version.RELEASE_VERSION}")
+        return 0
+    if len(sys.argv) > 1 and sys.argv[1] == "version":
+        try:
+            return _version_cli(sys.argv[2:])
+        except Exception as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 46
     if len(sys.argv) > 1 and sys.argv[1] == "program-report":
         try:
             return _program_report_cli(sys.argv[2:])

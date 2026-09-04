@@ -4,6 +4,8 @@
 
 UnrealAssetTool is an AI-facing indexer for Unreal Engine projects. It prioritizes authoritative authored facts from Unreal objects and serialized/editor data, then builds deterministic cross-system relationships and retrieval views outside Unreal.
 
+Current release contract: **1.0.0-beta.1** ([release-contract.md](release-contract.md)).
+
 The architecture has three layers:
 
 1. **canonical Unreal extraction** — facts Unreal can state exactly;
@@ -17,10 +19,13 @@ A generic package dependency is useful fallback evidence, but it is never promot
 ```text
 structural schema: 13
 world schema:      12
-animation schema:   1
+animation schema:   4
 VFX schema:         1
-systems schema:     4
-derived schema:    20
+systems schema:    11
+mesh schema:        1
+world geometry:     1
+derived schema:    37
+capabilities:       1
 ```
 
 Each layer is independently versioned. Canonical scanner changes normally require Unreal to run again. Compatible Python-derived changes can normally be applied with `derive`, `pack` and `bundle` only.
@@ -59,9 +64,9 @@ structural Unreal commandlet
 world Unreal commandlet process
         |
         +--> world schema 12
-        +--> animation schema 1 passes
+        +--> animation schema 4 passes
         +--> VFX schema 1 callback
-        +--> systems schema 4 callback
+        +--> systems schema 11 callback
         |
         v
 raw manifest validation
@@ -72,6 +77,8 @@ canonical cleanup + deterministic derivation
         +--> Blueprint/AI/PCG/material/world/animation/VFX views
         +--> Gameplay Tags/gameplay-data joins
         +--> Blueprint enum/control-flow/Chooser semantics
+        +--> Blueprint macro/function cross-graph execution + data provenance
+        +--> exact authored Blueprint delegate bindings
         +--> Mover behavior and Gameplay Camera behavior
         +--> typed project graph
         +--> bounded quality-prioritized neighborhoods

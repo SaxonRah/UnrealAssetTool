@@ -6,15 +6,18 @@
 
 ## Current baseline
 
-- release line: **0.8.0**
+- release: **1.0.0-beta.1**
 - Unreal target: **UE 5.8+**
 - validated engine: **UE 5.8.2**
 - structural scanner schema: **13**
 - world scanner schema: **12**
-- animation scanner schema: **1**
+- animation scanner schema: **4**
 - VFX scanner schema: **1**
-- systems scanner schema: **6**
-- derived schema: **22**
+- systems scanner schema: **11**
+- mesh companion schema: **1**
+- world-geometry companion schema: **1**
+- derived schema: **37**
+- capability contract schema: **1**
 
 The schemas are independently versioned because they represent different extraction lifecycles. A change to a Python-only derived view does not require renumbering canonical Unreal scanner output.
 
@@ -88,15 +91,17 @@ The `.uatool` directory contains canonical JSONL, deterministic derived JSONL, m
 Important schema layers:
 
 ```text
-manifest.json             structural schema 13 + derived schema 22
-world_manifest.json       world schema 12
-animation_manifest.json   animation schema 1
-vfx_manifest.json         VFX schema 1
-systems_manifest.json     systems schema 6
-capabilities.json         capability contract schema 1
+manifest.json                 structural schema 13 + derived schema 37
+world_manifest.json           world schema 12 / structural baseline 13
+animation_manifest.json       animation schema 4
+vfx_manifest.json             VFX schema 1
+systems_manifest.json         systems schema 11
+mesh_manifest.json            mesh schema 1
+world_geometry_manifest.json  world-geometry schema 1
+capabilities.json             capability contract schema 1
 ```
 
-Derived schema 22 includes the typed project graph and Blueprint/Chooser/Mover/Gameplay Camera/Mass/ZoneGraph/GAS semantics while preserving the earlier derived streams:
+Derived schema 37 is the current deterministic layer. It includes the typed project graph plus Blueprint macro/function interprocedural execution and data provenance, exact authored delegate bindings, and the accepted Chooser/Mover/Gameplay Camera/Mass/ZoneGraph/GAS/animation/system relationships while preserving earlier derived streams:
 
 ```text
 project_nodes.jsonl
@@ -110,6 +115,11 @@ mover_transition_routes.jsonl
 gameplay_camera_property_providers.jsonl
 gameplay_camera_property_fields.jsonl
 gameplay_camera_director_inputs.jsonl
+blueprint_interprocedural_execution_edges.jsonl
+blueprint_interprocedural_data_routes.jsonl
+blueprint_interprocedural_function_execution_edges.jsonl
+blueprint_interprocedural_function_data_routes.jsonl
+blueprint_delegate_bindings.jsonl
 ```
 
 `project_edges.jsonl` is authoritative for typed project-graph relationships and provenance. Neighborhoods store compact references to those edges instead of duplicating full evidence payloads.
@@ -143,6 +153,16 @@ For an external target, the launcher temporarily stages the canonical descriptor
 See [docs/cross-project-workflow.md](docs/cross-project-workflow.md).
 
 ## Commands
+
+Check the tool/release contract from any checkout:
+
+```powershell
+python scripts\uatool.py --version
+python scripts\uatool.py version
+python scripts\uatool.py version --json
+```
+
+The beta compatibility policy is documented in [docs/release-contract.md](docs/release-contract.md).
 
 ### Build only
 

@@ -2,6 +2,8 @@
 
 This is the maintained answer to **“what does UnrealAssetTool actually understand?”**
 
+Current release contract: **1.0.0-beta.1**. See [release-contract.md](release-contract.md).
+
 The matrix distinguishes asset discovery from semantic depth. An asset appearing in `assets.jsonl` is not sufficient to call that family first-class. `capabilities.json` exposes the same contract in machine-readable form for each corpus.
 
 ## Coverage levels

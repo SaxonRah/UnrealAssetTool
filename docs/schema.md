@@ -2,15 +2,17 @@
 
 ## Current versions
 
-UnrealAssetTool 0.8.0 uses independently versioned canonical layers plus one final derived layer and a machine-readable capability contract:
+UnrealAssetTool 1.0.0-beta.1 uses independently versioned canonical layers plus one final derived layer and a machine-readable capability contract:
 
 ```text
 structural scanner schema: 13
 world scanner schema:      12
-animation scanner schema:   1
+animation scanner schema:   4
 VFX scanner schema:         1
-systems scanner schema:     6
-derived schema:            22
+systems scanner schema:    11
+mesh companion schema:      1
+world-geometry schema:      1
+derived schema:            37
 capability schema:          1
 ```
 
@@ -33,12 +35,14 @@ The version numbers intentionally describe different facts and lifecycles.
 - `animation_manifest.json` -> animation `schema_version`
 - `vfx_manifest.json` -> VFX `schema_version`
 - `systems_manifest.json` -> systems `schema_version`
+- `mesh_manifest.json` -> mesh companion `schema_version`
+- `world_geometry_manifest.json` -> world-geometry companion `schema_version`
 - `blueprint_enum_manifest.json` -> Blueprint enum companion `schema_version`
 - `capabilities.json` -> capability-contract `capability_schema_version` plus the schema versions observed in this corpus
 
 A canonical scanner change normally requires Unreal to run again. A compatible derived-only or capability/report change normally requires only `derive`, `pack` and `bundle`.
 
-The current systems extension is documented in [systems-schema-6.md](systems-schema-6.md). The retained Mass/ZoneGraph foundation is documented in [zonegraph-mass-schema5.md](zonegraph-mass-schema5.md). Historical systems contracts remain in [systems-schema-1.md](systems-schema-1.md), [systems-schema-2.md](systems-schema-2.md) and [systems-schema-4.md](systems-schema-4.md).
+The current full-corpus baseline is summarized in [release-contract.md](release-contract.md). Historical subsystem milestones remain authoritative for the feature they introduced; for example [systems-schema-6.md](systems-schema-6.md) documents the GAS promotion milestone and [zonegraph-mass-schema5.md](zonegraph-mass-schema5.md) documents the retained Mass/ZoneGraph foundation.
 
 ## Storage rules
 
