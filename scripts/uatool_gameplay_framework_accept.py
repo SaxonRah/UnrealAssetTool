@@ -204,7 +204,7 @@ def accept(corpus: Path, rows) -> dict:
         "target_derived_schema_version": TARGET_DERIVED_SCHEMA_VERSION,
         "representative_content": "ContentExamples UE 5.8.2 structural/world/config authored Gameplay Framework evidence",
         "canonical_passes": ["structural", "world", "source"],
-        "canonical_schema_requirements": {"structural": 12, "world": 12},
+        "canonical_schema_requirements": {"structural": 13, "world": 12},
         "systems_schema_version_unchanged": True,
         "runtime_state_captured": False,
         "runtime_possession_state_captured": False,
