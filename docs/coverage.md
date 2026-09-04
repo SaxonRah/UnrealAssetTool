@@ -26,7 +26,7 @@ mesh=1
 world_geometry=1
 vfx=1
 systems=11
-derived=32
+derived=33
 capabilities=1
 ```
 
@@ -38,7 +38,7 @@ capabilities=1
 | --- | --- | --- | --- |
 | Files/source/config | `first_class` | Physical files, kinds, bounded text chunks | Not a C++ semantic compiler/indexer |
 | Asset Registry | `first_class` fallback | Asset identity/class/package/tags/dependencies | Package dependency is not semantic object linkage |
-| Blueprint/K2 | `first_class` | Graphs, nodes, pins, links, state, refs, functions/events/calls/data provenance/execution blocks plus generic semantic statements/control flow | Uncommon node-specific meaning may remain generic class/pin/property state |
+| Blueprint/K2 | `first_class` | Graphs, nodes, pins, links, state, refs, functions/events/calls/data provenance/execution blocks plus generic semantic statements/control flow; exact project-authored macro graph/interface bindings and schema-33 cross-graph macro execution edges | Static authored topology only: macro bodies are not inlined/simulated, engine StandardMacros remain external unless captured, and runtime Blueprint VM state is not executed |
 | Blueprint user-defined enums | `first_class` | Enum identity, entries, raw/authored/display names and conservative readable enum decoration | Ambiguous enum typing is left raw rather than guessed |
 | Animation Blueprint state machines | `first_class` | Machines, states, aliases/conduits, transitions, transition rules, pose/cache/link nodes | Runtime generated/compiled VM behavior is not simulated |
 | UMG Widget Blueprint | `first_class_depth_pending` | Widget tree, properties, bindings, animations, animation bindings plus Blueprint graphs | Slate/runtime rendering/style semantics are not modeled as a separate graph |
@@ -248,7 +248,21 @@ Target names and provider-gated bone names are authored symbols/relationships on
 
 See [animation-schema-4-motion-warping.md](animation-schema-4-motion-warping.md).
 
+## 17. Blueprint macro interprocedural flow is static cross-graph topology, not VM execution
+
+Blueprint semantic schema 4 proves exact project-authored macro graph identity and call-site/interface pin bindings. Derived schema 33 builds on those proof edges plus canonical execution edges and existing graph-local basic blocks to expose cross-graph macro control flow without flattening the authored graphs.
+
+The accepted GASP evidence behind the promotion contains 12 exact executable project macro instances, 14 exact caller-block -> macro-entry-block bridges, 9 exact macro-exit -> caller-continuation bridges and 8 authored terminal/unconnected macro exits, with zero bridge mismatches or duplicate block assignments.
+
+Derived schema 33 adds:
+
+- `blueprint_interprocedural_execution_edges.jsonl` for real cross-graph `macro_enter` and `macro_return` block edges;
+- `blueprint_interprocedural_execution_terminals.jsonl` for exact macro exit endpoints with no canonical call-site continuation.
+
+Graph-local `blueprint_execution_block_edges.jsonl` remains unchanged and authoritative within each graph. The interprocedural layer does not inline macro bodies, execute Blueprint VM code, infer engine StandardMacros behavior, or invent a continuation for an unconnected output.
+
 ---
+
 
 # Issue #14 status
 
