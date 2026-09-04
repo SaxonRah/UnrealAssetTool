@@ -21,10 +21,12 @@ These names align with the project graph and capability-contract vocabulary. A s
 ```text
 structural=12
 world=12
-animation=1
+animation=4
+mesh=1
+world_geometry=1
 vfx=1
 systems=11
-derived=28
+derived=32
 capabilities=1
 ```
 
@@ -47,13 +49,17 @@ capabilities=1
 | StateTree | `first_class` | States, nodes, transitions, bindings/properties | Compiler/runtime state is not executed |
 | PCG | `first_class` | Graphs, nodes, pins, edges, properties, parameters, context | Generated runtime/spatial output is not evaluated |
 | Materials | `first_class` | Assets, expressions, root/expression edges, parameters, properties/references | Shader compilation/runtime resource graph is out of scope |
+| StaticMesh | `first_class` | Authored source-model LOD/build/reduction settings, material slots, sockets, collision primitives/settings and exact derived-schema-30 relationships | Render buffers, generated render LOD resources, Nanite runtime resources and runtime physics state are excluded |
+| Landscape / Foliage / HLOD authored geometry | `first_class` | Landscape/component/layer allocation and material relationships, foliage type/info/instance authored state, HLOD layer/composition semantics and exact derived-schema-31 relationships | Generated/render geometry, runtime vegetation state, HISM render-instance internals and runtime HLOD state are excluded |
 | Worlds/levels | `first_class` | World identity, persistent/classic streaming relationships | Runtime dynamically spawned state is out of scope |
 | Actors/components | `first_class` | Placement, transforms, classes, ownership/attachments, tags, Blueprint identity | Runtime-only state is out of scope |
 | Placed overrides/references | `first_class` | Archetype-diff authored state plus hard/soft UObject refs | Bounded reflection intentionally caps pathological data |
 | Data Layers | `first_class` | Identity, hierarchy, runtime/editor authored state and DataLayerAsset association | Runtime activation is not simulated |
 | World Partition descriptors | `first_class` | Descriptor identity/GUID/package/class/refs/Data Layers/transforms/bounds | External actors are not deliberately loaded only to inspect them |
 | Core animation assets | `first_class` | Sequence/Montage/BlendSpace settings, notifies, markers, sections, segments, samples | See animation-specific depth rows below |
-| Skeleton | `first_class` | Bones, sockets, slots and metadata | SkeletalMesh/PhysicsAsset internals are separate gaps |
+| Skeleton | `first_class` | Bones, sockets, slots and metadata | Runtime pose/deformation state is not modeled |
+| SkeletalMesh / PhysicsAsset | `first_class` | Authored SkeletalMesh source-model LODs/build settings, material slots, morph targets, clothing membership/configs; PhysicsAsset bodies, collision primitives, constraints, profiles and exact derived-schema-29 relationships | Render buffers, runtime skinning/pose, cloth simulation, Chaos solver state and live collision/contact state are excluded |
+| Motion Warping | `first_class` | Exact authored Motion Warping notify windows, notify-owned RootMotionModifier templates/classes, common warp policy, typed editable modifier properties, target-name symbols and active bone-provider relationships; exact derived-schema-32 graph | Live warp targets, active runtime modifiers, root-motion evaluation, trajectory/runtime transforms and playback state are excluded |
 | Animation curves | `first_class` | Float/transform curves and individual keys/tangents | Compression/runtime evaluation is not modeled |
 | Pose Search | `first_class` | Databases, schemas, channels, roles, interaction assets, normalization sets | Search index/runtime query results are not extracted |
 | PoseAsset | `first_class` | Poses, tracks, transforms and curve values | Runtime pose blending not simulated |
@@ -93,9 +99,6 @@ These systems are visible through existing generic layers, Blueprint/component s
 
 | Family | Current useful facts | Missing semantic model |
 | --- | --- | --- |
-| Landscape/Foliage/HLOD | World actors/components/assets are discoverable | Landscape layer/material/component topology, foliage type/instance semantics, HLOD composition |
-| SkeletalMesh / PhysicsAsset | Asset identity/references and use by animation assets can be seen | Skeleton/LOD/material/morph/cloth data and physics bodies/constraints |
-| StaticMesh | Asset identity/references/material use can be seen generically | LOD/section/socket/collision/Nanite authored topology |
 | PrimaryAssetLabel | Recognized systems asset plus reflected state | Broader Asset Manager rules/types/bundles/config are not modeled |
 
 ---
@@ -215,6 +218,36 @@ Runtime spawn/possession/GameMode state and inherited native selector values abs
 
 See [gameplay-framework-derived28.md](gameplay-framework-derived28.md).
 
+## 13. SkeletalMesh / PhysicsAsset is authored topology, not runtime simulation
+
+Animation schema 3 and derived schema 29 promote exact authored SkeletalMesh and PhysicsAsset structure: source-model LODs/build settings, materials, morph/clothing membership, PhysicsAsset bodies/shapes/constraints/profiles and exact owner-scoped bone relationships.
+
+Render resources, runtime skinning/current pose, cloth simulation, Chaos solver state, generated runtime bodies/constraints, contacts and break history remain explicit non-claims.
+
+See [animation-schema-3.md](animation-schema-3.md).
+
+## 14. StaticMesh is authored source topology, not render-resource topology
+
+Mesh schema 1 and derived schema 30 model authored StaticMesh source LOD/build/reduction settings, material slots, sockets and authored collision/settings. The accepted real corpus verifies exactly 1,789 specialist edges.
+
+Render buffers, generated render sections/vertex/index resources, Nanite runtime resources and runtime physics state are excluded.
+
+See [staticmesh-schema-1.md](staticmesh-schema-1.md).
+
+## 15. Landscape / Foliage / HLOD is authored geometry, not generated/render state
+
+World-geometry schema 1 and derived schema 31 normalize authored Landscape/component/layer-allocation/material state, Foliage type/info/instance state and HLOD authored composition while preserving world schema 12 as the authority for placement and transforms.
+
+Generated terrain/render resources, HISM render-instance internals, runtime vegetation simulation and runtime HLOD state are not claimed.
+
+## 16. Motion Warping is authored configuration, not live warp state
+
+Animation schema 4 and derived schema 32 are accepted on UE 5.8.2 GASP. The representative corpus contains 145 exact Motion Warping notify windows, 145 notify-owned modifier templates, 2,565 editable modifier-property rows and exactly 540 specialist semantic edges.
+
+Target names and provider-gated bone names are authored symbols/relationships only. Live `FMotionWarpingTarget` arrays, active runtime modifiers, root-motion evaluation, current target transforms, trajectory state and playback remain explicit non-claims.
+
+See [animation-schema-4-motion-warping.md](animation-schema-4-motion-warping.md).
+
 ---
 
 # Issue #14 status
@@ -244,7 +277,11 @@ The original evidence-driven gameplay-family expansion tracked by issue #14 is c
 | --- | --- | --- | --- | --- | --- |
 | Structural / Blueprint / AI / PCG / material | Yes | Yes | Yes | Yes | GASP/Cropout/ContentExamples/StackOBot |
 | World | Yes | Yes | Yes | Yes | ContentExamples/StackOBot/City Sample + others |
-| Animation | Yes | Yes | Yes | Yes | GASP + ContentExamples |
+| Animation through schema 4 | Yes | Yes | Yes | Yes, through exact derived schema 32 | GASP + ContentExamples; Motion Warping exact gate on GASP UE 5.8.2 |
+| SkeletalMesh / PhysicsAsset schema-3 slice | Yes | Yes | Yes | Yes, exact derived-schema-29 contract | ContentExamples UE 5.8.2 |
+| StaticMesh mesh-schema-1 slice | Yes | Yes | Yes | Yes, exact 1,789-edge derived-schema-30 contract | ContentExamples UE 5.8.2 |
+| World-geometry schema-1 slice | Yes | Yes | Yes | Yes, exact derived-schema-31 contract | ContentExamples UE 5.8.2 |
+| Motion Warping animation-schema-4 slice | Yes | Yes | Yes | Yes, exact 540-edge derived-schema-32 contract | GASP UE 5.8.2 |
 | VFX | Yes | Yes | Yes | Yes | ContentExamples + StackOBot/Niagara Examples |
 | Systems schema 11 | Yes | Yes | Yes | Yes | StackOBot + ContentExamples + GASP + City Sample + Lyra, with specialist corpus gates by family |
 | GAS schema-6 slice | Yes | Yes | Yes | Yes, exact schema-22 contract | Lyra UE 5.8.2 |
@@ -282,6 +319,10 @@ Focused Python regression coverage includes:
 - AnimNext / UAF systems schema-10 identity/discovery/cardinality validation, accepted representative capture, exact variable-use resolution and exact schema-26 graph verification;
 - Authored Navigation systems schema-11 normalization, exact class/default/config contract, split world/system ownership, agent-mask normalization, representative 16-mapping cardinality and exact schema-27 graph verification;
 - Gameplay Framework exact/transitive class identity, GameMode selector/config/world joins, rejection of name-only inference, mixed-version systems self-validation and exact schema-28 graph verification;
+- SkeletalMesh/PhysicsAsset authored topology, schema-3 composition/storage compatibility and exact derived-schema-29 graph verification;
+- StaticMesh authored source LOD/material/socket/collision normalization and exact derived-schema-30 graph verification;
+- Landscape/Foliage/HLOD authored world-geometry normalization, native foliage refinement and exact derived-schema-31 graph verification;
+- Motion Warping authored notify/modifier/property normalization, schema-3-before-schema-4 lifecycle regression coverage and exact 540-edge derived-schema-32 graph verification;
 - systems validation/SQLite/project-graph integration;
 - derived freshness, neighborhood compaction and storage invariants;
 - capability-contract full-corpus/partial-corpus/determinism/deferred-composition behavior.
@@ -292,6 +333,6 @@ Real UE corpora remain required because unit tests cannot substitute for actual 
 
 # What “complete” means now
 
-The original planned indexer roadmap plus the accepted Gameplay Tags, gameplay-data, Mover, Gameplay Cameras, Mass/authored-ZoneGraph, GAS, Smart Objects, AI Perception, Dataflow/Geometry Collection, AnimNext/UAF, authored Navigation and Gameplay Framework slices are implemented and corpus-validated.
+The original planned indexer roadmap plus the accepted Gameplay Tags, gameplay-data, Mover, Gameplay Cameras, Mass/authored-ZoneGraph, GAS, Smart Objects, AI Perception, Dataflow/Geometry Collection, AnimNext/UAF, authored Navigation, Gameplay Framework, SkeletalMesh/PhysicsAsset, StaticMesh, Landscape/Foliage/HLOD authored geometry and Motion Warping slices are implemented and corpus-validated.
 
 The repository is **not complete with respect to the entire Unreal Engine 5.8 content ecosystem**, and it should not claim to be. The 1.0 target is trustworthy semantic infrastructure with explicit coverage, deterministic/provenance-aware graph output, stable lifecycle commands and bounded performance—not “100% of Unreal classes.”
