@@ -269,5 +269,123 @@ class SemanticReportFunctionTargetAuditTest(unittest.TestCase):
             })
 
 
+    def test_pure_target_can_be_used_as_impure_call_node(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            caller_bp = "/Game/Test/BP_Caller.BP_Caller"
+            target_bp = "/Game/Test/BP_PureTarget.BP_PureTarget"
+
+            write_jsonl(root / "blueprint_semantic_nodes.jsonl", [{
+                "node_id": "call",
+                "operation": "function_call",
+                "semantic_kind": "call",
+                "opaque": False,
+            }])
+            write_jsonl(root / "blueprint_nodes.jsonl", [])
+            write_jsonl(root / "blueprint_graphs.jsonl", [])
+            write_jsonl(root / "blueprint_pins.jsonl", [])
+            write_jsonl(root / "blueprint_semantic_edges.jsonl", [])
+            write_jsonl(root / "blueprint_data_dependencies.jsonl", [])
+            write_jsonl(root / "blueprint_call_bindings.jsonl", [])
+            write_jsonl(root / "blueprint_interprocedural_execution_edges.jsonl", [])
+            write_jsonl(root / "blueprint_interprocedural_execution_terminals.jsonl", [])
+            write_jsonl(root / "blueprint_interprocedural_data_routes.jsonl", [])
+            write_jsonl(root / "blueprints.jsonl", [
+                {"object_path": caller_bp, "blueprint_type": 0},
+                {"object_path": target_bp, "blueprint_type": 0},
+            ])
+            write_jsonl(root / "blueprint_functions.jsonl", [{
+                "function_id": "fn",
+                "blueprint_path": target_bp,
+                "name": "PureByDefault",
+                "blueprint_pure": True,
+                "entry_node_id": "entry",
+                "result_node_ids": ["result"],
+            }])
+            write_jsonl(root / "blueprint_call_edges.jsonl", [{
+                "call_id": "call",
+                "call_node_id": "call",
+                "blueprint_path": caller_bp,
+                "graph_id": "caller",
+                "target_blueprint_path": target_bp,
+                "target_function_id": "fn",
+                "resolution": "internal",
+                "pure": False,
+                "latent": False,
+                "interface_call": False,
+            }])
+            write_jsonl(root / "blueprint_execution_blocks.jsonl", [
+                {
+                    "block_id": "call-block",
+                    "blueprint_path": caller_bp,
+                    "graph_id": "caller",
+                    "node_ids": ["call"],
+                },
+                {
+                    "block_id": "next-block",
+                    "blueprint_path": caller_bp,
+                    "graph_id": "caller",
+                    "node_ids": ["next"],
+                },
+                {
+                    "block_id": "entry-block",
+                    "blueprint_path": target_bp,
+                    "graph_id": "fn",
+                    "node_ids": ["entry"],
+                },
+                {
+                    "block_id": "result-block",
+                    "blueprint_path": target_bp,
+                    "graph_id": "fn",
+                    "node_ids": ["result"],
+                },
+            ])
+            write_jsonl(root / "blueprint_execution_block_edges.jsonl", [{
+                "edge_id": "fn-edge",
+                "blueprint_path": target_bp,
+                "graph_id": "fn",
+                "source_block_id": "entry-block",
+                "target_block_id": "result-block",
+                "source_node_id": "entry",
+                "target_node_id": "result",
+                "source_pin_name": "then",
+                "target_pin_name": "execute",
+            }])
+            write_jsonl(root / "blueprint_edges.jsonl", [
+                {
+                    "edge_kind": "execution",
+                    "graph_id": "caller",
+                    "source_node_id": "call",
+                    "source_pin_id": "call-then",
+                    "source_pin_name": "then",
+                    "target_node_id": "next",
+                    "target_pin_id": "next-exec",
+                    "target_pin_name": "execute",
+                },
+                {
+                    "edge_kind": "execution",
+                    "graph_id": "fn",
+                    "source_node_id": "entry",
+                    "source_pin_id": "entry-then",
+                    "source_pin_name": "then",
+                    "target_node_id": "result",
+                    "target_pin_id": "result-exec",
+                    "target_pin_name": "execute",
+                },
+            ])
+
+            result = report.build_report(root, rows)
+            self.assertEqual(result["function_call_purity_override_count"], 1)
+            self.assertEqual(result["function_call_suspicious_purity_count"], 0)
+            self.assertEqual(result["function_call_direct_impure_count"], 1)
+            self.assertEqual(result["function_call_pure_internal_count"], 0)
+            self.assertEqual(result["function_direct_bridge_ready_count"], 1)
+            self.assertIn(
+                ("pure_target_impure_call_node", 1),
+                result["function_internal_kinds"],
+            )
+            self.assertEqual(result["function_call_mismatches"], [])
+
+
 if __name__ == "__main__":
     unittest.main()
