@@ -14,6 +14,7 @@ import uatool_vfx as vfx
 import uatool_vfx_stitch as vfx_stitch
 import uatool_systems as systems
 import uatool_blueprint_semantics as blueprint_semantics
+import uatool_blueprint_interprocedural as blueprint_interprocedural
 import uatool_blueprint_statements as blueprint_statements
 import uatool_semantic_report as semantic_report
 import uatool_blueprint_program_report as blueprint_program_report
@@ -27,11 +28,11 @@ import uatool_mover_behavior as mover_behavior
 import uatool_build_perf as build_perf
 import uatool_verify_bundle as bundle_verify
 
-# Schema 20 adds exact Mover transition behavior/routes reconstructed from
-# Evaluate() branch dependencies plus TransitionEvalResult.NextMode, and promotes
-# resolved concrete mode transitions into the typed project graph. Schema 19's
-# readable user-defined enum branch metadata remains unchanged.
-FINAL_DERIVED_SCHEMA_VERSION = 20
+# Public derived schema 33 adds canonical cross-graph Blueprint execution edges
+# for exact project-authored macro calls while retaining graph-local basic blocks.
+# Later domain integrations may promote from older source constants, but must
+# preserve this higher composition root version.
+FINAL_DERIVED_SCHEMA_VERSION = 33
 project_graph.DERIVED_SCHEMA_VERSION = FINAL_DERIVED_SCHEMA_VERSION
 SCRIPT_DIR = Path(__file__).resolve().parent
 
@@ -65,6 +66,7 @@ def create_schema(conn) -> None:
     vfx_stitch.create_schema(conn)
     systems.create_schema(conn)
     blueprint_semantics.create_schema(conn)
+    blueprint_interprocedural.create_schema(conn)
     blueprint_statements.create_schema(conn)
     project_graph.create_schema(conn)
 
@@ -126,6 +128,12 @@ def _require_blueprint_semantics(output: Path) -> None:
     error = blueprint_semantics.validation_error(output, runtime._rows)
     if error:
         raise RuntimeError(f"Blueprint semantic derived incomplete: {error}")
+
+
+def _require_blueprint_interprocedural(output: Path) -> None:
+    error = blueprint_interprocedural.validation_error(output, runtime._rows)
+    if error:
+        raise RuntimeError(f"Blueprint interprocedural derived incomplete: {error}")
 
 
 def _require_blueprint_statements(output: Path) -> None:
@@ -263,6 +271,21 @@ def derive_output(output):
     }
     counts.update(semantic_counts)
 
+    interprocedural_edges, interprocedural_terminals = blueprint_interprocedural.derive(
+        output, runtime._rows
+    )
+    interprocedural_counts = {
+        "blueprint_interprocedural_execution_edges": runtime._write(
+            output / "blueprint_interprocedural_execution_edges.jsonl",
+            interprocedural_edges,
+        ),
+        "blueprint_interprocedural_execution_terminals": runtime._write(
+            output / "blueprint_interprocedural_execution_terminals.jsonl",
+            interprocedural_terminals,
+        ),
+    }
+    counts.update(interprocedural_counts)
+
     statement_rows, semantic_blocks = blueprint_statements.derive(output, runtime._rows)
     statement_counts = {
         "blueprint_semantic_statements": runtime._write(output / "blueprint_semantic_statements.jsonl", statement_rows),
@@ -332,6 +355,19 @@ def derive_output(output):
             "coverage": (classified_nodes / len(semantic_nodes)) if semantic_nodes else 1.0,
             "modeled_coverage": (modeled_nodes / len(semantic_nodes)) if semantic_nodes else 1.0,
         }
+        manifest["blueprint_interprocedural_schema_version"] = (
+            blueprint_interprocedural.INTERPROCEDURAL_SCHEMA_VERSION
+        )
+        manifest["blueprint_interprocedural_summary"] = {
+            "edge_count": len(interprocedural_edges),
+            "macro_enter_count": sum(
+                int(row.get("edge_kind") == "macro_enter") for row in interprocedural_edges
+            ),
+            "macro_return_count": sum(
+                int(row.get("edge_kind") == "macro_return") for row in interprocedural_edges
+            ),
+            "terminal_count": len(interprocedural_terminals),
+        }
         manifest["blueprint_statement_schema_version"] = blueprint_statements.STATEMENT_SCHEMA_VERSION
         manifest["blueprint_statement_summary"] = {
             "statement_count": len(statement_rows),
@@ -344,6 +380,7 @@ def derive_output(output):
         declared = declared if isinstance(declared, dict) else {}
         declared.update(vfx_counts)
         declared.update(semantic_counts)
+        declared.update(interprocedural_counts)
         declared.update(statement_counts)
         declared.update(project_counts)
         manifest["derived_counts"] = declared
@@ -355,6 +392,7 @@ def derive_output(output):
 
     _require_vfx_derived(output)
     _require_blueprint_semantics(output)
+    _require_blueprint_interprocedural(output)
     _require_blueprint_statements(output)
     _require_mover_behavior(output)
     _require_project_graph(output)
@@ -368,6 +406,13 @@ def derive_output(output):
         "blueprint semantics: "
         f"nodes={len(semantic_nodes)} modeled={modeled_nodes} fallback={fallback_nodes} opaque={opaque_nodes} "
         f"graphs={len(semantic_graphs)} edges={len(semantic_edges)}"
+    )
+    print(
+        "blueprint interprocedural: "
+        f"edges={len(interprocedural_edges)} "
+        f"enters={sum(int(row.get('edge_kind') == 'macro_enter') for row in interprocedural_edges)} "
+        f"returns={sum(int(row.get('edge_kind') == 'macro_return') for row in interprocedural_edges)} "
+        f"terminals={len(interprocedural_terminals)}"
     )
     print(
         "blueprint statements: "
@@ -396,6 +441,7 @@ def build_database(output):
         _require_systems(output)
         _require_vfx_derived(output)
         _require_blueprint_semantics(output)
+        _require_blueprint_interprocedural(output)
         _require_blueprint_statements(output)
         _require_mover_behavior(output)
         _require_project_graph(output)
@@ -407,6 +453,7 @@ def build_database(output):
         vfx_stitch.load_database(conn, output, runtime._rows)
         systems.load_database(conn, output, runtime._rows)
         blueprint_semantics.load_database(conn, output, runtime._rows)
+        blueprint_interprocedural.load_database(conn, output, runtime._rows)
         blueprint_statements.load_database(conn, output, runtime._rows)
         # project_neighborhoods loads compact JSON and an empty text field.
         # Readable text is reconstructed only when queried, avoiding another
@@ -438,6 +485,7 @@ def query(args):
                 max_chars=project_graph.MAX_NEIGHBOR_CHARS,
             )
             blueprint_statements.query(conn, core._print_rows, pattern, args.limit)
+            blueprint_interprocedural.query(conn, core._print_rows, pattern, args.limit)
             blueprint_semantics.query(conn, core._print_rows, pattern, args.limit)
             systems.query(conn, core._print_rows, pattern, args.limit)
             vfx_stitch.query(conn, core._print_rows, pattern, args.limit)
@@ -464,6 +512,10 @@ def _combined_summary(args) -> None:
     dc = top_manifest.get("derived_counts", {}) if isinstance(top_manifest.get("derived_counts", {}), dict) else {}
     semantic_summary = top_manifest.get("blueprint_semantic_summary", {})
     semantic_summary = semantic_summary if isinstance(semantic_summary, dict) else {}
+    interprocedural_summary = top_manifest.get("blueprint_interprocedural_summary", {})
+    interprocedural_summary = (
+        interprocedural_summary if isinstance(interprocedural_summary, dict) else {}
+    )
     statement_summary = top_manifest.get("blueprint_statement_summary", {})
     statement_summary = statement_summary if isinstance(statement_summary, dict) else {}
 
@@ -500,6 +552,14 @@ def _combined_summary(args) -> None:
             f"graphs={semantic_summary.get('graph_count', 0)} "
             f"edges={semantic_summary.get('edge_count', 0)} modeled_coverage={modeled_coverage:.2f}%"
         )
+    if interprocedural_summary:
+        print(
+            "blueprint interprocedural complete: "
+            f"edges={interprocedural_summary.get('edge_count', 0)} "
+            f"enters={interprocedural_summary.get('macro_enter_count', 0)} "
+            f"returns={interprocedural_summary.get('macro_return_count', 0)} "
+            f"terminals={interprocedural_summary.get('terminal_count', 0)}"
+        )
     if statement_summary:
         print(
             "blueprint statement complete: "
@@ -514,6 +574,8 @@ def _combined_summary(args) -> None:
             f"{name}={dc.get(name, 0)}"
             for name in (
                 "blueprint_semantic_nodes", "blueprint_semantic_edges", "blueprint_semantic_graphs",
+                "blueprint_interprocedural_execution_edges",
+                "blueprint_interprocedural_execution_terminals",
                 "blueprint_semantic_statements", "blueprint_semantic_blocks",
                 "mover_transition_behaviors", "mover_transition_routes",
                 "vfx_relations", "vfx_context", "vfx_summaries",
@@ -525,6 +587,7 @@ def _combined_summary(args) -> None:
         f"schemas: vfx={vfx_manifest.get('schema_version', 0)} "
         f"systems={systems_manifest.get('schema_version', 0)} "
         f"bp_semantic={top_manifest.get('blueprint_semantic_schema_version', 0)} "
+        f"bp_interprocedural={top_manifest.get('blueprint_interprocedural_schema_version', 0)} "
         f"bp_statement={top_manifest.get('blueprint_statement_schema_version', 0)} "
         f"mover_behavior={top_manifest.get('mover_behavior_schema_version', 0)} "
         f"derived={top_manifest.get('derived_schema_version', 0)}"
@@ -554,6 +617,9 @@ def scan(args):
         if "Blueprint semantic derived incomplete:" in message:
             print(f"ERROR: {exc}", file=sys.stderr)
             return 31
+        if "Blueprint interprocedural derived incomplete:" in message:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 37
         if "Blueprint statement derived incomplete:" in message:
             print(f"ERROR: {exc}", file=sys.stderr)
             return 32
@@ -585,6 +651,7 @@ def scan(args):
         try:
             _require_vfx_derived(output)
             _require_blueprint_semantics(output)
+            _require_blueprint_interprocedural(output)
             _require_blueprint_statements(output)
             _require_mover_behavior(output)
             _require_project_graph(output)
@@ -593,6 +660,8 @@ def scan(args):
             message = str(exc)
             if "Blueprint semantic derived incomplete:" in message:
                 return 31
+            if "Blueprint interprocedural derived incomplete:" in message:
+                return 37
             if "Blueprint statement derived incomplete:" in message:
                 return 32
             if "Mover behavior derived incomplete:" in message:
@@ -620,6 +689,7 @@ core.DEFAULT_BUNDLE_FILES = tuple(dict.fromkeys((
     *vfx_stitch.DERIVED_FILES,
     *systems.RAW_FILES,
     *blueprint_semantics.DERIVED_FILES,
+    *blueprint_interprocedural.DERIVED_FILES,
     *blueprint_statements.DERIVED_FILES,
     *mover_behavior.DERIVED_FILES,
     *project_graph.DERIVED_FILES,

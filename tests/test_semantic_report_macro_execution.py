@@ -11,6 +11,7 @@ SCRIPTS = ROOT / "scripts"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
+import uatool_blueprint_interprocedural as interproc
 import uatool_semantic_report as report
 
 
@@ -142,10 +143,16 @@ class SemanticReportMacroExecutionTest(unittest.TestCase):
             }] if connected else [],
         )
 
+    def _write_interprocedural_streams(self, root: Path) -> None:
+        edges, terminals = interproc.derive(root, rows)
+        write_jsonl(root / interproc.DERIVED_FILES[0], edges)
+        write_jsonl(root / interproc.DERIVED_FILES[1], terminals)
+
     def test_connected_macro_exec_output_has_exact_entry_and_return_block_bridges(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             self._fixture(root, connected=True)
+            self._write_interprocedural_streams(root)
             result = report.build_report(root, rows)
 
             self.assertEqual(result["macro_exec_exact_instance_count"], 1)
@@ -156,11 +163,19 @@ class SemanticReportMacroExecutionTest(unittest.TestCase):
             self.assertEqual(result["macro_exec_terminal_output_count"], 0)
             self.assertEqual(result["macro_exec_exact_return_bridge_count"], 1)
             self.assertEqual(result["macro_exec_mismatches"], [])
+            self.assertEqual(result["interprocedural_execution_edge_count"], 2)
+            self.assertEqual(dict(result["interprocedural_execution_edge_kinds"]), {
+                "macro_enter": 1,
+                "macro_return": 1,
+            })
+            self.assertEqual(result["interprocedural_execution_terminal_count"], 0)
+            self.assertTrue(result["interprocedural_stream_alignment"])
 
     def test_terminal_macro_exec_output_is_not_a_bridge_defect(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             self._fixture(root, connected=False)
+            self._write_interprocedural_streams(root)
             result = report.build_report(root, rows)
 
             self.assertEqual(result["macro_exec_exact_instance_count"], 1)
@@ -174,6 +189,15 @@ class SemanticReportMacroExecutionTest(unittest.TestCase):
                 result["macro_exec_status"],
             )
             self.assertEqual(result["macro_exec_mismatches"], [])
+            self.assertEqual(result["interprocedural_execution_edge_count"], 1)
+            self.assertEqual(dict(result["interprocedural_execution_edge_kinds"]), {
+                "macro_enter": 1,
+            })
+            self.assertEqual(result["interprocedural_execution_terminal_count"], 1)
+            self.assertEqual(dict(result["interprocedural_execution_terminal_kinds"]), {
+                "macro_exit_unconnected": 1,
+            })
+            self.assertTrue(result["interprocedural_stream_alignment"])
 
 
 if __name__ == "__main__":

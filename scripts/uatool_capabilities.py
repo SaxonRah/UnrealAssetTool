@@ -320,10 +320,35 @@ def build_manifest(output: Path) -> dict:
         _present(top_files, ("assets.jsonl", "asset_dependencies.jsonl")),
         "Asset identity/class/package/tags/dependencies; package dependencies are not semantic object references.",
     )
+    blueprint_derived_streams = [
+        name for name in (
+            "blueprint_semantic_nodes.jsonl",
+            "blueprint_semantic_edges.jsonl",
+            "blueprint_semantic_graphs.jsonl",
+            "blueprint_semantic_statements.jsonl",
+            "blueprint_semantic_blocks.jsonl",
+            "blueprint_control_edges.jsonl",
+            "blueprint_interprocedural_execution_edges.jsonl",
+            "blueprint_interprocedural_execution_terminals.jsonl",
+        )
+        if (output / name).is_file()
+    ]
     add(
         "blueprint", "first_class", "structural", structural_available,
         _prefix_streams(top_files, "blueprint_") + _prefix_streams(top_files, "rigvm_"),
-        "Authored Blueprint/K2/UMG/RigVM structure; runtime Blueprint VM execution is not simulated.",
+        (
+            "Authored Blueprint/K2/UMG/RigVM structure plus static semantic/control-flow "
+            "derivation; exact project macro interfaces and cross-graph basic-block flow "
+            "are preserved without simulating runtime Blueprint VM execution."
+        ),
+        derived_streams=blueprint_derived_streams,
+        derived_relations=(
+            "maps_to_macro_graph",
+            "binds_macro_input",
+            "binds_macro_output",
+            "macro_enter",
+            "macro_return",
+        ),
     )
     ai_streams = []
     for prefix in ("behavior_", "blackboard", "eqs_", "statetree"):
