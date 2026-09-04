@@ -37,6 +37,7 @@ class SemanticReportFunctionTargetAuditTest(unittest.TestCase):
         )
         write_jsonl(root / interproc.DERIVED_FILES[3], function_edges)
         write_jsonl(root / interproc.DERIVED_FILES[4], function_terminals)
+        write_jsonl(root / interproc.DERIVED_FILES[5], [])
 
     def test_distinguishes_direct_interface_pure_and_latent_internal_calls(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
