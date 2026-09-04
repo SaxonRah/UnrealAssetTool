@@ -36,7 +36,13 @@ class BetaReleaseCandidateTest(unittest.TestCase):
             if key != "capabilities"
         }
         families = []
-        for name in ("blueprint", "world", "project_graph"):
+        for name in (
+            "blueprint",
+            "world",
+            "project_graph",
+            "static_mesh",
+            "world_geometry",
+        ):
             families.append({
                 "family": name,
                 "contract_coverage": "first_class",
@@ -92,6 +98,55 @@ class BetaReleaseCandidateTest(unittest.TestCase):
             self.assertFalse(record["accepted"])
             self.assertTrue(
                 any(failure.startswith("schema:derived:") for failure in record["failures"])
+            )
+
+    def test_absent_optional_companion_schema_is_allowed_when_family_is_explicitly_unavailable(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._current_cropout_fixture(root)
+            manifest = json.loads((root / capabilities.CAPABILITIES_FILE).read_text(encoding="utf-8"))
+            manifest["schemas"]["world_geometry"] = 0
+            for row in manifest["families"]:
+                if row["family"] == "world_geometry":
+                    row["available_in_corpus"] = False
+                    row["corpus_coverage"] = "external_or_excluded"
+            write_json(root / capabilities.CAPABILITIES_FILE, manifest)
+
+            record = beta_rc.check_corpus(root, "cropout", repo_root=ROOT)
+            self.assertTrue(record["accepted"])
+            self.assertEqual(record["schemas"]["world_geometry"], 0)
+            self.assertEqual(record["failures"], [])
+
+    def test_absent_optional_companion_schema_fails_when_family_is_available(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._current_cropout_fixture(root)
+            manifest = json.loads((root / capabilities.CAPABILITIES_FILE).read_text(encoding="utf-8"))
+            manifest["schemas"]["world_geometry"] = 0
+            write_json(root / capabilities.CAPABILITIES_FILE, manifest)
+
+            record = beta_rc.check_corpus(root, "cropout", repo_root=ROOT)
+            self.assertFalse(record["accepted"])
+            self.assertTrue(
+                any(failure.startswith("schema:world_geometry:") for failure in record["failures"])
+            )
+
+    def test_nonzero_optional_companion_mismatch_fails_when_family_is_unavailable(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._current_cropout_fixture(root)
+            manifest = json.loads((root / capabilities.CAPABILITIES_FILE).read_text(encoding="utf-8"))
+            manifest["schemas"]["world_geometry"] = version.CURRENT_SCHEMAS["world_geometry"] + 1
+            for row in manifest["families"]:
+                if row["family"] == "world_geometry":
+                    row["available_in_corpus"] = False
+                    row["corpus_coverage"] = "external_or_excluded"
+            write_json(root / capabilities.CAPABILITIES_FILE, manifest)
+
+            record = beta_rc.check_corpus(root, "cropout", repo_root=ROOT)
+            self.assertFalse(record["accepted"])
+            self.assertTrue(
+                any(failure.startswith("schema:world_geometry:") for failure in record["failures"])
             )
 
     def test_missing_profile_family_fails_record(self) -> None:
