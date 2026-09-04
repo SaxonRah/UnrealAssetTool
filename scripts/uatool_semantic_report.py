@@ -185,6 +185,155 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
         if str(edge.get("relation", "") or "") in macro_proof_relations
     )
 
+    pin_by_id = {
+        str(pin.get("pin_id", "") or ""): pin
+        for node_pins in pins_by_node.values()
+        for pin in node_pins
+        if pin.get("pin_id")
+    }
+
+    execution_blocks_path = output / "blueprint_execution_blocks.jsonl"
+    execution_blocks = list(rows(execution_blocks_path)) if execution_blocks_path.is_file() else []
+    block_by_node: dict[str, str] = {}
+    block_graph_by_node: dict[str, str] = {}
+    duplicate_block_nodes: set[str] = set()
+    for block in execution_blocks:
+        block_id = str(block.get("block_id", "") or "")
+        graph_id = str(block.get("graph_id", "") or "")
+        node_ids = block.get("node_ids", []) if isinstance(block.get("node_ids"), list) else []
+        for node_id_value in node_ids:
+            node_id = str(node_id_value or "")
+            if not node_id:
+                continue
+            if node_id in block_by_node and block_by_node[node_id] != block_id:
+                duplicate_block_nodes.add(node_id)
+            block_by_node[node_id] = block_id
+            block_graph_by_node[node_id] = graph_id
+
+    raw_exec_edges = [
+        edge for edge in rows(output / "blueprint_edges.jsonl")
+        if str(edge.get("edge_kind", "") or "") == "execution"
+    ]
+    exec_outgoing_by_pin: dict[str, list[dict]] = collections.defaultdict(list)
+    for edge in raw_exec_edges:
+        source_pin_id = str(edge.get("source_pin_id", "") or "")
+        if source_pin_id:
+            exec_outgoing_by_pin[source_pin_id].append(edge)
+
+    proof_edges_by_node: dict[str, list[dict]] = collections.defaultdict(list)
+    for edge in semantic_edges:
+        relation = str(edge.get("relation", "") or "")
+        if relation in macro_proof_relations:
+            proof_edges_by_node[str(edge.get("source_node_id", "") or "")].append(edge)
+
+    macro_exec_status = collections.Counter()
+    macro_exec_mismatches = collections.Counter()
+    macro_exec_exact_instance_count = 0
+    macro_exec_data_only_instance_count = 0
+    macro_exec_input_binding_count = 0
+    macro_exec_exact_entry_bridge_count = 0
+    macro_exec_output_binding_count = 0
+    macro_exec_connected_output_count = 0
+    macro_exec_terminal_output_count = 0
+    macro_exec_exact_return_bridge_count = 0
+    macro_exec_duplicate_block_node_count = len(duplicate_block_nodes)
+
+    for macro_node in raw_macro_nodes:
+        node_id = str(macro_node.get("node_id", "") or "")
+        proof = proof_edges_by_node.get(node_id, [])
+        graph_edges = [edge for edge in proof if str(edge.get("relation", "") or "") == "maps_to_macro_graph"]
+        if len(graph_edges) != 1:
+            continue
+        target_graph_id = str(graph_edges[0].get("target", "") or "")
+
+        input_exec = [
+            edge for edge in proof
+            if str(edge.get("relation", "") or "") == "binds_macro_input"
+            and str(edge.get("pin_category", "") or "").lower() == "exec"
+        ]
+        output_exec = [
+            edge for edge in proof
+            if str(edge.get("relation", "") or "") == "binds_macro_output"
+            and str(edge.get("pin_category", "") or "").lower() == "exec"
+        ]
+        if not input_exec and not output_exec:
+            macro_exec_data_only_instance_count += 1
+            macro_exec_status["data_only_instance"] += 1
+            continue
+
+        macro_exec_exact_instance_count += 1
+        caller_block = block_by_node.get(node_id, "")
+        if not caller_block:
+            macro_exec_status["missing_caller_block"] += 1
+            macro_exec_mismatches[f"{node_id} :: missing_caller_block"] += 1
+
+        for edge in input_exec:
+            macro_exec_input_binding_count += 1
+            target_pin_id = str(edge.get("target_pin_id", "") or "")
+            target_pin = pin_by_id.get(target_pin_id, {})
+            entry_node_id = str(target_pin.get("node_id", "") or "")
+            entry_block = block_by_node.get(entry_node_id, "")
+            entry_graph_id = block_graph_by_node.get(entry_node_id, "")
+            if (
+                caller_block
+                and entry_block
+                and entry_graph_id == target_graph_id
+                and node_id not in duplicate_block_nodes
+                and entry_node_id not in duplicate_block_nodes
+            ):
+                macro_exec_exact_entry_bridge_count += 1
+                macro_exec_status["exact_entry_block_bridge"] += 1
+            else:
+                macro_exec_status["unresolved_entry_block_bridge"] += 1
+                macro_exec_mismatches[
+                    f"{node_id} :: input:{edge.get('source_pin_name','')} :: "
+                    f"entry_node={entry_node_id or '<missing>'} :: "
+                    f"entry_graph={entry_graph_id or '<missing>'} :: target_graph={target_graph_id}"
+                ] += 1
+
+        for edge in output_exec:
+            macro_exec_output_binding_count += 1
+            target_pin_id = str(edge.get("target_pin_id", "") or "")
+            target_pin = pin_by_id.get(target_pin_id, {})
+            exit_node_id = str(target_pin.get("node_id", "") or "")
+            exit_block = block_by_node.get(exit_node_id, "")
+            exit_graph_id = block_graph_by_node.get(exit_node_id, "")
+            source_pin_id = str(edge.get("source_pin_id", "") or "")
+            outgoing = exec_outgoing_by_pin.get(source_pin_id, [])
+            if not outgoing:
+                macro_exec_terminal_output_count += 1
+                if exit_block and exit_graph_id == target_graph_id and exit_node_id not in duplicate_block_nodes:
+                    macro_exec_status["terminal_output_exact_exit_block"] += 1
+                else:
+                    macro_exec_status["terminal_output_unresolved_exit_block"] += 1
+                    macro_exec_mismatches[
+                        f"{node_id} :: output:{edge.get('source_pin_name','')} :: terminal :: "
+                        f"exit_node={exit_node_id or '<missing>'} :: "
+                        f"exit_graph={exit_graph_id or '<missing>'} :: target_graph={target_graph_id}"
+                    ] += 1
+                continue
+
+            macro_exec_connected_output_count += 1
+            for raw_edge in outgoing:
+                continuation_node_id = str(raw_edge.get("target_node_id", "") or "")
+                continuation_block = block_by_node.get(continuation_node_id, "")
+                if (
+                    exit_block
+                    and exit_graph_id == target_graph_id
+                    and continuation_block
+                    and exit_node_id not in duplicate_block_nodes
+                    and continuation_node_id not in duplicate_block_nodes
+                ):
+                    macro_exec_exact_return_bridge_count += 1
+                    macro_exec_status["exact_return_block_bridge"] += 1
+                else:
+                    macro_exec_status["unresolved_return_block_bridge"] += 1
+                    macro_exec_mismatches[
+                        f"{node_id} :: output:{edge.get('source_pin_name','')} :: "
+                        f"exit_node={exit_node_id or '<missing>'} :: "
+                        f"continuation_node={continuation_node_id or '<missing>'}"
+                    ] += 1
+
     macro_binding_status = collections.Counter()
     macro_binding_mismatches = collections.Counter()
     macro_binding_instance_count = 0
@@ -303,6 +452,17 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
         "macro_binding_mismatches": top(macro_binding_mismatches),
         "macro_semantic_proof_edges": top(macro_semantic_proof_edges),
         "macro_semantic_proof_edge_count": sum(macro_semantic_proof_edges.values()),
+        "macro_exec_exact_instance_count": macro_exec_exact_instance_count,
+        "macro_exec_data_only_instance_count": macro_exec_data_only_instance_count,
+        "macro_exec_input_binding_count": macro_exec_input_binding_count,
+        "macro_exec_exact_entry_bridge_count": macro_exec_exact_entry_bridge_count,
+        "macro_exec_output_binding_count": macro_exec_output_binding_count,
+        "macro_exec_connected_output_count": macro_exec_connected_output_count,
+        "macro_exec_terminal_output_count": macro_exec_terminal_output_count,
+        "macro_exec_exact_return_bridge_count": macro_exec_exact_return_bridge_count,
+        "macro_exec_duplicate_block_node_count": macro_exec_duplicate_block_node_count,
+        "macro_exec_status": top(macro_exec_status),
+        "macro_exec_mismatches": top(macro_exec_mismatches),
         "control_rig_node_count": len(control_rig_nodes),
         "rigvm_link_count": len(rigvm_links),
         "rigvm_duplicate_link_node_ids": len(rigvm_link_ids) - len(rigvm_link_id_set),
@@ -394,6 +554,21 @@ def print_report(report: dict) -> None:
     print("\n[Macro semantic proof edges]")
     print(f"proof_edges={int(report.get('macro_semantic_proof_edge_count', 0) or 0)}")
     section("macro semantic proof relations", "macro_semantic_proof_edges")
+
+    print("\n[Macro interprocedural execution evidence]")
+    print(
+        f"executable_exact_instances={int(report.get('macro_exec_exact_instance_count', 0) or 0)} "
+        f"data_only_exact_instances={int(report.get('macro_exec_data_only_instance_count', 0) or 0)} "
+        f"exec_input_bindings={int(report.get('macro_exec_input_binding_count', 0) or 0)} "
+        f"exact_entry_block_bridges={int(report.get('macro_exec_exact_entry_bridge_count', 0) or 0)} "
+        f"exec_output_bindings={int(report.get('macro_exec_output_binding_count', 0) or 0)} "
+        f"connected_exec_outputs={int(report.get('macro_exec_connected_output_count', 0) or 0)} "
+        f"terminal_exec_outputs={int(report.get('macro_exec_terminal_output_count', 0) or 0)} "
+        f"exact_return_block_bridges={int(report.get('macro_exec_exact_return_bridge_count', 0) or 0)} "
+        f"duplicate_block_nodes={int(report.get('macro_exec_duplicate_block_node_count', 0) or 0)}"
+    )
+    section("macro execution bridge status", "macro_exec_status")
+    section("macro execution bridge mismatches", "macro_exec_mismatches")
 
     control_rig = int(report.get("control_rig_node_count", 0) or 0)
     rigvm_links = int(report.get("rigvm_link_count", 0) or 0)
