@@ -649,6 +649,8 @@ def _combined_summary(args) -> None:
     interprocedural_summary = (
         interprocedural_summary if isinstance(interprocedural_summary, dict) else {}
     )
+    delegate_summary = top_manifest.get("blueprint_delegate_binding_summary", {})
+    delegate_summary = delegate_summary if isinstance(delegate_summary, dict) else {}
     statement_summary = top_manifest.get("blueprint_statement_summary", {})
     statement_summary = statement_summary if isinstance(statement_summary, dict) else {}
 
@@ -703,6 +705,15 @@ def _combined_summary(args) -> None:
             f"function_data_boundary_ready={interprocedural_summary.get('function_data_boundary_ready_count', 0)} "
             f"function_data_member_ready={interprocedural_summary.get('function_data_member_route_ready_count', 0)}"
         )
+    if delegate_summary:
+        print(
+            "blueprint delegate binding complete: "
+            f"bindings={delegate_summary.get('binding_count', 0)} "
+            f"binds={delegate_summary.get('bind_count', 0)} "
+            f"assigns={delegate_summary.get('assign_count', 0)} "
+            f"create_sources={delegate_summary.get('create_delegate_source_count', 0)} "
+            f"direct_event_sources={delegate_summary.get('direct_event_source_count', 0)}"
+        )
     if statement_summary:
         print(
             "blueprint statement complete: "
@@ -723,6 +734,7 @@ def _combined_summary(args) -> None:
                 "blueprint_interprocedural_function_execution_edges",
                 "blueprint_interprocedural_function_execution_terminals",
                 "blueprint_interprocedural_function_data_routes",
+                "blueprint_delegate_bindings",
                 "blueprint_semantic_statements", "blueprint_semantic_blocks",
                 "mover_transition_behaviors", "mover_transition_routes",
                 "vfx_relations", "vfx_context", "vfx_summaries",
@@ -736,6 +748,7 @@ def _combined_summary(args) -> None:
         f"bp_semantic={top_manifest.get('blueprint_semantic_schema_version', 0)} "
         f"bp_call_bindings={top_manifest.get('blueprint_call_binding_schema_version', 0)} "
         f"bp_interprocedural={top_manifest.get('blueprint_interprocedural_schema_version', 0)} "
+        f"bp_delegates={top_manifest.get('blueprint_delegate_binding_schema_version', 0)} "
         f"bp_statement={top_manifest.get('blueprint_statement_schema_version', 0)} "
         f"mover_behavior={top_manifest.get('mover_behavior_schema_version', 0)} "
         f"derived={top_manifest.get('derived_schema_version', 0)}"
@@ -768,6 +781,9 @@ def scan(args):
         if "Blueprint interprocedural derived incomplete:" in message:
             print(f"ERROR: {exc}", file=sys.stderr)
             return 37
+        if "Blueprint delegate derived incomplete:" in message:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 38
         if "Blueprint statement derived incomplete:" in message:
             print(f"ERROR: {exc}", file=sys.stderr)
             return 32
@@ -811,6 +827,8 @@ def scan(args):
                 return 31
             if "Blueprint interprocedural derived incomplete:" in message:
                 return 37
+            if "Blueprint delegate derived incomplete:" in message:
+                return 38
             if "Blueprint statement derived incomplete:" in message:
                 return 32
             if "Mover behavior derived incomplete:" in message:
@@ -839,6 +857,7 @@ core.DEFAULT_BUNDLE_FILES = tuple(dict.fromkeys((
     *systems.RAW_FILES,
     *blueprint_semantics.DERIVED_FILES,
     *blueprint_interprocedural.DERIVED_FILES,
+    *blueprint_delegates.DERIVED_FILES,
     *blueprint_statements.DERIVED_FILES,
     *mover_behavior.DERIVED_FILES,
     *project_graph.DERIVED_FILES,
