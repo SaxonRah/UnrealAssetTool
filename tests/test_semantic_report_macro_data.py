@@ -11,6 +11,7 @@ SCRIPTS = ROOT / "scripts"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
+import uatool_blueprint_interprocedural as interproc
 import uatool_semantic_report as report
 
 
@@ -214,10 +215,17 @@ class SemanticReportMacroDataProvenanceTest(unittest.TestCase):
         }])
         write_jsonl(root / "blueprint_execution_blocks.jsonl", [])
 
+    def _write_interprocedural_streams(self, root: Path) -> None:
+        exec_edges, terminals, data_routes = interproc.derive(root, rows)
+        write_jsonl(root / interproc.DERIVED_FILES[0], exec_edges)
+        write_jsonl(root / interproc.DERIVED_FILES[1], terminals)
+        write_jsonl(root / interproc.DERIVED_FILES[2], data_routes)
+
     def test_reports_bridge_ready_connected_and_defaulted_inputs_and_output(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             self._fixture(root)
+            self._write_interprocedural_streams(root)
             result = report.build_report(root, rows)
 
             self.assertEqual(result["macro_data_input_binding_count"], 3)
@@ -235,12 +243,26 @@ class SemanticReportMacroDataProvenanceTest(unittest.TestCase):
             self.assertEqual(result["macro_data_output_used_binding_count"], 1)
             self.assertEqual(result["macro_data_output_bridge_ready_count"], 1)
             self.assertEqual(result["macro_data_mismatches"], [])
+            self.assertEqual(result["interprocedural_data_route_count"], 4)
+            self.assertEqual(result["interprocedural_expected_data_route_count"], 4)
+            self.assertEqual(result["interprocedural_data_ready_count"], 3)
+            self.assertEqual(dict(result["interprocedural_data_kinds"]), {
+                "macro_data_input": 3,
+                "macro_data_output": 1,
+            })
+            self.assertEqual(dict(result["interprocedural_data_value_kinds"]), {
+                "authored_value": 2,
+                "connected_source": 1,
+                "derived_output": 1,
+            })
+            self.assertTrue(result["interprocedural_data_stream_alignment"])
 
     def test_missing_output_dependency_prevents_bridge_ready_claim(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             self._fixture(root)
             write_jsonl(root / "blueprint_data_dependencies.jsonl", [])
+            self._write_interprocedural_streams(root)
             result = report.build_report(root, rows)
 
             self.assertEqual(result["macro_data_output_binding_count"], 1)
@@ -251,6 +273,9 @@ class SemanticReportMacroDataProvenanceTest(unittest.TestCase):
                 ("output_missing_dependency_provenance", 1),
                 result["macro_data_status"],
             )
+            self.assertEqual(result["interprocedural_data_route_count"], 4)
+            self.assertEqual(result["interprocedural_data_ready_count"], 2)
+            self.assertTrue(result["interprocedural_data_stream_alignment"])
 
 
 if __name__ == "__main__":
