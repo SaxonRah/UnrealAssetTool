@@ -210,9 +210,14 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
             block_by_node[node_id] = block_id
             block_graph_by_node[node_id] = graph_id
 
+    raw_blueprint_edges = list(rows(output / "blueprint_edges.jsonl"))
     raw_exec_edges = [
-        edge for edge in rows(output / "blueprint_edges.jsonl")
+        edge for edge in raw_blueprint_edges
         if str(edge.get("edge_kind", "") or "") == "execution"
+    ]
+    raw_data_edges = [
+        edge for edge in raw_blueprint_edges
+        if str(edge.get("edge_kind", "") or "") == "data"
     ]
     exec_outgoing_by_pin: dict[str, list[dict]] = collections.defaultdict(list)
     for edge in raw_exec_edges:
@@ -220,11 +225,127 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
         if source_pin_id:
             exec_outgoing_by_pin[source_pin_id].append(edge)
 
+    data_incoming_by_pin: dict[str, list[dict]] = collections.defaultdict(list)
+    data_outgoing_by_pin: dict[str, list[dict]] = collections.defaultdict(list)
+    for edge in raw_data_edges:
+        source_pin_id = str(edge.get("source_pin_id", "") or "")
+        target_pin_id = str(edge.get("target_pin_id", "") or "")
+        if source_pin_id:
+            data_outgoing_by_pin[source_pin_id].append(edge)
+        if target_pin_id:
+            data_incoming_by_pin[target_pin_id].append(edge)
+
+    dependency_by_sink_pin: dict[str, list[dict]] = collections.defaultdict(list)
+    dependency_path = output / "blueprint_data_dependencies.jsonl"
+    if dependency_path.is_file():
+        for dependency in rows(dependency_path):
+            sink_pin_id = str(dependency.get("sink_pin_id", "") or "")
+            if sink_pin_id:
+                dependency_by_sink_pin[sink_pin_id].append(dependency)
+
+    def pin_has_authored_value(pin: dict) -> bool:
+        return bool(
+            str(pin.get("default_object", "") or "")
+            or str(pin.get("default_value", "") or "")
+            or str(pin.get("default_text", "") or "")
+        )
+
     proof_edges_by_node: dict[str, list[dict]] = collections.defaultdict(list)
     for edge in semantic_edges:
         relation = str(edge.get("relation", "") or "")
         if relation in macro_proof_relations:
             proof_edges_by_node[str(edge.get("source_node_id", "") or "")].append(edge)
+
+    macro_data_status = collections.Counter()
+    macro_data_mismatches = collections.Counter()
+    macro_data_input_binding_count = 0
+    macro_data_input_connected_source_count = 0
+    macro_data_input_authored_value_count = 0
+    macro_data_input_no_value_count = 0
+    macro_data_input_body_consumer_edge_count = 0
+    macro_data_input_used_binding_count = 0
+    macro_data_input_bridge_ready_count = 0
+    macro_data_output_binding_count = 0
+    macro_data_output_internal_source_edge_count = 0
+    macro_data_output_dependency_count = 0
+    macro_data_output_caller_consumer_edge_count = 0
+    macro_data_output_used_binding_count = 0
+    macro_data_output_bridge_ready_count = 0
+
+    for macro_node in raw_macro_nodes:
+        node_id = str(macro_node.get("node_id", "") or "")
+        proof = proof_edges_by_node.get(node_id, [])
+        for edge in proof:
+            relation = str(edge.get("relation", "") or "")
+            pin_category = str(edge.get("pin_category", "") or "").lower()
+            if relation not in {"binds_macro_input", "binds_macro_output"} or pin_category == "exec":
+                continue
+
+            call_pin_id = str(edge.get("source_pin_id", "") or "")
+            interface_pin_id = str(edge.get("target_pin_id", "") or "")
+            call_pin = pin_by_id.get(call_pin_id)
+            interface_pin = pin_by_id.get(interface_pin_id)
+            if call_pin is None or interface_pin is None:
+                macro_data_mismatches[
+                    f"{node_id} :: {relation} :: missing_pin "
+                    f"call={call_pin_id or '<missing>'} interface={interface_pin_id or '<missing>'}"
+                ] += 1
+                continue
+
+            if relation == "binds_macro_input":
+                macro_data_input_binding_count += 1
+                incoming = data_incoming_by_pin.get(call_pin_id, [])
+                body_consumers = data_outgoing_by_pin.get(interface_pin_id, [])
+                has_value = False
+                if incoming:
+                    macro_data_input_connected_source_count += 1
+                    macro_data_status["input_connected_source"] += 1
+                    has_value = True
+                elif pin_has_authored_value(call_pin):
+                    macro_data_input_authored_value_count += 1
+                    macro_data_status["input_authored_value"] += 1
+                    has_value = True
+                else:
+                    macro_data_input_no_value_count += 1
+                    macro_data_status["input_no_value_evidence"] += 1
+
+                macro_data_input_body_consumer_edge_count += len(body_consumers)
+                if body_consumers:
+                    macro_data_input_used_binding_count += 1
+                    macro_data_status["input_used_by_macro_body"] += 1
+                else:
+                    macro_data_status["input_unused_by_macro_body"] += 1
+
+                if has_value and body_consumers:
+                    macro_data_input_bridge_ready_count += 1
+                    macro_data_status["input_bridge_ready"] += 1
+                continue
+
+            macro_data_output_binding_count += 1
+            internal_sources = data_incoming_by_pin.get(interface_pin_id, [])
+            dependencies = dependency_by_sink_pin.get(interface_pin_id, [])
+            caller_consumers = data_outgoing_by_pin.get(call_pin_id, [])
+            macro_data_output_internal_source_edge_count += len(internal_sources)
+            macro_data_output_dependency_count += len(dependencies)
+            macro_data_output_caller_consumer_edge_count += len(caller_consumers)
+
+            if internal_sources:
+                macro_data_status["output_has_internal_source"] += 1
+            else:
+                macro_data_status["output_missing_internal_source"] += 1
+            if dependencies:
+                macro_data_status["output_has_dependency_provenance"] += 1
+            else:
+                macro_data_status["output_missing_dependency_provenance"] += 1
+            if caller_consumers:
+                macro_data_output_used_binding_count += 1
+                macro_data_status["output_has_caller_consumer"] += 1
+            else:
+                macro_data_status["output_unused_by_caller"] += 1
+
+            if internal_sources and dependencies and caller_consumers:
+                macro_data_output_bridge_ready_count += 1
+                macro_data_status["output_bridge_ready"] += 1
 
     macro_exec_status = collections.Counter()
     macro_exec_mismatches = collections.Counter()
@@ -478,6 +599,21 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
         "macro_binding_mismatches": top(macro_binding_mismatches),
         "macro_semantic_proof_edges": top(macro_semantic_proof_edges),
         "macro_semantic_proof_edge_count": sum(macro_semantic_proof_edges.values()),
+        "macro_data_input_binding_count": macro_data_input_binding_count,
+        "macro_data_input_connected_source_count": macro_data_input_connected_source_count,
+        "macro_data_input_authored_value_count": macro_data_input_authored_value_count,
+        "macro_data_input_no_value_count": macro_data_input_no_value_count,
+        "macro_data_input_body_consumer_edge_count": macro_data_input_body_consumer_edge_count,
+        "macro_data_input_used_binding_count": macro_data_input_used_binding_count,
+        "macro_data_input_bridge_ready_count": macro_data_input_bridge_ready_count,
+        "macro_data_output_binding_count": macro_data_output_binding_count,
+        "macro_data_output_internal_source_edge_count": macro_data_output_internal_source_edge_count,
+        "macro_data_output_dependency_count": macro_data_output_dependency_count,
+        "macro_data_output_caller_consumer_edge_count": macro_data_output_caller_consumer_edge_count,
+        "macro_data_output_used_binding_count": macro_data_output_used_binding_count,
+        "macro_data_output_bridge_ready_count": macro_data_output_bridge_ready_count,
+        "macro_data_status": top(macro_data_status),
+        "macro_data_mismatches": top(macro_data_mismatches),
         "macro_exec_exact_instance_count": macro_exec_exact_instance_count,
         "macro_exec_data_only_instance_count": macro_exec_data_only_instance_count,
         "macro_exec_input_binding_count": macro_exec_input_binding_count,
@@ -586,6 +722,27 @@ def print_report(report: dict) -> None:
     print("\n[Macro semantic proof edges]")
     print(f"proof_edges={int(report.get('macro_semantic_proof_edge_count', 0) or 0)}")
     section("macro semantic proof relations", "macro_semantic_proof_edges")
+
+    print("\n[Macro interprocedural data provenance evidence]")
+    print(
+        f"data_input_bindings={int(report.get('macro_data_input_binding_count', 0) or 0)} "
+        f"connected_input_sources={int(report.get('macro_data_input_connected_source_count', 0) or 0)} "
+        f"authored_input_values={int(report.get('macro_data_input_authored_value_count', 0) or 0)} "
+        f"inputs_without_value_evidence={int(report.get('macro_data_input_no_value_count', 0) or 0)} "
+        f"used_input_bindings={int(report.get('macro_data_input_used_binding_count', 0) or 0)} "
+        f"input_body_consumer_edges={int(report.get('macro_data_input_body_consumer_edge_count', 0) or 0)} "
+        f"input_bridge_ready={int(report.get('macro_data_input_bridge_ready_count', 0) or 0)}"
+    )
+    print(
+        f"data_output_bindings={int(report.get('macro_data_output_binding_count', 0) or 0)} "
+        f"internal_output_source_edges={int(report.get('macro_data_output_internal_source_edge_count', 0) or 0)} "
+        f"output_dependencies={int(report.get('macro_data_output_dependency_count', 0) or 0)} "
+        f"caller_output_consumer_edges={int(report.get('macro_data_output_caller_consumer_edge_count', 0) or 0)} "
+        f"used_output_bindings={int(report.get('macro_data_output_used_binding_count', 0) or 0)} "
+        f"output_bridge_ready={int(report.get('macro_data_output_bridge_ready_count', 0) or 0)}"
+    )
+    section("macro data provenance status", "macro_data_status")
+    section("macro data provenance mismatches", "macro_data_mismatches")
 
     print("\n[Macro interprocedural execution evidence]")
     print(
