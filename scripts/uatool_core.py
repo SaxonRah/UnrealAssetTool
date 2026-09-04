@@ -20,6 +20,7 @@ from typing import Iterable, Iterator
 
 DB_NAME = "uat.db"
 MODULE_NAME = "UnrealAssetTool"
+BLUEPRINT_CALL_BINDING_SCHEMA_VERSION = 2
 
 WORLD_RAW_FILES = (
     "world_manifest.json",
@@ -2641,6 +2642,7 @@ def derive_blueprint_call_bindings(
             }
             rows.append({
                 "binding_id": binding_id,
+                "schema_version": BLUEPRINT_CALL_BINDING_SCHEMA_VERSION,
                 "call_id": call.get("call_id", ""),
                 "call_node_id": call_node_id,
                 "caller_blueprint_path": call.get("blueprint_path", ""),
