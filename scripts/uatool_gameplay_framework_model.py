@@ -2,7 +2,7 @@
 """Exact authored Gameplay Framework joins over existing structural/world/config truth.
 
 This module deliberately adds no native scanner and no systems-schema stream.  It
-normalizes relationships that are already recoverable from structural schema 12,
+normalizes relationships that are already recoverable from structural schema 13,
 world schema 12, and source/config chunks:
 
 * exact/transitive Blueprint Gameplay Framework inheritance;
