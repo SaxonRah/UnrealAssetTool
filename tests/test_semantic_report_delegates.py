@@ -165,7 +165,7 @@ class SemanticReportDelegateAuditTest(unittest.TestCase):
                     "symbol": "DoThing",
                     "semantic": {
                         "selected_function": "DoThing",
-                        "selected_function_guid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                        "selected_function_guid": "99999999-8888-7777-6666-555555555555",
                         "selected_function_path": "/Game/Test/BP.BP_C:DoThing",
                         "selected_function_scope_class": "/Game/Test/BP.BP_C",
                     },
