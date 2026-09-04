@@ -875,6 +875,30 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
         else:
             function_internal_kinds["direct_impure_not_bridge_ready"] += 1
 
+    function_interprocedural_edge_kinds = collections.Counter(
+        str(row.get("edge_kind", "") or "<empty>")
+        for row in function_interprocedural_edges
+    )
+    function_interprocedural_terminal_kinds = collections.Counter(
+        str(row.get("terminal_kind", "") or "<empty>")
+        for row in function_interprocedural_terminals
+    )
+    function_interprocedural_stream_alignment = bool(
+        int(function_interprocedural_edge_kinds.get("function_enter", 0))
+            == function_direct_expected_enter_edge_count
+        and int(function_interprocedural_edge_kinds.get("function_return", 0))
+            == function_direct_expected_return_edge_count
+        and len(function_interprocedural_edges)
+            == function_direct_expected_enter_edge_count + function_direct_expected_return_edge_count
+        and len(function_interprocedural_terminals)
+            == function_direct_expected_terminal_record_count
+        and int(
+            function_interprocedural_terminal_kinds.get(
+                "function_call_no_continuation", 0
+            )
+        ) == function_direct_expected_terminal_record_count
+    )
+
     control_rig_nodes = [row for row in all_nodes if str(row.get("operation", "") or "") == "control_rig_node"]
     control_rig_ids = {str(row.get("node_id", "") or "") for row in control_rig_nodes if row.get("node_id")}
     rigvm_path = output / "rigvm_editor_links.jsonl"
@@ -1014,6 +1038,11 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
         "function_direct_expected_terminal_record_count": function_direct_expected_terminal_record_count,
         "function_direct_bridge_ready_return_frontier_block_count": function_direct_bridge_ready_return_frontier_block_count,
         "function_direct_binding_count": function_direct_binding_count,
+        "function_interprocedural_edge_count": len(function_interprocedural_edges),
+        "function_interprocedural_terminal_count": len(function_interprocedural_terminals),
+        "function_interprocedural_edge_kinds": top(function_interprocedural_edge_kinds),
+        "function_interprocedural_terminal_kinds": top(function_interprocedural_terminal_kinds),
+        "function_interprocedural_stream_alignment": function_interprocedural_stream_alignment,
         "control_rig_node_count": len(control_rig_nodes),
         "rigvm_link_count": len(rigvm_links),
         "rigvm_duplicate_link_node_ids": len(rigvm_link_ids) - len(rigvm_link_id_set),
