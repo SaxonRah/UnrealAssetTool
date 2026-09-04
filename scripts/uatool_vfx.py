@@ -30,6 +30,8 @@ import uatool_skeletalmesh_physicsasset_evidence as _skeletalmesh_physicsasset_e
 import uatool_staticmesh_evidence as _staticmesh_evidence
 import uatool_world_geometry_evidence as _world_geometry_evidence
 import uatool_motion_warping_evidence as _motion_warping_evidence
+import uatool_motion_warping_capture as _motion_warping_capture
+import uatool_motion_warping_integration as _motion_warping_integration
 import uatool_world_geometry_capture as _world_geometry_capture
 import uatool_world_geometry_foliage_native_integration as _world_geometry_foliage_native_integration
 import uatool_skeletalmesh_physicsasset_capture as _skeletalmesh_physicsasset_capture
@@ -151,9 +153,9 @@ if not getattr(_build_perf, "_systems_schema11_composition_installed", False):
     _build_perf._systems_schema11_composition_installed = True
 
 # Animation schema 3 composes authored SkeletalMesh/PhysicsAsset semantics on top
-# of the existing compact animation storage. Mesh schema 1 is independent: it
-# owns authored StaticMesh geometry/build/collision topology without changing
-# structural schema 12. Both promote the unified typed graph monotonically.
+# of compact animation storage; Motion Warping later composes public animation
+# schema 4 without changing those inherited encodings. Mesh/world-geometry remain
+# independent canonical families. All derived graph versions compose monotonically.
 _animation_mesh_physics_integration.install(_runtime, _core)
 _staticmesh_integration.install(_runtime, _core)
 _smartobject_capabilities.install(_capabilities)
@@ -179,8 +181,10 @@ _skeletalmesh_physicsasset_evidence.install(_runtime)
 _staticmesh_evidence.install(_runtime)
 _world_geometry_evidence.install(_runtime)
 _motion_warping_evidence.install(_runtime)
+_motion_warping_capture.install(_runtime, _core)
 _world_geometry_capture.install(_runtime, _core)
 _world_geometry_foliage_native_integration.install(_core)
+_motion_warping_integration.install(_runtime, _core)
 _skeletalmesh_physicsasset_capture.install(_runtime, _core)
 _staticmesh_capture.install(_runtime, _core)
 _gameplay_framework_accept.install(_runtime)

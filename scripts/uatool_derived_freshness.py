@@ -29,6 +29,7 @@ NON_DERIVED_SCRIPTS = frozenset({
     "uatool_gas_evidence.py",
     "uatool_mover_report.py",
     "uatool_motion_warping_evidence.py",
+    "uatool_motion_warping_capture.py",
     "uatool_semantic_quality.py",
     "uatool_semantic_report.py",
     "uatool_staticmesh_evidence.py",

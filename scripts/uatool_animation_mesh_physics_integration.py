@@ -27,7 +27,7 @@ def _patch_curve_storage_for_schema3() -> None:
     def normalize_output(output: Path):
         output = Path(output)
         manifest = curve_storage._read_manifest(output / "animation_manifest.json")
-        if manifest is None or int(manifest.get("schema_version", 0) or 0) != mesh_physics.PUBLIC_ANIMATION_SCHEMA_VERSION:
+        if manifest is None or int(manifest.get("schema_version", 0) or 0) < mesh_physics.PUBLIC_ANIMATION_SCHEMA_VERSION:
             return original_normalize(output)
         stats = curve_storage.compact(output / "animation_curve_keys.jsonl")
         counts = manifest.get("counts", {})
@@ -46,7 +46,7 @@ def _patch_curve_storage_for_schema3() -> None:
     def manifest_validation_error(output: Path) -> str | None:
         output = Path(output)
         manifest = curve_storage._read_manifest(output / "animation_manifest.json")
-        if manifest is None or int(manifest.get("schema_version", 0) or 0) != mesh_physics.PUBLIC_ANIMATION_SCHEMA_VERSION:
+        if manifest is None or int(manifest.get("schema_version", 0) or 0) < mesh_physics.PUBLIC_ANIMATION_SCHEMA_VERSION:
             return original_manifest_validation(output)
         if manifest.get("curve_key_encoding") != curve_storage.ENCODING:
             return f"unexpected animation curve-key encoding {manifest.get('curve_key_encoding')!r}"
@@ -65,7 +65,7 @@ def _patch_curve_storage_for_schema3() -> None:
 
 
 def _patch_property_storage_for_schema3() -> None:
-    """Keep schema-2 property blocks valid when the public manifest is schema 3."""
+    """Keep schema-2 property blocks valid for public animation schema 3 and later."""
     if getattr(property_storage, "_schema3_compatible", False):
         return
     original_normalize = property_storage.normalize_output
@@ -75,7 +75,7 @@ def _patch_property_storage_for_schema3() -> None:
         output = Path(output)
         manifest_path = output / "animation_manifest.json"
         manifest = property_storage._read_manifest(manifest_path)
-        if manifest is None or int(manifest.get("schema_version", 0) or 0) != mesh_physics.PUBLIC_ANIMATION_SCHEMA_VERSION:
+        if manifest is None or int(manifest.get("schema_version", 0) or 0) < mesh_physics.PUBLIC_ANIMATION_SCHEMA_VERSION:
             return original_normalize(output)
 
         path = output / "animation_properties.jsonl"
@@ -107,7 +107,7 @@ def _patch_property_storage_for_schema3() -> None:
         output = Path(output)
         try:
             manifest = property_storage._read_manifest(output / "animation_manifest.json")
-            if manifest is None or int(manifest.get("schema_version", 0) or 0) != mesh_physics.PUBLIC_ANIMATION_SCHEMA_VERSION:
+            if manifest is None or int(manifest.get("schema_version", 0) or 0) < mesh_physics.PUBLIC_ANIMATION_SCHEMA_VERSION:
                 return original_manifest_validation(output)
             if manifest.get("animation_property_encoding") != property_storage.ENCODING:
                 return f"unexpected animation-property encoding {manifest.get('animation_property_encoding')!r}"
