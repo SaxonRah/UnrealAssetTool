@@ -135,12 +135,20 @@ class BlueprintDelegateBindingsTest(unittest.TestCase):
                     },
                 })
             write_jsonl(root / "blueprint_nodes.jsonl", nodes)
-            write_jsonl(root / "blueprint_functions.jsonl", [{
-                "function_id": "fn-handle",
-                "blueprint_path": bp,
-                "name": "HandleFunction",
-                "resolved_function": "/Game/Test/BP.BP_C:HandleFunction",
-            }])
+            write_jsonl(root / "blueprint_functions.jsonl", [
+                {
+                    "function_id": "fn-handle-a",
+                    "blueprint_path": bp,
+                    "name": "HandleFunction",
+                    "resolved_function": "/Game/Test/BP.BP_C:HandleFunction",
+                },
+                {
+                    "function_id": "fn-handle-b",
+                    "blueprint_path": bp,
+                    "name": "HandleFunction",
+                    "resolved_function": "/Game/Test/BP.BP_C:HandleFunction",
+                },
+            ])
             write_jsonl(root / "blueprint_pins.jsonl", [
                 pin("create-event-out", create_event_id, "OutputDelegate", "output"),
                 pin("create-function-out", create_function_id, "OutputDelegate", "output"),
@@ -198,6 +206,19 @@ class BlueprintDelegateBindingsTest(unittest.TestCase):
                 by_basis["selected_function_path"]["endpoint_path"],
                 "/Game/Test/BP.BP_C:HandleFunction",
             )
+            self.assertEqual(
+                by_basis["selected_function_path"]["endpoint_id"],
+                "/Game/Test/BP.BP_C:HandleFunction",
+            )
+            self.assertEqual(
+                by_basis["selected_function_path"]["endpoint_local_resolution"],
+                "multiple_captured_function_rows",
+            )
+            self.assertEqual(
+                by_basis["selected_function_path"]["endpoint_candidate_function_ids"],
+                ["fn-handle-a", "fn-handle-b"],
+            )
+            self.assertEqual(by_basis["selected_function_path"]["endpoint_graph_id"], "")
             self.assertEqual(by_basis["direct_event_node"]["endpoint_name"], "OnDirect")
             self.assertTrue(all(row["evidence_kind"] == "exact_authored_delegate_binding" for row in bindings))
 
@@ -214,10 +235,15 @@ class BlueprintDelegateBindingsTest(unittest.TestCase):
                 )
                 self.assertEqual(
                     conn.execute(
-                        "SELECT endpoint_kind,resolution_basis FROM blueprint_delegate_bindings "
+                        "SELECT endpoint_kind,resolution_basis,endpoint_local_resolution "
+                        "FROM blueprint_delegate_bindings "
                         "WHERE dispatcher_name='OnFunctionDelegate'"
                     ).fetchone(),
-                    ("function", "selected_function_path"),
+                    (
+                        "function",
+                        "selected_function_path",
+                        "multiple_captured_function_rows",
+                    ),
                 )
             finally:
                 conn.close()
