@@ -2,7 +2,7 @@
 
 UnrealAssetTool supports one **canonical checkout** scanning multiple Unreal projects without maintaining a plugin source copy in every target.
 
-Validated engine: **UE 5.8.2**.
+Release: **1.0.0-beta.1**. Validated engine: **UE 5.8.2**.
 
 Current schemas:
 
