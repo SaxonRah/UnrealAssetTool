@@ -510,11 +510,50 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
 
     interprocedural_edge_path = output / "blueprint_interprocedural_execution_edges.jsonl"
     interprocedural_terminal_path = output / "blueprint_interprocedural_execution_terminals.jsonl"
+    interprocedural_data_path = output / "blueprint_interprocedural_data_routes.jsonl"
     interprocedural_edges = (
         list(rows(interprocedural_edge_path)) if interprocedural_edge_path.is_file() else []
     )
     interprocedural_terminals = (
         list(rows(interprocedural_terminal_path)) if interprocedural_terminal_path.is_file() else []
+    )
+    interprocedural_data_routes = (
+        list(rows(interprocedural_data_path)) if interprocedural_data_path.is_file() else []
+    )
+    interprocedural_data_kinds = collections.Counter(
+        str(row.get("route_kind", "") or "<empty>") for row in interprocedural_data_routes
+    )
+    interprocedural_data_value_kinds = collections.Counter(
+        str(row.get("value_kind", "") or "<empty>") for row in interprocedural_data_routes
+    )
+    interprocedural_data_ready_count = sum(
+        int(bool(row.get("bridge_ready", False))) for row in interprocedural_data_routes
+    )
+    interprocedural_expected_data_route_count = (
+        macro_data_input_binding_count + macro_data_output_binding_count
+    )
+    interprocedural_data_stream_alignment = bool(
+        len(interprocedural_data_routes) == interprocedural_expected_data_route_count
+        and int(interprocedural_data_kinds.get("macro_data_input", 0))
+            == macro_data_input_binding_count
+        and int(interprocedural_data_kinds.get("macro_data_output", 0))
+            == macro_data_output_binding_count
+        and int(interprocedural_data_value_kinds.get("connected_source", 0))
+            == macro_data_input_connected_source_count
+        and int(interprocedural_data_value_kinds.get("authored_value", 0))
+            == macro_data_input_authored_value_count
+        and int(interprocedural_data_value_kinds.get("no_value_evidence", 0))
+            == macro_data_input_no_value_count
+        and sum(int(row.get("body_consumer_count", 0) or 0) for row in interprocedural_data_routes)
+            == macro_data_input_body_consumer_edge_count
+        and sum(int(row.get("internal_source_count", 0) or 0) for row in interprocedural_data_routes)
+            == macro_data_output_internal_source_edge_count
+        and sum(int(row.get("dependency_count", 0) or 0) for row in interprocedural_data_routes)
+            == macro_data_output_dependency_count
+        and sum(int(row.get("caller_consumer_count", 0) or 0) for row in interprocedural_data_routes)
+            == macro_data_output_caller_consumer_edge_count
+        and interprocedural_data_ready_count
+            == macro_data_input_bridge_ready_count + macro_data_output_bridge_ready_count
     )
     interprocedural_edge_kinds = collections.Counter(
         str(row.get("edge_kind", "") or "<empty>") for row in interprocedural_edges
@@ -631,6 +670,12 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
         "interprocedural_execution_terminal_kinds": top(interprocedural_terminal_kinds),
         "interprocedural_expected_edge_count": interprocedural_expected_edge_count,
         "interprocedural_stream_alignment": interprocedural_stream_alignment,
+        "interprocedural_data_route_count": len(interprocedural_data_routes),
+        "interprocedural_expected_data_route_count": interprocedural_expected_data_route_count,
+        "interprocedural_data_ready_count": interprocedural_data_ready_count,
+        "interprocedural_data_kinds": top(interprocedural_data_kinds),
+        "interprocedural_data_value_kinds": top(interprocedural_data_value_kinds),
+        "interprocedural_data_stream_alignment": interprocedural_data_stream_alignment,
         "control_rig_node_count": len(control_rig_nodes),
         "rigvm_link_count": len(rigvm_links),
         "rigvm_duplicate_link_node_ids": len(rigvm_link_ids) - len(rigvm_link_id_set),
@@ -758,6 +803,16 @@ def print_report(report: dict) -> None:
     )
     section("macro execution bridge status", "macro_exec_status")
     section("macro execution bridge mismatches", "macro_exec_mismatches")
+
+    print("\n[Blueprint interprocedural data routes]")
+    print(
+        f"routes={int(report.get('interprocedural_data_route_count', 0) or 0)} "
+        f"expected_routes={int(report.get('interprocedural_expected_data_route_count', 0) or 0)} "
+        f"bridge_ready={int(report.get('interprocedural_data_ready_count', 0) or 0)} "
+        f"aligned={bool(report.get('interprocedural_data_stream_alignment', False))}"
+    )
+    section("interprocedural data route kinds", "interprocedural_data_kinds")
+    section("interprocedural data value kinds", "interprocedural_data_value_kinds")
 
     print("\n[Blueprint interprocedural execution streams]")
     print(
