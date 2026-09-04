@@ -28,11 +28,10 @@ import uatool_mover_behavior as mover_behavior
 import uatool_build_perf as build_perf
 import uatool_verify_bundle as bundle_verify
 
-# Public derived schema 33 adds canonical cross-graph Blueprint execution edges
-# for exact project-authored macro calls while retaining graph-local basic blocks.
-# Later domain integrations may promote from older source constants, but must
-# preserve this higher composition root version.
-FINAL_DERIVED_SCHEMA_VERSION = 33
+# Public derived schema 34 adds materialized cross-graph Blueprint macro data
+# provenance routes on top of schema-33 execution bridges. Graph-local topology
+# and schema-4 exact interface bindings remain authoritative inputs.
+FINAL_DERIVED_SCHEMA_VERSION = 34
 project_graph.DERIVED_SCHEMA_VERSION = FINAL_DERIVED_SCHEMA_VERSION
 SCRIPT_DIR = Path(__file__).resolve().parent
 
@@ -271,8 +270,8 @@ def derive_output(output):
     }
     counts.update(semantic_counts)
 
-    interprocedural_edges, interprocedural_terminals = blueprint_interprocedural.derive(
-        output, runtime._rows
+    interprocedural_edges, interprocedural_terminals, interprocedural_data_routes = (
+        blueprint_interprocedural.derive(output, runtime._rows)
     )
     interprocedural_counts = {
         "blueprint_interprocedural_execution_edges": runtime._write(
@@ -282,6 +281,10 @@ def derive_output(output):
         "blueprint_interprocedural_execution_terminals": runtime._write(
             output / "blueprint_interprocedural_execution_terminals.jsonl",
             interprocedural_terminals,
+        ),
+        "blueprint_interprocedural_data_routes": runtime._write(
+            output / "blueprint_interprocedural_data_routes.jsonl",
+            interprocedural_data_routes,
         ),
     }
     counts.update(interprocedural_counts)
@@ -367,6 +370,19 @@ def derive_output(output):
                 int(row.get("edge_kind") == "macro_return") for row in interprocedural_edges
             ),
             "terminal_count": len(interprocedural_terminals),
+            "data_route_count": len(interprocedural_data_routes),
+            "data_input_route_count": sum(
+                int(row.get("route_kind") == "macro_data_input")
+                for row in interprocedural_data_routes
+            ),
+            "data_output_route_count": sum(
+                int(row.get("route_kind") == "macro_data_output")
+                for row in interprocedural_data_routes
+            ),
+            "data_bridge_ready_count": sum(
+                int(bool(row.get("bridge_ready", False)))
+                for row in interprocedural_data_routes
+            ),
         }
         manifest["blueprint_statement_schema_version"] = blueprint_statements.STATEMENT_SCHEMA_VERSION
         manifest["blueprint_statement_summary"] = {
@@ -412,7 +428,9 @@ def derive_output(output):
         f"edges={len(interprocedural_edges)} "
         f"enters={sum(int(row.get('edge_kind') == 'macro_enter') for row in interprocedural_edges)} "
         f"returns={sum(int(row.get('edge_kind') == 'macro_return') for row in interprocedural_edges)} "
-        f"terminals={len(interprocedural_terminals)}"
+        f"terminals={len(interprocedural_terminals)} "
+        f"data_routes={len(interprocedural_data_routes)} "
+        f"data_ready={sum(int(bool(row.get('bridge_ready', False))) for row in interprocedural_data_routes)}"
     )
     print(
         "blueprint statements: "
@@ -558,7 +576,9 @@ def _combined_summary(args) -> None:
             f"edges={interprocedural_summary.get('edge_count', 0)} "
             f"enters={interprocedural_summary.get('macro_enter_count', 0)} "
             f"returns={interprocedural_summary.get('macro_return_count', 0)} "
-            f"terminals={interprocedural_summary.get('terminal_count', 0)}"
+            f"terminals={interprocedural_summary.get('terminal_count', 0)} "
+            f"data_routes={interprocedural_summary.get('data_route_count', 0)} "
+            f"data_ready={interprocedural_summary.get('data_bridge_ready_count', 0)}"
         )
     if statement_summary:
         print(
@@ -576,6 +596,7 @@ def _combined_summary(args) -> None:
                 "blueprint_semantic_nodes", "blueprint_semantic_edges", "blueprint_semantic_graphs",
                 "blueprint_interprocedural_execution_edges",
                 "blueprint_interprocedural_execution_terminals",
+                "blueprint_interprocedural_data_routes",
                 "blueprint_semantic_statements", "blueprint_semantic_blocks",
                 "mover_transition_behaviors", "mover_transition_routes",
                 "vfx_relations", "vfx_context", "vfx_summaries",
