@@ -1243,6 +1243,9 @@ def validation_error(output: Path, rows) -> str | None:
         expected_function_edges, expected_function_terminals, _function_stats = (
             derive_function_execution(output, rows)
         )
+        expected_function_data_routes, _function_data_stats = (
+            derive_function_data_routes(output, rows)
+        )
     except RuntimeError as exc:
         return str(exc)
 
@@ -1251,6 +1254,7 @@ def validation_error(output: Path, rows) -> str | None:
     actual_data_routes = list(rows(output / DERIVED_FILES[2]))
     actual_function_edges = list(rows(output / DERIVED_FILES[3]))
     actual_function_terminals = list(rows(output / DERIVED_FILES[4]))
+    actual_function_data_routes = list(rows(output / DERIVED_FILES[5]))
 
     if actual_edges != expected_edges:
         return (
@@ -1277,12 +1281,18 @@ def validation_error(output: Path, rows) -> str | None:
             "Blueprint interprocedural function execution terminals do not exactly match "
             "exact internal call targets and canonical execution topology"
         )
+    if actual_function_data_routes != expected_function_data_routes:
+        return (
+            "Blueprint interprocedural function data routes do not exactly match "
+            "call-binding schema 2 and canonical data provenance"
+        )
 
     edge_ids = [str(row.get("interprocedural_edge_id", "") or "") for row in actual_edges]
     terminal_ids = [str(row.get("terminal_id", "") or "") for row in actual_terminals]
     route_ids = [str(row.get("route_id", "") or "") for row in actual_data_routes]
     function_edge_ids = [str(row.get("function_edge_id", "") or "") for row in actual_function_edges]
     function_terminal_ids = [str(row.get("terminal_id", "") or "") for row in actual_function_terminals]
+    function_data_route_ids = [str(row.get("route_id", "") or "") for row in actual_function_data_routes]
     if any(not value for value in edge_ids) or len(edge_ids) != len(set(edge_ids)):
         return "Blueprint interprocedural execution edges contain missing/duplicate ids"
     if any(not value for value in terminal_ids) or len(terminal_ids) != len(set(terminal_ids)):
@@ -1293,6 +1303,8 @@ def validation_error(output: Path, rows) -> str | None:
         return "Blueprint interprocedural function execution edges contain missing/duplicate ids"
     if any(not value for value in function_terminal_ids) or len(function_terminal_ids) != len(set(function_terminal_ids)):
         return "Blueprint interprocedural function terminals contain missing/duplicate ids"
+    if any(not value for value in function_data_route_ids) or len(function_data_route_ids) != len(set(function_data_route_ids)):
+        return "Blueprint interprocedural function data routes contain missing/duplicate ids"
 
     for row in actual_edges:
         if int(row.get("schema_version", 0) or 0) != INTERPROCEDURAL_SCHEMA_VERSION:
@@ -1336,6 +1348,18 @@ def validation_error(output: Path, rows) -> str | None:
             return f"Blueprint function terminal has caller continuation: {row.get('terminal_id')}"
         if int(row.get("return_frontier_block_count", 0) or 0) <= 0:
             return f"Blueprint function terminal lacks return frontier: {row.get('terminal_id')}"
+
+    for row in actual_function_data_routes:
+        if int(row.get("schema_version", 0) or 0) != INTERPROCEDURAL_SCHEMA_VERSION:
+            return f"unexpected Blueprint function data route schema: {row.get('schema_version')!r}"
+        if int(row.get("binding_schema_version", 0) or 0) != core.BLUEPRINT_CALL_BINDING_SCHEMA_VERSION:
+            return f"unexpected Blueprint call-binding schema on data route: {row.get('route_id')}"
+        if str(row.get("route_kind", "") or "") not in {"function_argument", "function_return"}:
+            return f"unexpected Blueprint function data route kind: {row.get('route_kind')!r}"
+        if not bool(row.get("value_type_compatible", False)):
+            return f"Blueprint function data route lacks value-type proof: {row.get('route_id')}"
+        if bool(row.get("member_route_ready", False)) and not bool(row.get("member_identity_exact", False)):
+            return f"split projection falsely claims member route readiness: {row.get('route_id')}"
     return None
 
 
@@ -1441,6 +1465,35 @@ def load_database(conn, output: Path, rows) -> None:
                 row.get("evidence_kind", ""), _j(row),
             ),
         )
+    for row in rows(Path(output) / DERIVED_FILES[5]):
+        conn.execute(
+            "INSERT OR REPLACE INTO blueprint_interprocedural_function_data_routes VALUES "
+            "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                row.get("route_id", ""), int(row.get("schema_version", 0) or 0),
+                int(row.get("binding_schema_version", 0) or 0), row.get("route_kind", ""),
+                row.get("binding_id", ""), row.get("call_node_id", ""),
+                row.get("target_function_id", ""), row.get("caller_blueprint_path", ""),
+                row.get("caller_graph_id", ""), row.get("target_blueprint_path", ""),
+                row.get("target_kind", ""), row.get("direction", ""), row.get("match_kind", ""),
+                row.get("parameter_identity_kind", ""),
+                1 if row.get("member_identity_exact", False) else 0,
+                row.get("call_pin_id", ""), row.get("call_pin_name", ""),
+                row.get("parameter_name", ""), _j(row.get("parameter_pin_ids", [])),
+                row.get("split_suffix", ""),
+                1 if row.get("value_type_compatible", False) else 0,
+                row.get("value_type_basis", ""), _j(row.get("qualifier_surfaces", {})),
+                row.get("value_kind", ""), int(row.get("caller_source_count", 0) or 0),
+                int(row.get("callee_consumer_count", 0) or 0), row.get("callee_consumer_scope", ""),
+                int(row.get("dependency_count", 0) or 0),
+                int(row.get("caller_consumer_count", 0) or 0),
+                1 if row.get("internal_provenance_complete", False) else 0,
+                1 if row.get("boundary_ready", False) else 0,
+                1 if row.get("member_route_ready", False) else 0,
+                row.get("authored_default_value", ""), row.get("authored_default_object", ""),
+                row.get("authored_default_text", ""), row.get("evidence_kind", ""), _j(row),
+            ),
+        )
 
 
 def query(conn, print_rows, pattern: str, limit: int) -> None:
@@ -1533,5 +1586,22 @@ def query(conn, print_rows, pattern: str, limit: int) -> None:
             "terminal_kind", "caller_blueprint_path", "call_node_id", "target_function_id",
             "caller_block_id", "return_frontier_block_count", "call_binding_count",
             "purity_override",
+        ),
+    )
+    print("\n[Blueprint function interprocedural data]")
+    print_rows(
+        conn.execute(
+            """SELECT route_kind,caller_blueprint_path,call_pin_name,parameter_name,target_kind,
+                      parameter_identity_kind,value_kind,boundary_ready,member_route_ready
+               FROM blueprint_interprocedural_function_data_routes
+               WHERE caller_blueprint_path LIKE ? OR route_kind LIKE ? OR call_pin_name LIKE ?
+                  OR parameter_name LIKE ? OR target_kind LIKE ?
+               LIMIT ?""",
+            (pattern, pattern, pattern, pattern, pattern, limit),
+        ),
+        (
+            "route_kind", "caller_blueprint_path", "call_pin_name", "parameter_name",
+            "target_kind", "parameter_identity_kind", "value_kind",
+            "boundary_ready", "member_route_ready",
         ),
     )
