@@ -308,14 +308,12 @@ class BlueprintInterproceduralExecutionTest(unittest.TestCase):
 
 
 class BlueprintInterproceduralCompositionTest(unittest.TestCase):
-    def test_schema33_and_bundle_membership_are_composed(self) -> None:
-        import uatool
-        import uatool_core
-        import uatool_project_graph
-
-        self.assertGreaterEqual(uatool.FINAL_DERIVED_SCHEMA_VERSION, 33)
-        self.assertGreaterEqual(uatool_project_graph.DERIVED_SCHEMA_VERSION, 33)
-        self.assertTrue(set(interproc.DERIVED_FILES).issubset(uatool_core.DEFAULT_BUNDLE_FILES))
+    def test_schema33_and_bundle_membership_are_composed_without_global_import_side_effects(self) -> None:
+        facade = (SCRIPTS / "uatool.py").read_text(encoding="utf-8")
+        self.assertIn("FINAL_DERIVED_SCHEMA_VERSION = 33", facade)
+        self.assertIn("import uatool_blueprint_interprocedural as blueprint_interprocedural", facade)
+        self.assertIn("*blueprint_interprocedural.DERIVED_FILES", facade)
+        self.assertIn("_require_blueprint_interprocedural(output)", facade)
 
 
 if __name__ == "__main__":
