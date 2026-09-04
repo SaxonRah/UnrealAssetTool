@@ -200,7 +200,8 @@ def _render_expression(expr: dict, lookup, pins_by_node, depth: int = 0, max_dep
             for child in expr.get("sources", [])
             if isinstance(child, dict)
         ]
-        return " | ".join(part for part in parts if part)
+        rendered = [part for part in parts if part]
+        return "multi(" + ", ".join(rendered) + ")"
 
     node_id = str(expr.get("node_id", "") or "")
     operation = str(expr.get("operation", "") or "")
@@ -231,7 +232,8 @@ def _render_expression(expr: dict, lookup, pins_by_node, depth: int = 0, max_dep
         ]
         child_text = [value for value in child_text if value]
         if child_text:
-            args.append(f"{rendered_pin_name}={' | '.join(child_text)}")
+            rendered_sources = child_text[0] if len(child_text) == 1 else "multi(" + ", ".join(child_text) + ")"
+            args.append(f"{rendered_pin_name}={rendered_sources}")
 
     suffix = f".{output_pin}" if output_pin else ""
     if args:

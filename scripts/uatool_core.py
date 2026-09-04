@@ -2681,7 +2681,8 @@ def _render_data_expression(expr: dict, depth: int = 0, max_depth: int = 8) -> s
             for child in expr.get("sources", [])
             if isinstance(child, dict)
         ]
-        return " | ".join(part for part in parts if part)
+        rendered = [part for part in parts if part]
+        return "multi(" + ", ".join(rendered) + ")"
 
     label = str(expr.get("label", "") or expr.get("operation", "") or kind)
     output_pin = str(expr.get("output_pin", ""))
@@ -2705,7 +2706,8 @@ def _render_data_expression(expr: dict, depth: int = 0, max_depth: int = 8) -> s
         ]
         child_text = [value for value in child_text if value]
         if child_text:
-            args.append(f"{pin_name}={' | '.join(child_text)}")
+            rendered_sources = child_text[0] if len(child_text) == 1 else "multi(" + ", ".join(child_text) + ")"
+            args.append(f"{pin_name}={rendered_sources}")
 
     suffix = f".{output_pin}" if output_pin else ""
     if args:
@@ -2791,6 +2793,23 @@ def derive_blueprint_data_dependencies(
 
         label = _data_dependency_node_label(node)
         operation = _effective_blueprint_operation(node)
+
+        # UK2Node_VariableSet exposes Output_Get as a value getter specifically
+        # so authored graphs can read the variable without a separate Get node.
+        # Treating that pin as an execution-bearing setter boundary loses the
+        # read semantics and can manufacture a false dependency cycle when a
+        # graph toggles a variable from its own Output_Get value.
+        if operation == "variable_set" and source_pin_name == "Output_Get":
+            variable = str(node.get("symbol", ""))
+            if variable:
+                state["variable_reads"].add(variable)
+            return {
+                "kind": "expression",
+                "node_id": source_node_id,
+                "operation": "variable_get",
+                "label": variable or label,
+                "output_pin": "",
+            }
 
         if source_node_id in stack:
             state["cycle"] = True
