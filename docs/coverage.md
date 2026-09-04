@@ -26,7 +26,7 @@ mesh=1
 world_geometry=1
 vfx=1
 systems=11
-derived=36
+derived=37
 capabilities=1
 ```
 
@@ -38,7 +38,7 @@ capabilities=1
 | --- | --- | --- | --- |
 | Files/source/config | `first_class` | Physical files, kinds, bounded text chunks | Not a C++ semantic compiler/indexer |
 | Asset Registry | `first_class` fallback | Asset identity/class/package/tags/dependencies | Package dependency is not semantic object linkage |
-| Blueprint/K2 | `first_class` | Graphs, nodes, pins, links, state, refs, functions/events/calls/data provenance/execution blocks plus generic semantic statements/control flow; structural-schema-13 delegate member/scope provenance; exact project-authored macro graph/interface bindings, schema-33 cross-graph macro execution edges, schema-34 joined macro data-provenance routes, schema-35 direct-internal Blueprint function call/return topology, and schema-36 function data provenance | Static authored topology only: macro/function bodies are not inlined/simulated, cross-graph expressions are not executed/substituted, split call-site struct projections do not claim uncaptured callee member identity, interface dispatch implementations and latent scheduling are not guessed, engine StandardMacros remain external unless captured, and runtime Blueprint VM state is not executed |
+| Blueprint/K2 | `first_class` | Graphs, nodes, pins, links, state, refs, functions/events/calls/data provenance/execution blocks plus generic semantic statements/control flow; structural-schema-13 delegate member/scope provenance; exact project-authored macro graph/interface bindings, schema-33 cross-graph macro execution edges, schema-34 joined macro data-provenance routes, schema-35 direct-internal Blueprint function call/return topology, schema-36 function data provenance, and schema-37 exact authored delegate bindings | Static authored topology only: macro/function bodies are not inlined/simulated, cross-graph expressions are not executed/substituted, split call-site struct projections do not claim uncaptured callee member identity, interface dispatch implementations and latent scheduling are not guessed, engine StandardMacros remain external unless captured, and runtime Blueprint VM state is not executed |
 | Blueprint user-defined enums | `first_class` | Enum identity, entries, raw/authored/display names and conservative readable enum decoration | Ambiguous enum typing is left raw rather than guessed |
 | Animation Blueprint state machines | `first_class` | Machines, states, aliases/conduits, transitions, transition rules, pose/cache/link nodes | Runtime generated/compiled VM behavior is not simulated |
 | UMG Widget Blueprint | `first_class_depth_pending` | Widget tree, properties, bindings, animations, animation bindings plus Blueprint graphs | Slate/runtime rendering/style semantics are not modeled as a separate graph |
@@ -301,7 +301,26 @@ Split bindings remain queryable as `split_parent_projection` rows with `member_i
 
 Pure functions remain valid data-provenance targets. Unreachable/dead impure callsites remain authored data topology and can retain data routes. Blueprint Interface declarations/dispatches and latent calls are excluded from schema-36 implementation provenance. No expression substitution, function-body inlining, scheduler simulation or runtime Blueprint VM execution is claimed.
 
+## 21. Blueprint delegate bindings preserve authored subscriptions without simulating multicast runtime state
+
+Derived schema 37 adds `blueprint_delegate_bindings.jsonl`.
+
+Structural schema 13 is the prerequisite evidence layer. It preserves exact multicast-delegate `FMemberReference` provenance (resolved owner/name, member GUID, self/local scope) and exact `CreateDelegate` selected-function GUID/path evidence.
+
+Schema 37 materializes one row per canonical delegate-typed data edge into `Bind Event` / `Assign` only when both sides of the authored subscription are exact. A row preserves:
+
+- exact dispatcher owner/name/member GUID and scope provenance;
+- bind-vs-assign operation and caller graph/node identity;
+- exact endpoint identity;
+- endpoint resolution basis: selected event GUID, selected function path, or direct captured event node;
+- source/target delegate pin identity and static evidence kind.
+
+The relation is intentionally an authored subscription declaration, not a runtime subscriber set. `Unbind Event`, `Clear`, and dispatcher `Call` remain separately captured authored operations; schema 37 does not simulate their temporal effects, multicast ordering, duplicate-subscription behavior, object lifetime, or broadcast execution.
+
+Name-only endpoint matching is never promoted. Missing delegate owner information is never reinterpreted as self-context. Runtime delegate object state remains outside the contract.
+
 ---
+
 
 
 
