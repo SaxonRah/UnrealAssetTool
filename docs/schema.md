@@ -5,7 +5,7 @@
 UnrealAssetTool 0.8.0 uses independently versioned canonical layers plus one final derived layer and a machine-readable capability contract:
 
 ```text
-structural scanner schema: 12
+structural scanner schema: 13
 world scanner schema:      12
 animation scanner schema:   1
 VFX scanner schema:         1
@@ -50,7 +50,7 @@ When parsing JSONL, split on physical `\n` records. Do not use Unicode `str.spli
 
 ---
 
-# Structural scanner schema 12
+# Structural scanner schema 13
 
 Structural extraction is emitted by the main Unreal commandlet.
 
@@ -90,7 +90,7 @@ blueprint_widget_animations.jsonl
 blueprint_widget_animation_bindings.jsonl
 ```
 
-These preserve Blueprint identity/inheritance/interfaces/state, every graph/node/pin, exact graph wiring, reflected node state/references, component/default state, Timelines and UMG authored structure.
+These preserve Blueprint identity/inheritance/interfaces/state, every graph/node/pin, exact graph wiring, reflected node state/references, component/default state, Timelines and UMG authored structure. Structural schema 13 additionally preserves exact Blueprint multicast-delegate FMemberReference provenance (member GUID, self-context, scope and resolved owner) and CreateDelegate selected-function scope/path evidence; RemoveDelegate is classified separately from ClearDelegate.
 
 ## Blueprint user-defined enums
 
