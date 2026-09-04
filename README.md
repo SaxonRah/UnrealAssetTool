@@ -91,7 +91,7 @@ The `.uatool` directory contains canonical JSONL, deterministic derived JSONL, m
 Important schema layers:
 
 ```text
-manifest.json                 structural schema 13 + derived schema 39
+manifest.json                 structural schema 13 + derived schema 40
 world_manifest.json           world schema 12 / structural baseline 13
 animation_manifest.json       animation schema 4
 vfx_manifest.json             VFX schema 1
@@ -101,7 +101,7 @@ world_geometry_manifest.json  world-geometry schema 1
 capabilities.json             capability contract schema 1
 ```
 
-Derived schema 39 is the current deterministic layer. It includes the typed project graph plus Blueprint macro/function interprocedural execution and data provenance, exact authored delegate bindings with authored event-node identity preferred over compiled UFunction aliases and exact transparent reroute-chain provenance, and the accepted Chooser/Mover/Gameplay Camera/Mass/ZoneGraph/GAS/animation/system relationships while preserving earlier derived streams:
+Derived schema 40 is the current deterministic layer. It includes the typed project graph plus Blueprint macro/function interprocedural execution and data provenance, exact resolved authored delegate subscriptions with authored event-node identity preferred over compiled UFunction aliases, exact transparent reroute-chain provenance, and zero-input Bind/Assign sites retained only as diagnostics, and the accepted Chooser/Mover/Gameplay Camera/Mass/ZoneGraph/GAS/animation/system relationships while preserving earlier derived streams:
 
 ```text
 project_nodes.jsonl
