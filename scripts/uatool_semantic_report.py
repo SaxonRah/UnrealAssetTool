@@ -639,7 +639,8 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
     function_call_pure_internal_count = 0
     function_call_latent_internal_count = 0
     function_call_direct_impure_count = 0
-    function_call_purity_mismatch_count = 0
+    function_call_purity_override_count = 0
+    function_call_suspicious_purity_count = 0
     function_call_unknown_blueprint_type_count = 0
     function_direct_exact_caller_block_count = 0
     function_direct_exact_entry_block_count = 0
@@ -647,8 +648,12 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
     function_direct_exact_result_block_count = 0
     function_direct_explicit_result_call_count = 0
     function_direct_void_call_count = 0
-    function_direct_void_reachable_terminal_block_count = 0
-    function_direct_void_calls_with_terminal_frontier = 0
+    function_direct_reachable_terminal_block_count = 0
+    function_direct_calls_with_terminal_frontier = 0
+    function_direct_reachable_result_node_count = 0
+    function_direct_unreachable_result_node_count = 0
+    function_direct_unreachable_callsite_count = 0
+    function_direct_no_return_frontier_count = 0
     function_direct_connected_continuation_count = 0
     function_direct_terminal_call_count = 0
     function_direct_exact_continuation_block_count = 0
@@ -687,23 +692,32 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
         target_pure = bool(target.get("blueprint_pure", False))
         latent = bool(call.get("latent", False))
 
-        if call_pure != target_pure:
-            function_call_purity_mismatch_count += 1
+        if target_pure and not call_pure:
+            # UK2Node_CallFunction supports a node-level purity override. The
+            # call-site node's actual compiler purity governs whether the call
+            # participates in exec flow; retain the target's default-pure fact
+            # as provenance rather than treating the disagreement as corruption.
+            function_call_purity_override_count += 1
+            function_internal_kinds["pure_target_impure_call_node"] += 1
+        elif call_pure and not target_pure:
+            # A pure call node targeting a function that is not BlueprintPure is
+            # not the documented toggle direction and remains suspicious.
+            function_call_suspicious_purity_count += 1
             function_call_mismatches[
-                f"{call_node_id} :: purity_mismatch call={call_pure} target={target_pure}"
+                f"{call_node_id} :: pure_call_node_targets_nonpure_function"
             ] += 1
 
         if interface_call or interface_declaration:
             function_call_interface_count += 1
             function_internal_kinds["interface_dispatch_or_declaration"] += 1
             continue
-        if call_pure or target_pure:
-            function_call_pure_internal_count += 1
-            function_internal_kinds["pure_internal"] += 1
-            continue
         if latent:
             function_call_latent_internal_count += 1
             function_internal_kinds["latent_internal"] += 1
+            continue
+        if call_pure:
+            function_call_pure_internal_count += 1
+            function_internal_kinds["pure_internal"] += 1
             continue
 
         function_call_direct_impure_count += 1
@@ -720,7 +734,11 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
         if caller_ok:
             function_direct_exact_caller_block_count += 1
         else:
-            function_call_mismatches[f"{call_node_id} :: missing_or_ambiguous_caller_block"] += 1
+            # An impure call node can exist as disconnected/dead authored graph
+            # content. Absence from the executable block program means it is not
+            # an execution bridge candidate, not that capture is corrupt.
+            function_direct_unreachable_callsite_count += 1
+            function_internal_kinds["direct_impure_unreachable_callsite"] += 1
 
         entry_node_id = str(target.get("entry_node_id", "") or "")
         entry_block = block_by_node.get(entry_node_id, "")
@@ -747,58 +765,58 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
             if value
         ]
         function_direct_result_node_count += len(result_node_ids)
-        result_ok_count = 0
-        return_frontier_ok = False
-
         if result_node_ids:
             function_direct_explicit_result_call_count += 1
-            for result_node_id in result_node_ids:
-                result_block = block_by_node.get(result_node_id, "")
-                if (
-                    result_block
-                    and block_graph_by_node.get(result_node_id, "") == target_function_id
-                    and result_node_id not in duplicate_block_nodes
-                ):
-                    result_ok_count += 1
-                else:
-                    function_call_mismatches[
-                        f"{call_node_id} :: missing_or_ambiguous_result_block:{result_node_id}"
-                    ] += 1
-            function_direct_exact_result_block_count += result_ok_count
-            return_frontier_ok = result_ok_count == len(result_node_ids)
         else:
             function_direct_void_call_count += 1
-            entry_block_id = str(entry_block or "")
-            reachable: set[str] = set()
-            pending = [entry_block_id] if entry_block_id else []
-            while pending:
-                block_id = pending.pop()
-                if not block_id or block_id in reachable:
-                    continue
-                block = block_by_id.get(block_id)
-                if block is None or str(block.get("graph_id", "") or "") != target_function_id:
-                    continue
-                reachable.add(block_id)
-                for target_block_id in block_outgoing.get(block_id, []):
-                    if target_block_id not in reachable:
-                        pending.append(target_block_id)
-            terminal_blocks = sorted(
-                block_id for block_id in reachable
-                if not [
-                    target_block_id
-                    for target_block_id in block_outgoing.get(block_id, [])
-                    if str(block_by_id.get(target_block_id, {}).get("graph_id", "") or "")
-                        == target_function_id
-                ]
-            )
-            function_direct_void_reachable_terminal_block_count += len(terminal_blocks)
-            if entry_ok and terminal_blocks:
-                function_direct_void_calls_with_terminal_frontier += 1
-                return_frontier_ok = True
+
+        entry_block_id = str(entry_block or "")
+        reachable: set[str] = set()
+        pending = [entry_block_id] if entry_block_id else []
+        while pending:
+            block_id = pending.pop()
+            if not block_id or block_id in reachable:
+                continue
+            block = block_by_id.get(block_id)
+            if block is None or str(block.get("graph_id", "") or "") != target_function_id:
+                continue
+            reachable.add(block_id)
+            for target_block_id in block_outgoing.get(block_id, []):
+                if target_block_id not in reachable:
+                    pending.append(target_block_id)
+
+        terminal_blocks = sorted(
+            block_id for block_id in reachable
+            if not [
+                target_block_id
+                for target_block_id in block_outgoing.get(block_id, [])
+                if str(block_by_id.get(target_block_id, {}).get("graph_id", "") or "")
+                    == target_function_id
+            ]
+        )
+        function_direct_reachable_terminal_block_count += len(terminal_blocks)
+        return_frontier_ok = bool(entry_ok and terminal_blocks)
+        if return_frontier_ok:
+            function_direct_calls_with_terminal_frontier += 1
+        else:
+            function_direct_no_return_frontier_count += 1
+            function_internal_kinds["direct_impure_no_return_frontier"] += 1
+
+        result_ok_count = 0
+        for result_node_id in result_node_ids:
+            result_block = block_by_node.get(result_node_id, "")
+            if (
+                result_block
+                and result_block in reachable
+                and block_graph_by_node.get(result_node_id, "") == target_function_id
+                and result_node_id not in duplicate_block_nodes
+            ):
+                result_ok_count += 1
+                function_direct_reachable_result_node_count += 1
             else:
-                function_call_mismatches[
-                    f"{call_node_id} :: void_function_missing_reachable_terminal_frontier"
-                ] += 1
+                function_direct_unreachable_result_node_count += 1
+                function_internal_kinds["declared_result_not_on_reachable_exec_path"] += 1
+        function_direct_exact_result_block_count += result_ok_count
 
         outgoing = exec_outgoing_by_node.get(call_node_id, [])
         if not outgoing:
@@ -938,7 +956,8 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
         "function_call_pure_internal_count": function_call_pure_internal_count,
         "function_call_latent_internal_count": function_call_latent_internal_count,
         "function_call_direct_impure_count": function_call_direct_impure_count,
-        "function_call_purity_mismatch_count": function_call_purity_mismatch_count,
+        "function_call_purity_override_count": function_call_purity_override_count,
+        "function_call_suspicious_purity_count": function_call_suspicious_purity_count,
         "function_call_unknown_blueprint_type_count": function_call_unknown_blueprint_type_count,
         "function_internal_kinds": top(function_internal_kinds),
         "function_call_mismatches": top(function_call_mismatches),
@@ -948,8 +967,12 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
         "function_direct_exact_result_block_count": function_direct_exact_result_block_count,
         "function_direct_explicit_result_call_count": function_direct_explicit_result_call_count,
         "function_direct_void_call_count": function_direct_void_call_count,
-        "function_direct_void_reachable_terminal_block_count": function_direct_void_reachable_terminal_block_count,
-        "function_direct_void_calls_with_terminal_frontier": function_direct_void_calls_with_terminal_frontier,
+        "function_direct_reachable_terminal_block_count": function_direct_reachable_terminal_block_count,
+        "function_direct_calls_with_terminal_frontier": function_direct_calls_with_terminal_frontier,
+        "function_direct_reachable_result_node_count": function_direct_reachable_result_node_count,
+        "function_direct_unreachable_result_node_count": function_direct_unreachable_result_node_count,
+        "function_direct_unreachable_callsite_count": function_direct_unreachable_callsite_count,
+        "function_direct_no_return_frontier_count": function_direct_no_return_frontier_count,
         "function_direct_connected_continuation_count": function_direct_connected_continuation_count,
         "function_direct_terminal_call_count": function_direct_terminal_call_count,
         "function_direct_exact_continuation_block_count": function_direct_exact_continuation_block_count,
@@ -1112,7 +1135,8 @@ def print_report(report: dict) -> None:
         f"pure_internal={int(report.get('function_call_pure_internal_count', 0) or 0)} "
         f"latent_internal={int(report.get('function_call_latent_internal_count', 0) or 0)} "
         f"direct_impure_internal={int(report.get('function_call_direct_impure_count', 0) or 0)} "
-        f"purity_mismatches={int(report.get('function_call_purity_mismatch_count', 0) or 0)} "
+        f"purity_overrides={int(report.get('function_call_purity_override_count', 0) or 0)} "
+        f"suspicious_purity={int(report.get('function_call_suspicious_purity_count', 0) or 0)} "
         f"unknown_target_blueprint_type={int(report.get('function_call_unknown_blueprint_type_count', 0) or 0)}"
     )
     section("function call resolution", "function_call_resolution")
@@ -1127,8 +1151,12 @@ def print_report(report: dict) -> None:
         f"result_nodes={int(report.get('function_direct_result_node_count', 0) or 0)} "
         f"exact_result_blocks={int(report.get('function_direct_exact_result_block_count', 0) or 0)} "
         f"void_calls={int(report.get('function_direct_void_call_count', 0) or 0)} "
-        f"void_terminal_frontiers={int(report.get('function_direct_void_calls_with_terminal_frontier', 0) or 0)} "
-        f"void_terminal_blocks={int(report.get('function_direct_void_reachable_terminal_block_count', 0) or 0)} "
+        f"reachable_terminal_frontiers={int(report.get('function_direct_calls_with_terminal_frontier', 0) or 0)} "
+        f"reachable_terminal_blocks={int(report.get('function_direct_reachable_terminal_block_count', 0) or 0)} "
+        f"reachable_result_nodes={int(report.get('function_direct_reachable_result_node_count', 0) or 0)} "
+        f"declared_results_off_exec_path={int(report.get('function_direct_unreachable_result_node_count', 0) or 0)} "
+        f"unreachable_callsites={int(report.get('function_direct_unreachable_callsite_count', 0) or 0)} "
+        f"no_return_frontier={int(report.get('function_direct_no_return_frontier_count', 0) or 0)} "
         f"connected_continuations={int(report.get('function_direct_connected_continuation_count', 0) or 0)} "
         f"terminal_calls={int(report.get('function_direct_terminal_call_count', 0) or 0)} "
         f"exact_continuation_blocks={int(report.get('function_direct_exact_continuation_block_count', 0) or 0)} "
