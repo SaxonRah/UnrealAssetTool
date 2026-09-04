@@ -24,7 +24,7 @@ VFX schema:         1
 systems schema:    11
 mesh schema:        1
 world geometry:     1
-derived schema:    37
+derived schema:    38
 capabilities:       1
 ```
 
