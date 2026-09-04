@@ -3392,10 +3392,18 @@ def derive_blueprint_relations(
             add(bp, gid, "node", nid, "accesses_property_path", "property_path", sem.get("access_path", "") or symbol)
         elif op in {"delegate_bind", "delegate_assign"}:
             add(bp, gid, "node", nid, "binds_delegate", "delegate", sem.get("delegate_name", "") or symbol, sem.get("delegate_owner", "") or owner)
+        elif op == "delegate_unbind":
+            add(bp, gid, "node", nid, "unbinds_delegate", "delegate", sem.get("delegate_name", "") or symbol, sem.get("delegate_owner", "") or owner)
+        elif op == "delegate_clear":
+            add(bp, gid, "node", nid, "clears_delegate", "delegate", sem.get("delegate_name", "") or symbol, sem.get("delegate_owner", "") or owner)
         elif op == "delegate_call":
             add(bp, gid, "node", nid, "calls_delegate", "delegate", sem.get("delegate_name", "") or symbol, sem.get("delegate_owner", "") or owner)
         elif op == "delegate_create":
-            add(bp, gid, "node", nid, "creates_delegate", "function", sem.get("selected_function", "") or symbol)
+            add(
+                bp, gid, "node", nid, "creates_delegate", "function",
+                sem.get("selected_function_path", "") or sem.get("selected_function", "") or symbol,
+                sem.get("selected_function_owner", ""),
+            )
         elif op == "anim_transition":
             add(bp, gid, "node", nid, "transitions_to_state", "anim_state", sem.get("next_state", ""), detail={"previous_state": sem.get("previous_state", "")})
         elif op == "anim_save_cached_pose":
