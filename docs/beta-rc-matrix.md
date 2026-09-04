@@ -20,7 +20,7 @@ The command requires a **current, fresh derive**. If the corpus was produced by 
 python scripts\uatool.py derive "E:\Path\Project\.uatool"
 ```
 
-If the RC check reports an old canonical schema (for example structural < 13, animation < 4, or systems < 11), perform a normal Unreal `scan` for that project instead of trying to repair the corpus with Python.
+If the RC check reports a genuinely old canonical schema (for example structural < 13, systems < 11, or animation < 3), perform a normal Unreal `scan` for that project instead of trying to repair the corpus with Python. Animation schema 3 is still current for a project whose `motion_warping` capability is explicitly unavailable; schema 4 is required when authored Motion Warping is present.
 
 ## Current beta baseline
 
@@ -38,15 +38,21 @@ capabilities=1
 
 Every RC record also requires tool version `1.0.0-beta.1` and validated engine `UE 5.8.2` in `capabilities.json`.
 
-The table above is the **tool-current schema contract**, not a claim that every
-representative project contains authored data for every content-dependent
-companion pass. `mesh` and `world_geometry` are optional per corpus: if the
-corresponding capability family is available, the observed schema must equal
-the current version above; if the capability family is explicitly
-`external_or_excluded` because the project has no authored candidates, the
-corpus may report schema `0`. Any other nonzero version is rejected. Core
-scanner, derived and capability schemas remain exact requirements for every RC
-record.
+The table above is the **tool-current maximum/current schema contract**, not a
+claim that every representative project contains authored data for every
+content-dependent extension or companion pass.
+
+- `animation=4` is the Motion Warping extension over the valid full animation
+  schema-3 baseline. If the `motion_warping` capability is available, the
+  corpus must report animation schema 4. If that family is explicitly
+  unavailable / `external_or_excluded`, exactly animation schema 3 is valid.
+  Older animation schemas still fail.
+- `mesh` and `world_geometry` are independent optional companion passes. If
+  their capability family is available, the observed schema must equal the
+  current version above; if the family is explicitly unavailable /
+  `external_or_excluded`, schema 0 is valid. Other nonzero versions fail.
+- Structural, world, VFX, systems, derived and capability schemas remain exact
+  requirements for every full RC record.
 
 ## Profiles
 
@@ -75,7 +81,7 @@ pose_search_databases                                  >= 1
 
 Purpose: broad systems, VFX, audio, materials, Sequencer, gameplay data and Gameplay Tags.
 
-Requires representative first-class/depth-pending families plus non-empty LevelSequence, audio, material-expression, VFX, DataTable, Gameplay Tag and project-edge streams.
+Requires representative first-class/depth-pending families plus non-empty LevelSequence, audio, material-expression, VFX, DataTable and project-edge streams. Gameplay Tags are gated by the manager-backed project model: the required `gameplay_tags` capability must be available and `gameplay_tag_settings.jsonl` must contain exactly one project settings row. The older `gameplay_tags.jsonl` stream represents GameplayTag DataTable rows and is legitimately empty in validated ContentExamples corpora.
 
 ### `citysample`
 
