@@ -696,6 +696,7 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
     delegate_operations = {
         "delegate_bind",
         "delegate_assign",
+        "delegate_unbind",
         "delegate_create",
         "delegate_call",
         "delegate_clear",
@@ -724,6 +725,9 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
     delegate_mismatches = collections.Counter()
     delegate_dispatcher_node_count = 0
     delegate_exact_dispatcher_identity_count = 0
+    delegate_member_guid_count = 0
+    delegate_self_context_count = 0
+    delegate_external_context_count = 0
 
     def delegate_semantic(node: dict) -> dict:
         value = node.get("semantic", {})
@@ -737,10 +741,17 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
         sem = delegate_semantic(node)
         delegate_name = str(sem.get("delegate_name", "") or "")
         delegate_owner = str(sem.get("delegate_owner", "") or "")
+        if str(sem.get("delegate_member_guid", "") or ""):
+            delegate_member_guid_count += 1
+        if sem.get("delegate_self_context") is True:
+            delegate_self_context_count += 1
+        elif sem.get("delegate_self_context") is False:
+            delegate_external_context_count += 1
         if delegate_name and delegate_owner:
             status = "exact_owner_and_name"
             delegate_exact_dispatcher_identity_count += 1
-            delegate_dispatcher_identities[(delegate_owner, delegate_name)][operation] += 1
+            identity = (delegate_owner, delegate_name.casefold())
+            delegate_dispatcher_identities[identity][operation] += 1
             delegate_dispatcher_operations[
                 f"{operation} :: {delegate_owner}::{delegate_name}"
             ] += 1
