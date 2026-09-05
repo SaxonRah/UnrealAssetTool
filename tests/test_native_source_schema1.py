@@ -76,7 +76,8 @@ class NativeSourceSchema1Test(unittest.TestCase):
                 """
                 #include "../Public/Api.h"
 
-                typedef struct HRPoint { int x; int y; } HRPoint;
+                typedef struct { int x; int y; } HRPoint;
+                typedef enum { RawIdle, RawActive } HRRawState;
                 static int g_counter = 0;
 
                 static int helper(int x)
@@ -183,8 +184,14 @@ class NativeSourceSchema1Test(unittest.TestCase):
             self.assertIn(("enum_class", "EThingState"), by_kind_name)
             self.assertNotIn(("method", "TEXT"), by_kind_name)
             self.assertNotIn(("function", "abort"), by_kind_name)
-            self.assertIn(("struct", "HRPoint"), by_kind_name)
             self.assertIn(("typedef", "HRPoint"), by_kind_name)
+            self.assertIn(("typedef", "HRRawState"), by_kind_name)
+            self.assertNotIn(("typedef", "struct"), by_kind_name)
+            self.assertNotIn(("typedef", "enum"), by_kind_name)
+            self.assertIn(("field", "x"), by_kind_name)
+            self.assertIn(("field", "y"), by_kind_name)
+            self.assertNotIn(("global", "x"), by_kind_name)
+            self.assertNotIn(("global", "y"), by_kind_name)
             self.assertIn(("global", "g_counter"), by_kind_name)
             self.assertIn(("function", "helper"), by_kind_name)
             self.assertIn(("function", "DoRaw"), by_kind_name)
