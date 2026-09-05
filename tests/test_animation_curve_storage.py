@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import sys
 import tempfile
@@ -99,6 +100,59 @@ class AnimationCurveStorageTest(unittest.TestCase):
             second = curve_storage.compact(path)
             self.assertFalse(second["rewritten"])
             self.assertEqual(path.read_bytes(), before)
+
+    def test_manifest_read_and_database_load_are_read_only_after_prepare(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir)
+            original = [
+                legacy_key("/Game/A.A", "Speed", 0, 0.0, 1.0),
+                legacy_key("/Game/A.A", "Speed", 1, 1.0, 2.0),
+            ]
+            write_jsonl(output / "animation_curve_keys.jsonl", original)
+            (output / "animation_manifest.json").write_text(
+                json.dumps({
+                    "schema_version": 1,
+                    "success": True,
+                    "error": "",
+                    "files": ["animation_curve_keys.jsonl"],
+                    "counts": {},
+                }, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            (output / "animation_deep_manifest.json").write_text(
+                json.dumps({
+                    "schema_version": 1,
+                    "success": True,
+                    "error": "",
+                    "files": ["animation_curve_keys.jsonl"],
+                    "counts": {"animation_curve_keys": len(original)},
+                }, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            for filename in animation.DEEP_RAW_FILES:
+                if filename not in {"animation_deep_manifest.json", "animation_curve_keys.jsonl"}:
+                    (output / filename).write_text("", encoding="utf-8")
+
+            animation.prepare_output(output, rows)
+            manifest_path = output / "animation_manifest.json"
+            frozen = 1_700_000_000_000_000_000
+            os.utime(manifest_path, ns=(frozen, frozen))
+            before = manifest_path.read_bytes()
+
+            manifest = animation.read_manifest(output)
+            self.assertIsNotNone(manifest)
+            self.assertEqual(manifest_path.read_bytes(), before)
+            self.assertEqual(manifest_path.stat().st_mtime_ns, frozen)
+
+            conn = sqlite3.connect(":memory:")
+            try:
+                animation.create_schema(conn)
+                animation.load_database(conn, output, rows)
+            finally:
+                conn.close()
+
+            self.assertEqual(manifest_path.read_bytes(), before)
+            self.assertEqual(manifest_path.stat().st_mtime_ns, frozen)
 
     def test_schema2_upgrade_and_sqlite_load_preserve_logical_key_rows(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
