@@ -25,6 +25,7 @@ STAMP_VERSION = 1
 
 NON_DERIVED_SCRIPTS = frozenset({
     "uatool_blueprint_program_report.py",
+    "uatool_inspect.py",
     "uatool_gas_capture.py",
     "uatool_gas_evidence.py",
     "uatool_mover_report.py",

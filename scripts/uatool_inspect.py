@@ -678,7 +678,11 @@ def _cli(argv: list[str]) -> int:
         candidate_limit=args.candidate_limit,
     )
     if args.json:
-        print(json.dumps(report, ensure_ascii=False, indent=2))
+        # Keep machine-readable output safe under Windows redirection/pipes.
+        # JSON Unicode escapes round-trip exactly while avoiding dependence on
+        # the active stdout text encoding when output is not attached to a
+        # Unicode-aware console.
+        print(json.dumps(report, ensure_ascii=True, indent=2))
     else:
         print_report(report)
     return 0 if report.get("found") else 2
