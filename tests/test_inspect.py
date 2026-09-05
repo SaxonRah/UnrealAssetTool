@@ -15,6 +15,7 @@ SCRIPTS = ROOT / "scripts"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
+import uatool_derived_freshness as freshness
 import uatool_inspect as inspect_report
 
 
@@ -283,6 +284,9 @@ class InspectReportTest(unittest.TestCase):
             json.loads(payload)["canonical_facts"][0]["record"]["display_name"],
             "Café → テスト",
         )
+
+    def test_inspect_is_read_only_for_derived_freshness(self) -> None:
+        self.assertIn("uatool_inspect.py", freshness.NON_DERIVED_SCRIPTS)
 
     def test_install_wraps_runtime_without_creating_an_alternate_launcher(self) -> None:
         fake = types.SimpleNamespace(main=lambda: 17)
