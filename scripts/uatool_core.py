@@ -4207,7 +4207,10 @@ def _asset_class_maps(output: Path) -> tuple[dict[str, str], dict[str, str], dic
     return classes, package_to_object, generated_to_bp
 
 
-def derive_visual(output: Path) -> tuple[list[dict], list[dict], list[dict], list[dict], list[dict], list[dict]]:
+def derive_visual(
+    output: Path,
+    blueprint_relation_rows: list[dict] | None = None,
+) -> tuple[list[dict], list[dict], list[dict], list[dict], list[dict], list[dict]]:
     classes, package_to_object, generated_to_bp = _asset_class_maps(output)
     relations = []
     seen = set()
@@ -4311,8 +4314,16 @@ def derive_visual(output: Path) -> tuple[list[dict], list[dict], list[dict], lis
             elif "Texture" in cls:
                 add("material",asset,p.get("owner_kind","material_object"),owner,"references_texture","asset",target,{"property":prop})
 
-    # Promote Blueprint -> visual assets from existing factual BP relations.
-    for r in iter_jsonl(output / "blueprint_relations.jsonl"):
+    # Promote Blueprint -> visual assets from factual Blueprint relations. Normal
+    # derive_output() passes the same-pass in-memory rows so this step never
+    # depends on stale derived state from a previous run. The disk fallback is
+    # retained for callers that intentionally invoke derive_visual() alone.
+    blueprint_relation_rows = (
+        blueprint_relation_rows
+        if blueprint_relation_rows is not None
+        else list(iter_jsonl(output / "blueprint_relations.jsonl"))
+    )
+    for r in blueprint_relation_rows:
         target=r.get("target",""); cls=classes.get(target,"")
         if cls == "/Script/PCG.PCGGraph":
             add("blueprint",r.get("blueprint_path",r.get("asset_path","")),r.get("source_kind","blueprint_node"),r.get("source_id",""),"uses_pcg_graph","pcg_graph",target,{"via":r.get("relation","")})
@@ -4379,7 +4390,9 @@ def derive_output(output: Path) -> dict[str, int]:
     summaries = derive_blueprint_summaries(output, relations, functions, events)
     ai_relations = derive_ai_relations(output)
     ai_summaries = derive_ai_summaries(output, ai_relations)
-    visual_relations, pcg_parameters, material_parameters, pcg_context, material_context, visual_summaries = derive_visual(output)
+    visual_relations, pcg_parameters, material_parameters, pcg_context, material_context, visual_summaries = derive_visual(
+        output, relations
+    )
     counts = {
         "rigvm_editor_links": _write_jsonl(output / "rigvm_editor_links.jsonl", rigvm_links),
         "blueprint_functions": _write_jsonl(output / "blueprint_functions.jsonl", functions),
