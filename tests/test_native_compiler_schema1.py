@@ -167,6 +167,27 @@ class NativeCompilerSchema1Test(unittest.TestCase):
             self.assertIn("missing project translation units", error)
             self.assertIn("raw.c", error)
 
+    def test_launcher_engine_resolves_ubt_dll_with_bundled_dotnet(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            engine = Path(temp) / "UE_5.8" / "Engine"
+            ubt = engine / "Binaries" / "DotNET" / "UnrealBuildTool" / "UnrealBuildTool.dll"
+            dotnet = (
+                engine
+                / "Binaries"
+                / "ThirdParty"
+                / "DotNet"
+                / "10.0.0"
+                / "win-x64"
+                / "dotnet.exe"
+            )
+            ubt.parent.mkdir(parents=True)
+            dotnet.parent.mkdir(parents=True)
+            ubt.write_bytes(b"synthetic")
+            dotnet.write_bytes(b"synthetic")
+
+            command = native_compiler._resolve_ubt_command(engine)
+            self.assertEqual(command, [str(dotnet), str(ubt)])
+
     def test_core_exposes_focused_compiler_capture(self) -> None:
         core = (SCRIPTS / "uatool_core.py").read_text(encoding="utf-8")
         self.assertIn("import uatool_native_compiler as native_compiler", core)
