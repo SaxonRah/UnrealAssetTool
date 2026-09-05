@@ -106,14 +106,20 @@ def _validate_unreal_path_order(paths: list[str]) -> None:
 def validate_capture(output: Path) -> dict:
     output = Path(output)
     manifest = _manifest(output)
-    if int(manifest.get("schema_version", 0) or 0) != 1:
-        raise RuntimeError(f"StaticMesh capture expected manifest schema 1, got {manifest.get('schema_version')}")
+    if int(manifest.get("schema_version", 0) or 0) != 2:
+        raise RuntimeError(f"StaticMesh capture expected manifest schema 2, got {manifest.get('schema_version')}")
     if not bool(manifest.get("success", False)):
         raise RuntimeError(f"StaticMesh capture failed: {manifest.get('error', '')}")
     if not bool(manifest.get("diagnostic_only", False)):
         raise RuntimeError("StaticMesh capture must remain diagnostic_only=true")
     if bool(manifest.get("semantic_promotion", True)) or bool(manifest.get("schema_promotion", True)):
         raise RuntimeError("StaticMesh capture must not promote semantic/schema state")
+    expected_struct_policy = (
+        "direct_safe_scalar_leaves_only: bool,numeric,enum,name,string,text; "
+        "object/container/delegate/nested-struct members skipped"
+    )
+    if str(manifest.get("selected_struct_field_policy", "") or "") != expected_struct_policy:
+        raise RuntimeError("StaticMesh capture selected-struct field policy mismatch")
     for key in ("runtime_state_captured", "render_buffers_captured", "nanite_resources_captured", "runtime_physics_state_captured", "maps_loaded"):
         if bool(manifest.get(key, True)):
             raise RuntimeError(f"StaticMesh capture contract requires {key}=false")
