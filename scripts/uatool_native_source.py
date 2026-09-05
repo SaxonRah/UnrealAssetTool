@@ -817,6 +817,18 @@ def _parse_declarations_and_calls(
             i += 1
             continue
 
+        if (
+            tokens[i].kind == "identifier"
+            and re.search(r"(?:^|_)EXTERN_C_(?:BEGIN|END)$", tokens[i].text)
+        ):
+            # Portable C headers commonly wrap declarations in macro sentinels
+            # such as HRSIM_EXTERN_C_BEGIN / HRSIM_EXTERN_C_END. Without macro
+            # expansion the BEGIN token otherwise becomes a fake type prefix
+            # on the following typedef. Treat these source-level linkage
+            # sentinels as transparent boundaries.
+            i += 1
+            continue
+
         # Find the next top-level statement delimiter.
         paren = bracket = 0
         j = i
