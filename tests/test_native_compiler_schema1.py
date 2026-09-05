@@ -91,6 +91,9 @@ class NativeCompilerSchema1Test(unittest.TestCase):
             output.mkdir()
             ue_cpp, raw_c = self.seed_project(project, output)
 
+            rsp = output / "Bridge.rsp"
+            rsp.write_text('/TP\n/I"C:/UE/Engine/Source"\n/DTEST=1\n', encoding="utf-8")
+
             database = output / "compile_commands.json"
             database.write_text(
                 json.dumps(
@@ -98,7 +101,7 @@ class NativeCompilerSchema1Test(unittest.TestCase):
                         {
                             "directory": str(project),
                             "file": str(ue_cpp),
-                            "command": f'"C:/VS/cl.exe" /c "{ue_cpp}" @"C:/tmp/Bridge.rsp"',
+                            "command": f'"C:/VS/cl.exe" /c "{ue_cpp}" @"{rsp}"',
                         },
                         {
                             "directory": str(project),
@@ -134,14 +137,58 @@ class NativeCompilerSchema1Test(unittest.TestCase):
             bridge = next(row for row in units if row["source_path"].endswith("Bridge.cpp"))
             raw = next(row for row in units if row["source_path"].endswith("raw.c"))
             self.assertEqual(bridge["compiler_family"], "msvc")
-            self.assertEqual(bridge["response_files"], ["C:/tmp/Bridge.rsp"])
+            self.assertEqual(bridge["response_files"], [str(rsp)])
+            self.assertEqual(len(bridge["response_file_ids"]), 1)
+            self.assertTrue(bridge["response_files_snapshotted"])
             self.assertFalse(bridge["arguments_exact"])
             self.assertTrue(bridge["command_exact"])
             self.assertTrue(raw["arguments_exact"])
             self.assertEqual(raw["arguments"][1], "/TC")
 
+            responses = list(
+                native_compiler._rows(output / "native_compiler_response_files.jsonl")
+            )
+            self.assertEqual(len(responses), 1)
+            response = responses[0]
+            self.assertEqual(response["compile_unit_id"], bridge["compile_unit_id"])
+            self.assertEqual(response["path_spelling"], str(rsp))
+            self.assertEqual(response["content"], '/TP\n/I"C:/UE/Engine/Source"\n/DTEST=1\n')
+            self.assertEqual(response["encoding"], "utf-8")
+            self.assertEqual(
+                response["sha256"],
+                __import__("hashlib").sha256(rsp.read_bytes()).hexdigest(),
+            )
+            self.assertEqual(manifest["counts"]["response_files"], 1)
+
             for filename in native_compiler.EMPTY_SCHEMA_STREAMS:
                 self.assertEqual(list(native_compiler._rows(output / filename)), [])
+
+    def test_ingest_rejects_missing_response_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+            output = project / ".uatool-native-compiler"
+            output.mkdir()
+            ue_cpp, raw_c = self.seed_project(project, output)
+
+            database = output / "compile_commands.json"
+            database.write_text(
+                json.dumps([
+                    {
+                        "directory": str(project),
+                        "file": str(ue_cpp),
+                        "command": f'"C:/VS/cl.exe" /c "{ue_cpp}" @"{output / "Missing.rsp"}"',
+                    },
+                    {
+                        "directory": str(project),
+                        "file": str(raw_c),
+                        "command": f'"C:/VS/cl.exe" /TC /c "{raw_c}"',
+                    },
+                ]),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "missing response file"):
+                native_compiler.ingest_database(project, output, database)
 
     def test_validator_rejects_missing_translation_unit(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
