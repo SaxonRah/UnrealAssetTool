@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Iterable, Iterator
 
 import uatool_native as native_cpp
+import uatool_native_source as native_source
 
 DB_NAME = "uat.db"
 MODULE_NAME = "UnrealAssetTool"
@@ -5569,6 +5570,13 @@ DEFAULT_BUNDLE_FILES = (
     "native_properties.jsonl",
     "native_enums.jsonl",
     "native_enum_values.jsonl",
+    "native_source_manifest.json",
+    "native_source_files.jsonl",
+    "native_source_includes.jsonl",
+    "native_source_declarations.jsonl",
+    "native_source_parameters.jsonl",
+    "native_source_calls.jsonl",
+    "native_source_reflection_joins.jsonl",
     "assets.jsonl",
     "asset_dependencies.jsonl",
     "behavior_trees.jsonl",
@@ -5693,7 +5701,9 @@ def native_capture(args: argparse.Namespace) -> int:
     output.mkdir(parents=True, exist_ok=True)
 
     native_manifest_path = output / native_cpp.MANIFEST_FILE
+    native_source_manifest_path = output / native_source.MANIFEST_FILE
     native_manifest_path.unlink(missing_ok=True)
+    native_source_manifest_path.unlink(missing_ok=True)
 
     editor = require_editor(args.editor)
     command = [
@@ -5735,6 +5745,17 @@ def native_capture(args: argparse.Namespace) -> int:
             print(f"latest Unreal log: {latest_log}", file=sys.stderr)
         return 24
 
+    try:
+        native_source.capture(project.parent, output)
+    except (OSError, UnicodeError, ValueError, RuntimeError) as exc:
+        print(f"ERROR: native source capture failed: {exc}", file=sys.stderr)
+        return 25
+
+    source_error = native_source.validation_error(output)
+    if source_error:
+        print(f"ERROR: native source pass incomplete: {source_error}", file=sys.stderr)
+        return 25
+
     manifest = native_cpp.read_manifest(output) or {}
     counts = manifest.get("counts", {}) if isinstance(manifest, dict) else {}
     print(
@@ -5755,6 +5776,23 @@ def native_capture(args: argparse.Namespace) -> int:
         )
     )
     print(f"native schema: {manifest.get('schema_version', 0)}")
+    source_manifest = native_source.read_manifest(output) or {}
+    source_counts = source_manifest.get("counts", {}) if isinstance(source_manifest, dict) else {}
+    print(
+        "native source capture complete: "
+        + " ".join(
+            f"{name}={source_counts.get(name, 0)}"
+            for name in (
+                "files",
+                "includes",
+                "declarations",
+                "parameters",
+                "calls",
+                "reflection_joins",
+            )
+        )
+    )
+    print(f"native source schema: {source_manifest.get('schema_version', 0)}")
     print(f"output: {output}")
     return 0
 
@@ -5776,12 +5814,14 @@ def scan(args: argparse.Namespace) -> int:
     vfx_manifest_path = output / "vfx_manifest.json"
     systems_manifest_path = output / "systems_manifest.json"
     native_manifest_path = output / "native_manifest.json"
+    native_source_manifest_path = output / native_source.MANIFEST_FILE
     for stale_manifest in (
         manifest_path,
         world_manifest_path,
         vfx_manifest_path,
         systems_manifest_path,
         native_manifest_path,
+        native_source_manifest_path,
     ):
         if stale_manifest.exists():
             stale_manifest.unlink()
@@ -5851,6 +5891,20 @@ def scan(args: argparse.Namespace) -> int:
             if latest_log is not None:
                 print(f"latest Unreal log: {latest_log}", file=sys.stderr)
             return 24
+
+        try:
+            native_source.capture(project.parent, output)
+        except (OSError, UnicodeError, ValueError, RuntimeError) as exc:
+            print(f"ERROR: native source capture failed: {exc}", file=sys.stderr)
+            return 25
+
+        native_source_error = native_source.validation_error(output)
+        if native_source_error:
+            print(
+                f"ERROR: native source pass incomplete: {native_source_error}",
+                file=sys.stderr,
+            )
+            return 25
 
         print("running world pass:", subprocess.list2cmdline(world_command))
         world_result = subprocess.run(world_command, check=False)
