@@ -1,3 +1,4 @@
+import importlib.util
 import json
 import sys
 import tempfile
@@ -9,7 +10,14 @@ SCRIPTS = ROOT / "scripts"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
-import uatool_core as core
+CORE_SPEC = importlib.util.spec_from_file_location(
+    "uatool_core_visual_same_pass_test",
+    SCRIPTS / "uatool_core.py",
+)
+if CORE_SPEC is None or CORE_SPEC.loader is None:
+    raise RuntimeError("failed to load private uatool_core test module")
+core = importlib.util.module_from_spec(CORE_SPEC)
+CORE_SPEC.loader.exec_module(core)
 
 
 def write_jsonl(path: Path, rows: list[dict]) -> None:
