@@ -384,14 +384,20 @@ def _name_before_paren(tokens: list[Token], open_index: int) -> tuple[str, int] 
     parts = [tokens[i].text]
     name_start = i
     i -= 1
+
+    # Destructors place '~' between the qualification and the final identifier:
+    # MyClass::~MyClass(). Consume it before walking the preceding :: chain so
+    # the spelling remains fully qualified and no fake return type is created.
+    if i >= 0 and tokens[i].text == "~":
+        parts.insert(0, "~")
+        name_start = i
+        i -= 1
+
     while i >= 1 and tokens[i].text == "::" and tokens[i - 1].kind == "identifier":
         parts.insert(0, "::")
         parts.insert(0, tokens[i - 1].text)
         name_start = i - 1
         i -= 2
-    if i >= 0 and tokens[i].text == "~":
-        parts.insert(0, "~")
-        name_start = i
     return "".join(parts), name_start
 
 
@@ -539,17 +545,44 @@ def _simple_globals(tokens: list[Token], start: int, end: int) -> list[tuple[str
     if not parts:
         return []
 
+    def declarator_name_index(left: list[Token]) -> int | None:
+        # Direct function-pointer declarators are outside this simple-variable
+        # path. Reject them rather than guessing.
+        if any(t.text in {"(", ")"} for t in left):
+            return None
+
+        # Only identifiers at the declarator's outer level can be the variable
+        # name. This avoids choosing an array bound such as
+        # HRSIM_REGISTRY_KIND_COUNT from "registries[HRSIM_...]".
+        bracket = brace = 0
+        candidates: list[int] = []
+        for index, token in enumerate(left):
+            text = token.text
+            if text == "[":
+                bracket += 1
+                continue
+            if text == "]":
+                bracket = max(0, bracket - 1)
+                continue
+            if text == "{":
+                brace += 1
+                continue
+            if text == "}":
+                brace = max(0, brace - 1)
+                continue
+            if text == ":" and not (bracket or brace):
+                # Bitfield widths can contain identifiers; the declarator name
+                # must be before the top-level ':'.
+                break
+            if token.kind == "identifier" and not (bracket or brace):
+                candidates.append(index)
+        return candidates[-1] if candidates else None
+
     def split_decl(part: list[Token]):
         eq_index = _top_level_token_index(part, "=")
         eq = len(part) if eq_index is None else eq_index
         left = part[:eq]
-        if any(t.text in {"(", ")"} for t in left):
-            return None
-        name_index = None
-        for index in range(len(left) - 1, -1, -1):
-            if left[index].kind == "identifier":
-                name_index = index
-                break
+        name_index = declarator_name_index(left)
         if name_index is None:
             return None
         return (
@@ -566,6 +599,7 @@ def _simple_globals(tokens: list[Token], start: int, end: int) -> list[tuple[str
         return []
 
     first_prefix = first_left[:first_name_index]
+    first_suffix = first_left[first_name_index + 1:]
     # In "char *a, *b", "char" is shared while "*" belongs to each
     # declarator. Keep trailing pointer/reference/cv tokens declarator-local.
     base_end = len(first_prefix)
@@ -582,7 +616,7 @@ def _simple_globals(tokens: list[Token], start: int, end: int) -> list[tuple[str
     result = [
         (
             first_left[first_name_index].text,
-            _tokens_text(shared_type + first_decl_prefix),
+            _tokens_text(shared_type + first_decl_prefix + first_suffix),
             _tokens_text(first_initializer),
         )
     ]
@@ -593,10 +627,11 @@ def _simple_globals(tokens: list[Token], start: int, end: int) -> list[tuple[str
             continue
         left, name_index, initializer = parsed
         declarator_prefix = left[:name_index]
+        declarator_suffix = left[name_index + 1:]
         result.append(
             (
                 left[name_index].text,
-                _tokens_text(shared_type + declarator_prefix),
+                _tokens_text(shared_type + declarator_prefix + declarator_suffix),
                 _tokens_text(initializer),
             )
         )
