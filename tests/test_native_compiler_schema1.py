@@ -164,8 +164,89 @@ class NativeCompilerSchema1Test(unittest.TestCase):
             native_compiler.ingest_database(project, output, database)
             error = native_compiler.validation_error(output)
             self.assertIsNotNone(error)
-            self.assertIn("missing project translation units", error)
+            self.assertIn("missing translation units from an active module", error)
             self.assertIn("raw.c", error)
+
+    def test_target_inactive_module_is_reported_not_failed(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+            output = project / ".uatool-native-compiler"
+            output.mkdir()
+            ue_cpp, raw_c = self.seed_project(project, output)
+
+            editor_module = project / "Plugins" / "HR_RAI" / "Source" / "HRRAIEditor"
+            editor_private = editor_module / "Private"
+            editor_private.mkdir(parents=True)
+            (editor_module / "HRRAIEditor.Build.cs").write_text("// synthetic editor\n", encoding="utf-8")
+            editor_cpp_a = editor_private / "EditorA.cpp"
+            editor_cpp_b = editor_private / "EditorB.cpp"
+            editor_cpp_a.write_text("int editor_a(void) { return 1; }\n", encoding="utf-8")
+            editor_cpp_b.write_text("int editor_b(void) { return 2; }\n", encoding="utf-8")
+
+            modules = list(native_compiler._rows(output / "native_modules.jsonl"))
+            modules.append({
+                "module_name": "HRRAIEditor",
+                "build_cs": "Plugins/HR_RAI/Source/HRRAIEditor/HRRAIEditor.Build.cs",
+                "loaded": False,
+            })
+            write_jsonl(output / "native_modules.jsonl", modules)
+
+            source_rows = list(native_compiler._rows(output / "native_source_files.jsonl"))
+            source_rows.extend([
+                {
+                    "module_name": "HRRAIEditor",
+                    "path": "Plugins/HR_RAI/Source/HRRAIEditor/Private/EditorA.cpp",
+                    "module_relative_path": "Private/EditorA.cpp",
+                    "language": "cpp",
+                    "size": editor_cpp_a.stat().st_size,
+                    "line_count": 1,
+                    "sha256": "ea",
+                    "evidence_level": "source_syntax",
+                },
+                {
+                    "module_name": "HRRAIEditor",
+                    "path": "Plugins/HR_RAI/Source/HRRAIEditor/Private/EditorB.cpp",
+                    "module_relative_path": "Private/EditorB.cpp",
+                    "language": "cpp",
+                    "size": editor_cpp_b.stat().st_size,
+                    "line_count": 1,
+                    "sha256": "eb",
+                    "evidence_level": "source_syntax",
+                },
+            ])
+            write_jsonl(output / "native_source_files.jsonl", source_rows)
+
+            database = output / "compile_commands.json"
+            database.write_text(
+                json.dumps([
+                    {
+                        "directory": str(project),
+                        "file": str(ue_cpp),
+                        "command": f'"C:/VS/cl.exe" /c "{ue_cpp}"',
+                    },
+                    {
+                        "directory": str(project),
+                        "file": str(raw_c),
+                        "command": f'"C:/VS/cl.exe" /TC /c "{raw_c}"',
+                    },
+                ]),
+                encoding="utf-8",
+            )
+
+            manifest = native_compiler.ingest_database(project, output, database)
+            self.assertIsNone(native_compiler.validation_error(output))
+            self.assertEqual(manifest["active_modules"], ["HRRAI"])
+            self.assertEqual(manifest["inactive_modules"], ["HRRAIEditor"])
+            self.assertEqual(manifest["counts"]["expected_translation_units"], 2)
+            self.assertEqual(manifest["counts"]["inactive_translation_units"], 2)
+            self.assertEqual(manifest["missing_translation_units"], [])
+            self.assertEqual(
+                set(manifest["inactive_translation_units"]),
+                {
+                    "Plugins/HR_RAI/Source/HRRAIEditor/Private/EditorA.cpp",
+                    "Plugins/HR_RAI/Source/HRRAIEditor/Private/EditorB.cpp",
+                },
+            )
 
     def test_launcher_engine_resolves_ubt_dll_with_bundled_dotnet(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
