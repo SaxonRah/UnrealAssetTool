@@ -298,3 +298,303 @@ def _top_level_paren_pairs(tokens: list[Token], start: int, end: int) -> list[tu
     for i in range(start, end):
         t = tokens[i].text
         if t == "{":
+            brace += 1
+        elif t == "}":
+            brace = max(0, brace - 1)
+        elif t == "[":
+            bracket += 1
+        elif t == "]":
+            bracket = max(0, bracket - 1)
+        elif t == "(" and brace == 0 and bracket == 0:
+            stack.append(i)
+        elif t == ")" and brace == 0 and bracket == 0 and stack:
+            left = stack.pop()
+            if not stack:
+                pairs.append((left, i))
+    return pairs
+
+
+def _name_before_paren(tokens: list[Token], open_index: int) -> tuple[str, int] | None:
+    i = open_index - 1
+    if i < 0:
+        return None
+    if tokens[i].kind != "identifier":
+        return None
+    parts = [tokens[i].text]
+    name_start = i
+    i -= 1
+    while i >= 1 and tokens[i].text == "::" and tokens[i - 1].kind == "identifier":
+        parts.insert(0, "::")
+        parts.insert(0, tokens[i - 1].text)
+        name_start = i - 1
+        i -= 2
+    if i >= 0 and tokens[i].text == "~":
+        parts.insert(0, "~")
+        name_start = i
+    return "".join(parts), name_start
+
+
+def _suffix_is_functionish(tokens: list[Token], close_index: int, end: int) -> bool:
+    i = close_index + 1
+    while i < end:
+        text = tokens[i].text
+        if text in QUALIFIER_WORDS:
+            i += 1
+            continue
+        if text == "->":
+            return True
+        if text == "[":
+            close = _matching(tokens, i, "[", "]")
+            if close is None or close >= end:
+                return False
+            i = close + 1
+            continue
+        if tokens[i].kind == "identifier" and text.isupper():
+            i += 1
+            continue
+        return False
+    return True
+
+
+def _function_signature(tokens: list[Token], start: int, end: int, allow_bare: bool = False):
+    pairs = _top_level_paren_pairs(tokens, start, end)
+    for open_index, close_index in reversed(pairs):
+        named = _name_before_paren(tokens, open_index)
+        if not named:
+            continue
+        name, name_start = named
+        base_name = name.split("::")[-1].lstrip("~")
+        if base_name in CONTROL_WORDS:
+            continue
+        if not _suffix_is_functionish(tokens, close_index, end):
+            continue
+        prefix = tokens[start:name_start]
+        # A bare macro invocation such as UFUNCTION(...) before a declaration
+        # does not become the function name because the real parameter list is
+        # the later top-level parenthesis selected above.
+        if not prefix and "::" not in name and not allow_bare:
+            continue
+        return name, name_start, open_index, close_index
+    return None
+
+
+def _split_parameters(tokens: list[Token]) -> list[list[Token]]:
+    if not tokens:
+        return []
+    result: list[list[Token]] = []
+    start = 0
+    paren = bracket = brace = angle = 0
+    for i, token in enumerate(tokens):
+        t = token.text
+        if t == "(":
+            paren += 1
+        elif t == ")":
+            paren = max(0, paren - 1)
+        elif t == "[":
+            bracket += 1
+        elif t == "]":
+            bracket = max(0, bracket - 1)
+        elif t == "{":
+            brace += 1
+        elif t == "}":
+            brace = max(0, brace - 1)
+        elif t == "<":
+            angle += 1
+        elif t == ">" and angle:
+            angle -= 1
+        elif t == "," and not (paren or bracket or brace or angle):
+            result.append(tokens[start:i])
+            start = i + 1
+    result.append(tokens[start:])
+    return [part for part in result if part]
+
+
+def _parameter_row(
+    declaration_id: str,
+    index: int,
+    tokens: list[Token],
+) -> dict:
+    default_at = next((i for i, t in enumerate(tokens) if t.text == "="), None)
+    core = tokens if default_at is None else tokens[:default_at]
+    default = [] if default_at is None else tokens[default_at + 1:]
+    if len(core) == 1 and core[0].text == "void":
+        name = ""
+        type_text = "void"
+    elif any(t.text == "..." for t in core):
+        name = ""
+        type_text = "..."
+    else:
+        name_index = None
+        for i in range(len(core) - 1, -1, -1):
+            if core[i].kind == "identifier":
+                if i > 0 and core[i - 1].text == "::":
+                    continue
+                name_index = i
+                break
+        if name_index is None:
+            name = ""
+            type_text = _tokens_text(core)
+        else:
+            name = core[name_index].text
+            type_tokens = core[:name_index] + core[name_index + 1:]
+            type_text = _tokens_text(type_tokens)
+            if not type_text:
+                # An unnamed single-token parameter type is more likely than a
+                # parameter whose type is absent.
+                type_text = name
+                name = ""
+    first = tokens[0]
+    last = tokens[-1]
+    return {
+        "parameter_id": _stable_id(declaration_id, index),
+        "declaration_id": declaration_id,
+        "parameter_index": index,
+        "name": name,
+        "type_text": type_text,
+        "default_text": _tokens_text(default),
+        "variadic": type_text == "...",
+        "start_line": first.line,
+        "start_column": first.column,
+        "end_line": last.line,
+        "end_column": last.column + max(0, len(last.text) - 1),
+        "evidence_level": EVIDENCE_LEVEL,
+    }
+
+
+def _simple_global(tokens: list[Token], start: int, end: int):
+    body = tokens[start:end]
+    if not body:
+        return None
+    if body[0].text in {"typedef", "using", "static_assert"}:
+        return None
+    if any(t.text in {"(", ")"} for t in body):
+        return None
+    eq = next((i for i, t in enumerate(body) if t.text == "="), len(body))
+    left = body[:eq]
+    name_index = None
+    for i in range(len(left) - 1, -1, -1):
+        if left[i].kind == "identifier":
+            name_index = i
+            break
+    if name_index is None or name_index == 0:
+        return None
+    name = left[name_index].text
+    type_text = _tokens_text(left[:name_index])
+    if not type_text:
+        return None
+    initializer = _tokens_text(body[eq + 1:]) if eq < len(body) else ""
+    return name, type_text, initializer
+
+
+def _type_declaration(tokens: list[Token], start: int, end: int):
+    body = tokens[start:end]
+    if not body:
+        return None
+    type_index = next(
+        (i for i, token in enumerate(body) if token.text in TYPE_WORDS),
+        None,
+    )
+    if type_index is None:
+        return None
+    kind = body[type_index].text
+    i = type_index + 1
+    if kind == "enum" and i < len(body) and body[i].text == "class":
+        kind = "enum_class"
+        i += 1
+    name = ""
+    while i < len(body):
+        token = body[i]
+        if token.kind == "identifier":
+            if token.text.endswith("_API"):
+                i += 1
+                continue
+            name = token.text
+            break
+        i += 1
+    return (kind, name, start + type_index) if name else None
+
+
+def _typedef_declaration(tokens: list[Token], start: int, end: int):
+    body = tokens[start:end]
+    if not body or body[0].text != "typedef":
+        return None
+    for i in range(len(body) - 1, 0, -1):
+        if body[i].kind == "identifier":
+            return body[i].text, _tokens_text(body[1:i])
+    return None
+
+
+def _using_alias(tokens: list[Token], start: int, end: int):
+    body = tokens[start:end]
+    if len(body) < 3 or body[0].text != "using" or body[1].kind != "identifier":
+        return None
+    if not any(t.text == "=" for t in body[2:]):
+        return None
+    eq = next(i for i, t in enumerate(body) if t.text == "=")
+    return body[1].text, _tokens_text(body[eq + 1:])
+
+
+def _call_spelling(tokens: list[Token], name_index: int) -> tuple[str, str]:
+    parts = [tokens[name_index].text]
+    i = name_index - 1
+    kind = "direct_or_macro"
+    while i >= 1 and tokens[i].text in {"::", ".", "->"} and tokens[i - 1].kind == "identifier":
+        op = tokens[i].text
+        parts.insert(0, op)
+        parts.insert(0, tokens[i - 1].text)
+        if op in {".", "->"}:
+            kind = "member_call_syntax"
+        elif kind == "direct_or_macro":
+            kind = "qualified_call_syntax"
+        i -= 2
+    return "".join(parts), kind
+
+
+def _calls_for_function(
+    tokens: list[Token],
+    body_open: int,
+    body_close: int,
+    declaration: dict,
+    path: str,
+    module_name: str,
+) -> list[dict]:
+    result: list[dict] = []
+    i = body_open + 1
+    while i < body_close - 1:
+        token = tokens[i]
+        if token.kind == "identifier" and tokens[i + 1].text == "(":
+            if token.text not in CONTROL_WORDS:
+                spelling, syntax_kind = _call_spelling(tokens, i)
+                call_id = _stable_id(
+                    path,
+                    declaration["declaration_id"],
+                    token.line,
+                    token.column,
+                    spelling,
+                )
+                result.append({
+                    "call_id": call_id,
+                    "module_name": module_name,
+                    "path": path,
+                    "caller_declaration_id": declaration["declaration_id"],
+                    "caller_name": declaration["name"],
+                    "callee_spelling": spelling,
+                    "syntax_kind": syntax_kind,
+                    "start_line": token.line,
+                    "start_column": token.column,
+                    "resolution": "unresolved_source_syntax",
+                    "compiler_resolved": False,
+                    "evidence_level": EVIDENCE_LEVEL,
+                })
+        i += 1
+    return result
+
+
+def _parse_declarations_and_calls(
+    tokens: list[Token],
+    path: str,
+    module_name: str,
+    scope_name: str = "",
+) -> tuple[list[dict], list[dict], list[dict]]:
+    declarations: list[dict] = []
+    parameters: list[dict] = []
