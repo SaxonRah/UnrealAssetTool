@@ -5425,6 +5425,103 @@ def newest_project_log(project: Path) -> Path | None:
         return None
 
 
+
+WORLD_COMPLETION_COUNT_FILES = {
+    "worlds.jsonl": "worlds",
+    "world_levels.jsonl": "levels",
+    "world_actors.jsonl": "actors",
+    "world_components.jsonl": "components",
+    "world_instance_properties.jsonl": "instance_overrides",
+    "world_references.jsonl": "references",
+    "world_data_layers.jsonl": "data_layers",
+    "world_partition_actor_descs.jsonl": "world_partition_actor_descs",
+}
+
+
+def _json_object(path: Path) -> dict | None:
+    if not path.is_file():
+        return None
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _nonblank_line_count(path: Path) -> int:
+    count = 0
+    with path.open("r", encoding="utf-8", errors="strict") as handle:
+        for line in handle:
+            if line.strip():
+                count += 1
+    return count
+
+
+def world_pass_completion_error(output: Path) -> str | None:
+    """Return None only when a nonzero editor exit happened after canonical completion.
+
+    scan() deletes these manifests before launching the current invocation, so
+    their presence here cannot be satisfied by an older successful run.
+    """
+    output = Path(output)
+
+    structural = _json_object(output / "manifest.json")
+    if structural is None:
+        return "current structural manifest is missing or invalid"
+    if int(structural.get("schema_version", 0) or 0) != 13:
+        return (
+            "current structural manifest is not schema 13: "
+            f"{structural.get('schema_version')!r}"
+        )
+
+    world = _json_object(output / "world_manifest.json")
+    if world is None:
+        return "current world manifest is missing or invalid"
+    if int(world.get("schema_version", 0) or 0) != 12:
+        return f"current world manifest is not schema 12: {world.get('schema_version')!r}"
+    if int(world.get("structural_schema_baseline", 0) or 0) != 13:
+        return (
+            "world structural baseline mismatch: "
+            f"{world.get('structural_schema_baseline')!r}"
+        )
+
+    declared_files = world.get("files", [])
+    if not isinstance(declared_files, list):
+        return "world manifest files list is invalid"
+    declared = {str(name) for name in declared_files}
+    counts = world.get("counts", {})
+    if not isinstance(counts, dict):
+        return "world manifest counts object is invalid"
+
+    for filename, count_name in WORLD_COMPLETION_COUNT_FILES.items():
+        if filename not in declared:
+            return f"world manifest does not declare {filename}"
+        path = output / filename
+        if not path.is_file():
+            return f"world output is missing {filename}"
+        try:
+            expected = int(counts.get(count_name, -1))
+            actual = _nonblank_line_count(path)
+        except (OSError, UnicodeError, ValueError, TypeError) as exc:
+            return f"could not validate {filename}: {exc}"
+        if expected < 0:
+            return f"world manifest is missing count {count_name}"
+        if actual != expected:
+            return (
+                f"world output count mismatch for {filename}: "
+                f"rows={actual} manifest={expected}"
+            )
+
+    for filename in ("vfx_manifest.json", "systems_manifest.json"):
+        sidecar = _json_object(output / filename)
+        if sidecar is None:
+            return f"current {filename} is missing or invalid"
+        if not bool(sidecar.get("success", False)):
+            return f"current {filename} reports failure"
+
+    return None
+
+
 def report_editor_failure(project: Path, returncode: int) -> None:
     print(
         f"ERROR: Unreal editor exited with code {returncode} before UnrealAssetTool completed.",
@@ -5570,7 +5667,14 @@ def scan(args: argparse.Namespace) -> int:
     # because manifest.json was left behind by an older invocation.
     manifest_path = output / "manifest.json"
     world_manifest_path = output / "world_manifest.json"
-    for stale_manifest in (manifest_path, world_manifest_path):
+    vfx_manifest_path = output / "vfx_manifest.json"
+    systems_manifest_path = output / "systems_manifest.json"
+    for stale_manifest in (
+        manifest_path,
+        world_manifest_path,
+        vfx_manifest_path,
+        systems_manifest_path,
+    ):
         if stale_manifest.exists():
             stale_manifest.unlink()
 
@@ -5635,12 +5739,24 @@ def scan(args: argparse.Namespace) -> int:
         print("running world pass:", subprocess.list2cmdline(world_command))
         world_result = subprocess.run(world_command, check=False)
         if world_result.returncode != 0:
+            completion_error = world_pass_completion_error(output)
+            if completion_error:
+                print(
+                    f"ERROR: Unreal world pass exited with code {world_result.returncode}: "
+                    f"{completion_error}.",
+                    file=sys.stderr,
+                )
+                report_editor_failure(project, world_result.returncode)
+                return world_result.returncode
             print(
-                f"ERROR: Unreal world pass exited with code {world_result.returncode}.",
+                "WARNING: Unreal editor exited nonzero after the current world/VFX/systems "
+                f"canonical outputs had completed and reconciled (code {world_result.returncode}); "
+                "continuing through normal validators to recover a post-completion teardown crash.",
                 file=sys.stderr,
             )
-            report_editor_failure(project, world_result.returncode)
-            return world_result.returncode
+            latest_log = newest_project_log(project)
+            if latest_log is not None:
+                print(f"latest Unreal log: {latest_log}", file=sys.stderr)
 
     if not manifest_path.is_file():
         print(
