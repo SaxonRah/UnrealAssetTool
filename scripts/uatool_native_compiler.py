@@ -183,14 +183,18 @@ def ingest_database(project_dir: Path, output: Path, database: Path) -> dict:
         for row in source_rows
         if row.get("path")
     }
-    expected_units = {
-        path
-        for path in source_by_path
-        if Path(path).suffix.lower() in TRANSLATION_SUFFIXES
-    }
+    translation_units_by_module: dict[str, set[str]] = {}
+    for path, row in source_by_path.items():
+        if Path(path).suffix.lower() not in TRANSLATION_SUFFIXES:
+            continue
+        module_name = str(row.get("module_name", "") or "")
+        if not module_name:
+            continue
+        translation_units_by_module.setdefault(module_name, set()).add(path)
 
     units: list[dict] = []
     seen_source_paths: set[str] = set()
+    seen_modules: set[str] = set()
 
     for entry_index, entry in enumerate(payload):
         if not isinstance(entry, dict):
@@ -235,6 +239,7 @@ def ingest_database(project_dir: Path, output: Path, database: Path) -> dict:
             )
             response_files = [first or second for first, second in response_files]
 
+        seen_modules.add(module_name)
         units.append({
             "compile_unit_id": unit_id,
             "module_name": module_name,
@@ -260,6 +265,24 @@ def ingest_database(project_dir: Path, output: Path, database: Path) -> dict:
     for filename in EMPTY_SCHEMA_STREAMS:
         _write_jsonl(output / filename, [])
 
+    active_modules = sorted(seen_modules)
+    inactive_modules = sorted(
+        module_name
+        for module_name in translation_units_by_module
+        if module_name not in seen_modules
+    )
+    expected_units = set().union(
+        *(
+            translation_units_by_module[module_name]
+            for module_name in active_modules
+        )
+    ) if active_modules else set()
+    inactive_units = sorted(set().union(
+        *(
+            translation_units_by_module[module_name]
+            for module_name in inactive_modules
+        )
+    )) if inactive_modules else []
     missing = sorted(expected_units - seen_source_paths)
     extra = sorted(seen_source_paths - expected_units)
     compiler_families = sorted({
@@ -282,9 +305,12 @@ def ingest_database(project_dir: Path, output: Path, database: Path) -> dict:
         "database_path": str(database),
         "files": list(JSONL_FILES),
         "compiler_families": compiler_families,
+        "active_modules": active_modules,
+        "inactive_modules": inactive_modules,
         "counts": {
             "compile_units": len(units),
             "expected_translation_units": len(expected_units),
+            "inactive_translation_units": len(inactive_units),
             "missing_translation_units": len(missing),
             "extra_translation_units": len(extra),
             "symbols": 0,
@@ -295,6 +321,7 @@ def ingest_database(project_dir: Path, output: Path, database: Path) -> dict:
             "reflection_joins": 0,
         },
         "missing_translation_units": missing,
+        "inactive_translation_units": inactive_units,
         "extra_translation_units": extra,
     }
     (output / MANIFEST_FILE).write_text(
@@ -401,6 +428,7 @@ def generate_database(
         f"-OutputDir={database_dir}",
         "-WaitMutex",
     ]
+    print("generating UBT compilation database:", subprocess.list2cmdline(command), flush=True)
     result = subprocess.run(command, check=False)
     return database, command, result.returncode
 
@@ -472,11 +500,17 @@ def validation_error(output: Path) -> str | None:
         for row in source_rows
         if row.get("path")
     }
-    expected = {
-        path
-        for path in source_paths
-        if Path(path).suffix.lower() in TRANSLATION_SUFFIXES
-    }
+    translation_units_by_module: dict[str, set[str]] = {}
+    for row in source_rows:
+        path = str(row.get("path", "") or "")
+        module_name = str(row.get("module_name", "") or "")
+        if (
+            path
+            and module_name
+            and Path(path).suffix.lower() in TRANSLATION_SUFFIXES
+        ):
+            translation_units_by_module.setdefault(module_name, set()).add(path)
+
     seen = {
         str(row.get("source_path", "") or "")
         for row in units
@@ -493,21 +527,53 @@ def validation_error(output: Path) -> str | None:
         if not row.get("compiler_executable"):
             return "native compile unit is missing compiler executable"
 
+    active_modules = {
+        str(row.get("module_name", "") or "")
+        for row in units
+        if row.get("module_name")
+    }
+    expected = set().union(
+        *(
+            translation_units_by_module[module_name]
+            for module_name in sorted(active_modules)
+            if module_name in translation_units_by_module
+        )
+    ) if active_modules else set()
+    inactive_modules = sorted(
+        module_name
+        for module_name in translation_units_by_module
+        if module_name not in active_modules
+    )
+    inactive = sorted(set().union(
+        *(
+            translation_units_by_module[module_name]
+            for module_name in inactive_modules
+        )
+    )) if inactive_modules else []
+
     missing = sorted(expected - seen)
     extra = sorted(seen - expected)
+    if sorted(manifest.get("active_modules", [])) != sorted(active_modules):
+        return "native compiler active-module list does not reconcile"
+    if list(manifest.get("inactive_modules", [])) != inactive_modules:
+        return "native compiler inactive-module list does not reconcile"
     if missing != list(manifest.get("missing_translation_units", [])):
         return "native compiler missing-translation list does not reconcile"
+    if inactive != list(manifest.get("inactive_translation_units", [])):
+        return "native compiler inactive-translation list does not reconcile"
     if extra != list(manifest.get("extra_translation_units", [])):
         return "native compiler extra-translation list does not reconcile"
     if int(counts.get("expected_translation_units", -1)) != len(expected):
         return "native compiler expected translation-unit count does not reconcile"
+    if int(counts.get("inactive_translation_units", -1)) != len(inactive):
+        return "native compiler inactive translation-unit count does not reconcile"
     if int(counts.get("missing_translation_units", -1)) != len(missing):
         return "native compiler missing translation-unit count does not reconcile"
     if int(counts.get("extra_translation_units", -1)) != len(extra):
         return "native compiler extra translation-unit count does not reconcile"
     if missing:
         return (
-            "UBT compilation database is missing project translation units: "
+            "UBT compilation database is missing translation units from an active module: "
             + ", ".join(missing[:8])
             + (" ..." if len(missing) > 8 else "")
         )
