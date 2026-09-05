@@ -459,4 +459,7 @@ def query(conn, print_rows, pattern: str, limit: int) -> None:
     sql = """SELECT 'world_geometry_landscape' kind,landscape_path path,class_path detail FROM world_geometry_landscapes WHERE landscape_path LIKE ?
              UNION ALL SELECT 'world_geometry_foliage_type',foliage_type_path,mesh_path FROM world_geometry_foliage_types WHERE foliage_type_path LIKE ? OR mesh_path LIKE ?
              UNION ALL SELECT 'world_geometry_hlod_layer',hlod_layer_path,layer_type FROM world_geometry_hlod_layers WHERE hlod_layer_path LIKE ? LIMIT ?"""
-    print_rows(conn.execute(sql, (pattern, pattern, pattern, pattern, limit)).fetchall())
+    print_rows(
+        conn.execute(sql, (pattern, pattern, pattern, pattern, limit)).fetchall(),
+        ("kind", "path", "detail"),
+    )
