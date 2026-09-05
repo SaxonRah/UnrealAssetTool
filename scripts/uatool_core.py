@@ -20,6 +20,7 @@ from typing import Iterable, Iterator
 
 import uatool_native as native_cpp
 import uatool_native_source as native_source
+import uatool_native_compiler as native_compiler
 
 DB_NAME = "uat.db"
 MODULE_NAME = "UnrealAssetTool"
@@ -5686,6 +5687,97 @@ def create_upload_bundle(
 
 
 
+def native_compiler_capture(args: argparse.Namespace) -> int:
+    project = Path(args.project).expanduser().resolve()
+    if not project.is_file() or project.suffix.lower() != ".uproject":
+        raise FileNotFoundError(f"Not a .uproject file: {project}")
+
+    output = (
+        Path(args.output).expanduser()
+        if args.output
+        else project.parent / ".uatool-native-compiler"
+    )
+    if not output.is_absolute():
+        output = (project.parent / output).resolve()
+    output.mkdir(parents=True, exist_ok=True)
+
+    # Compiler evidence is stacked on the exact reflected/source capture from
+    # the same project state so source-file identities and module ownership can
+    # be validated before any compile-command claim is emitted.
+    native_args = argparse.Namespace(
+        project=str(project),
+        editor=args.editor,
+        build_script=args.build_script,
+        no_build=args.no_build,
+        output=str(output),
+    )
+    native_result = native_capture(native_args)
+    if native_result != 0:
+        return native_result
+
+    compiler_manifest_path = output / native_compiler.MANIFEST_FILE
+    compiler_manifest_path.unlink(missing_ok=True)
+    for filename in native_compiler.JSONL_FILES:
+        (output / filename).unlink(missing_ok=True)
+
+    editor = require_editor(args.editor)
+    configuration = editor_configuration(editor)
+    database, command, returncode = native_compiler.generate_database(
+        project,
+        editor,
+        output,
+        configuration,
+        args.compiler,
+    )
+    print("generating UBT compilation database:", subprocess.list2cmdline(command))
+    if returncode != 0:
+        print(
+            f"ERROR: GenerateClangDatabase exited with code {returncode}",
+            file=sys.stderr,
+        )
+        return returncode
+    if not database.is_file():
+        print(
+            "ERROR: UBT completed but compile_commands.json was not written at "
+            f"{database}",
+            file=sys.stderr,
+        )
+        return 26
+
+    try:
+        manifest = native_compiler.ingest_database(project.parent, output, database)
+    except (OSError, UnicodeError, ValueError, RuntimeError) as exc:
+        print(f"ERROR: native compiler database ingest failed: {exc}", file=sys.stderr)
+        return 26
+
+    error = native_compiler.validation_error(output)
+    if error:
+        print(f"ERROR: native compiler pass incomplete: {error}", file=sys.stderr)
+        return 26
+
+    counts = manifest.get("counts", {}) if isinstance(manifest, dict) else {}
+    print(
+        "native compiler capture complete: "
+        + " ".join(
+            f"{name}={counts.get(name, 0)}"
+            for name in (
+                "compile_units",
+                "expected_translation_units",
+                "missing_translation_units",
+                "extra_translation_units",
+            )
+        )
+    )
+    print(
+        "compiler families: "
+        + ", ".join(manifest.get("compiler_families", []))
+    )
+    print(f"native compiler schema: {manifest.get('schema_version', 0)}")
+    print(f"compilation database: {database}")
+    print(f"output: {output}")
+    return 0
+
+
 def native_capture(args: argparse.Namespace) -> int:
     project = Path(args.project).expanduser().resolve()
     if not project.is_file() or project.suffix.lower() != ".uproject":
@@ -6732,6 +6824,22 @@ def make_parser() -> argparse.ArgumentParser:
     p_native.add_argument("--no-build", action="store_true", help="do not build automatically when the plugin DLL is missing")
     p_native.add_argument("--output", help="output directory; default: <project>/.uatool-native")
     p_native.set_defaults(func=native_capture)
+
+    p_native_compiler = sub.add_parser(
+        "native-compiler-capture",
+        help="capture reflected/source native truth, then ingest real UBT compile commands",
+    )
+    p_native_compiler.add_argument("project", help="path to .uproject")
+    p_native_compiler.add_argument("--editor", required=True, help="exact path to UnrealEditor-Cmd.exe")
+    p_native_compiler.add_argument("--build-script", help="optional exact path to Engine/Build/BatchFiles/Build.bat")
+    p_native_compiler.add_argument("--no-build", action="store_true", help="do not rebuild before native capture")
+    p_native_compiler.add_argument("--output", help="output directory; default: <project>/.uatool-native-compiler")
+    p_native_compiler.add_argument(
+        "--compiler",
+        default="VisualStudio2022",
+        help="UBT compiler selector for GenerateClangDatabase; default: VisualStudio2022",
+    )
+    p_native_compiler.set_defaults(func=native_compiler_capture)
 
     p_scan = sub.add_parser("scan", help="build if needed, run the Unreal commandlet, and build uat.db")
     p_scan.add_argument("project", help="path to .uproject")
