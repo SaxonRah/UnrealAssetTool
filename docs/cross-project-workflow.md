@@ -73,11 +73,11 @@ run structural commandlet
       v
 run world process
       +--> world schema 12
-      +--> animation schema 1
+      +--> animation schema 3/4
       +--> VFX schema 1
-      +--> systems schema 4
+      +--> systems schema 11
       v
-derive schema 20 / pack / bundle
+derive schema 40 / pack / bundle / verify-bundle
       v
 move generated Binaries/Intermediate to Saved cache
       v
