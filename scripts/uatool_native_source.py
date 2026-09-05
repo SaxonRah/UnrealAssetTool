@@ -43,6 +43,10 @@ CONTROL_WORDS = {
     "static_cast", "dynamic_cast", "reinterpret_cast", "const_cast",
 }
 TYPE_WORDS = {"struct", "class", "union", "enum"}
+DECL_ANNOTATION_MACROS = {
+    "UCLASS", "USTRUCT", "UENUM", "UFUNCTION", "UPROPERTY", "GENERATED_BODY",
+}
+ACCESS_WORDS = {"public", "private", "protected"}
 QUALIFIER_WORDS = {
     "const", "volatile", "override", "final", "noexcept",
     "requires", "&", "&&",
@@ -187,9 +191,21 @@ def tokenize(text: str) -> list[Token]:
             continue
 
         if ch == "#" and line_only_space:
-            j = text.find("\n", i)
-            if j < 0:
-                j = n
+            # Preprocessor directives are logical lines. A multiline #define
+            # must be skipped through every backslash-continuation line or its
+            # body will be misinterpreted as ordinary C/C++ declarations.
+            cursor = i
+            j = i
+            while cursor < n:
+                newline = text.find("\n", cursor)
+                if newline < 0:
+                    j = n
+                    break
+                physical = text[cursor:newline]
+                j = newline + 1
+                if not physical.rstrip().endswith("\\"):
+                    break
+                cursor = newline + 1
             advance(text[i:j])
             i = j
             continue
@@ -291,6 +307,51 @@ def _matching(tokens: list[Token], start: int, opener: str, closer: str) -> int 
     return None
 
 
+def _top_level_token_index(tokens: list[Token], target: str) -> int | None:
+    paren = bracket = brace = 0
+    for i, token in enumerate(tokens):
+        text = token.text
+        if text == target and not (paren or bracket or brace):
+            return i
+        if text == "(":
+            paren += 1
+        elif text == ")":
+            paren = max(0, paren - 1)
+        elif text == "[":
+            bracket += 1
+        elif text == "]":
+            bracket = max(0, bracket - 1)
+        elif text == "{":
+            brace += 1
+        elif text == "}":
+            brace = max(0, brace - 1)
+    return None
+
+
+def _strip_leading_decl_annotations(tokens: list[Token]) -> list[Token]:
+    i = 0
+    while i < len(tokens):
+        if (
+            tokens[i].text in DECL_ANNOTATION_MACROS
+            and i + 1 < len(tokens)
+            and tokens[i + 1].text == "("
+        ):
+            close = _matching(tokens, i + 1, "(", ")")
+            if close is None:
+                break
+            i = close + 1
+            continue
+        if (
+            tokens[i].text in ACCESS_WORDS
+            and i + 1 < len(tokens)
+            and tokens[i + 1].text == ":"
+        ):
+            i += 2
+            continue
+        break
+    return tokens[i:]
+
+
 def _top_level_paren_pairs(tokens: list[Token], start: int, end: int) -> list[tuple[int, int]]:
     pairs: list[tuple[int, int]] = []
     stack: list[int] = []
@@ -365,6 +426,12 @@ def _function_signature(tokens: list[Token], start: int, end: int, allow_bare: b
         name, name_start = named
         base_name = name.split("::")[-1].lstrip("~")
         if base_name in CONTROL_WORDS:
+            continue
+        if _top_level_token_index(tokens[start:name_start], "=") is not None:
+            # A field/global initializer such as "FName Name = TEXT(...)" is
+            # not a declaration of TEXT. Metadata macro arguments may contain
+            # '=' too, but those are nested inside parentheses and therefore
+            # do not trip this top-level test.
             continue
         if not _suffix_is_functionish(tokens, close_index, end):
             continue
@@ -462,15 +529,21 @@ def _parameter_row(
 
 
 def _simple_global(tokens: list[Token], start: int, end: int):
-    body = tokens[start:end]
+    body = _strip_leading_decl_annotations(tokens[start:end])
     if not body:
         return None
     if body[0].text in {"typedef", "using", "static_assert"}:
         return None
-    if any(t.text in {"(", ")"} for t in body):
-        return None
-    eq = next((i for i, t in enumerate(body) if t.text == "="), len(body))
+
+    eq_index = _top_level_token_index(body, "=")
+    eq = len(body) if eq_index is None else eq_index
     left = body[:eq]
+
+    # Parentheses on the declaration side imply a function/function-pointer
+    # shape. Parentheses in an initializer are fine and common in UE fields.
+    if any(t.text in {"(", ")"} for t in left):
+        return None
+
     name_index = None
     for i in range(len(left) - 1, -1, -1):
         if left[i].kind == "identifier":
@@ -595,6 +668,7 @@ def _parse_declarations_and_calls(
     path: str,
     module_name: str,
     scope_name: str = "",
+    scope_kind: str = "global",
 ) -> tuple[list[dict], list[dict], list[dict]]:
     declarations: list[dict] = []
     parameters: list[dict] = []
@@ -655,6 +729,39 @@ def _parse_declarations_and_calls(
         if delimiter is None:
             break
 
+        if tokens[i].text == "namespace" and delimiter == "{":
+            body_close = _matching(tokens, j, "{", "}")
+            if body_close is None:
+                i = j + 1
+                continue
+            namespace_text = _tokens_text(tokens[i + 1:j]).strip()
+            namespace_name = namespace_text or f"<anonymous@{tokens[i].line}>"
+            qualified_namespace = (
+                f"{scope_name}::{namespace_name}" if scope_name else namespace_name
+            )
+            add_decl(
+                "namespace",
+                namespace_name,
+                i,
+                j,
+                qualified_name=qualified_namespace,
+                definition=True,
+            )
+            nested_declarations, nested_parameters, nested_calls = (
+                _parse_declarations_and_calls(
+                    tokens[j + 1:body_close],
+                    path,
+                    module_name,
+                    qualified_namespace,
+                    "namespace",
+                )
+            )
+            declarations.extend(nested_declarations)
+            parameters.extend(nested_parameters)
+            calls.extend(nested_calls)
+            i = body_close + 1
+            continue
+
         if tokens[i].text == "typedef":
             if delimiter == "{":
                 type_info = _type_declaration(tokens, i, j)
@@ -675,6 +782,7 @@ def _parse_declarations_and_calls(
                             path,
                             module_name,
                             f"{scope_name}::{tag_name}" if scope_name else tag_name,
+                            "record",
                         )
                     )
                     declarations.extend(nested_declarations)
@@ -738,6 +846,7 @@ def _parse_declarations_and_calls(
                         path,
                         module_name,
                         f"{scope_name}::{name}" if scope_name else name,
+                        "record",
                     )
                 )
                 declarations.extend(nested_declarations)
@@ -756,14 +865,15 @@ def _parse_declarations_and_calls(
             end_for_decl = j
             if scope_name and "::" not in qualified_name:
                 qualified_name = f"{scope_name}::{qualified_name}"
+            clean_prefix = _strip_leading_decl_annotations(tokens[i:name_start])
             row = add_decl(
-                "method" if scope_name else "function",
+                "method" if scope_kind == "record" else "function",
                 name,
                 i,
                 end_for_decl,
                 qualified_name=qualified_name,
                 definition=definition,
-                return_type_text=_tokens_text(tokens[i:name_start]),
+                return_type_text=_tokens_text(clean_prefix),
                 signature_text=_tokens_text(tokens[i:j]),
                 parameter_count=0,
             )
@@ -797,7 +907,7 @@ def _parse_declarations_and_calls(
             if global_info:
                 name, type_text, initializer = global_info
                 add_decl(
-                    "field" if scope_name else "global",
+                    "field" if scope_kind == "record" else "global",
                     name,
                     i,
                     j,
@@ -915,7 +1025,11 @@ def _reflection_joins(
         metadata = reflected.get("metadata") or {}
         rel = str(metadata.get("ModuleRelativePath", "") or "")
         project_path = expected_path(module_name, rel)
-        name = str(reflected.get("name", "") or "")
+        name = str(
+            reflected.get("cpp_name", "")
+            or reflected.get("name", "")
+            or ""
+        )
         candidates = by_key.get((module_name, project_path, name), [])
         if len(candidates) != 1:
             continue
@@ -930,6 +1044,35 @@ def _reflection_joins(
             "source_path": source["path"],
             "source_line": source["start_line"],
             "proof": "module_relative_path+symbol_name+unique_source_candidate",
+            "evidence_level": "exact_join",
+        })
+
+    for reflected in _reflection_rows(output, "native_enums.jsonl"):
+        module_name = str(reflected.get("module_name", "") or "")
+        metadata = reflected.get("metadata") or {}
+        rel = str(metadata.get("ModuleRelativePath", "") or "")
+        project_path = expected_path(module_name, rel)
+        name = str(
+            reflected.get("cpp_type", "")
+            or reflected.get("name", "")
+            or ""
+        )
+        candidates = by_key.get((module_name, project_path, name), [])
+        if len(candidates) != 1:
+            continue
+        source = candidates[0]
+        join_id = _stable_id(
+            "enum", reflected.get("enum_path", ""), source["declaration_id"]
+        )
+        joins.append({
+            "join_id": join_id,
+            "join_kind": "reflected_enum_source_declaration",
+            "module_name": module_name,
+            "reflected_path": reflected.get("enum_path", ""),
+            "source_declaration_id": source["declaration_id"],
+            "source_path": source["path"],
+            "source_line": source["start_line"],
+            "proof": "module_relative_path+cpp_symbol_name+unique_source_candidate",
             "evidence_level": "exact_join",
         })
 
