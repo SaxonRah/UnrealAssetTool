@@ -1411,12 +1411,40 @@ def validation_error(output: Path) -> str | None:
     files = list(_rows(output / "native_source_files.jsonl"))
     if len({row.get("path") for row in files}) != len(files):
         return "duplicate native source file path"
+    file_paths = {str(row.get("path", "") or "") for row in files}
+
+    includes = list(_rows(output / "native_source_includes.jsonl"))
+    if len({row.get("include_id") for row in includes}) != len(includes):
+        return "duplicate native source include id"
+    for row in includes:
+        if row.get("evidence_level") != EVIDENCE_LEVEL:
+            return "native source include mislabeled evidence level"
+        if bool(row.get("compiler_resolved", True)):
+            return "native source include incorrectly claims compiler resolution"
+        if row.get("path") not in file_paths:
+            return "native source include references unknown source file"
+        resolved = str(row.get("resolved_project_path", "") or "")
+        if resolved and resolved not in file_paths:
+            return "native source include resolves outside indexed source files"
 
     declarations = list(_rows(output / "native_source_declarations.jsonl"))
     if len({row.get("declaration_id") for row in declarations}) != len(declarations):
         return "duplicate native source declaration id"
     if any(row.get("evidence_level") != EVIDENCE_LEVEL for row in declarations):
         return "native source declaration mislabeled evidence level"
+    declaration_ids = {
+        str(row.get("declaration_id", "") or "")
+        for row in declarations
+    }
+
+    parameters = list(_rows(output / "native_source_parameters.jsonl"))
+    if len({row.get("parameter_id") for row in parameters}) != len(parameters):
+        return "duplicate native source parameter id"
+    for row in parameters:
+        if row.get("evidence_level") != EVIDENCE_LEVEL:
+            return "native source parameter mislabeled evidence level"
+        if row.get("declaration_id") not in declaration_ids:
+            return "native source parameter references unknown declaration"
 
     calls = list(_rows(output / "native_source_calls.jsonl"))
     if len({row.get("call_id") for row in calls}) != len(calls):
@@ -1428,6 +1456,19 @@ def validation_error(output: Path) -> str | None:
             return "native source call incorrectly claims compiler resolution"
         if row.get("resolution") != "unresolved_source_syntax":
             return "native source schema 1 call must remain unresolved_source_syntax"
+        if row.get("caller_declaration_id") not in declaration_ids:
+            return "native source call references unknown caller declaration"
+
+    joins = list(_rows(output / "native_source_reflection_joins.jsonl"))
+    if len({row.get("join_id") for row in joins}) != len(joins):
+        return "duplicate native source reflection join id"
+    for row in joins:
+        if row.get("evidence_level") != "exact_join":
+            return "native source reflection join mislabeled evidence level"
+        if row.get("source_declaration_id") not in declaration_ids:
+            return "native source reflection join references unknown declaration"
+        if row.get("source_path") not in file_paths:
+            return "native source reflection join references unknown source file"
 
     native_modules = {
         str(row.get("module_name", "") or "")
