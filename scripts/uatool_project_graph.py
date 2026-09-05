@@ -287,11 +287,46 @@ def derive(output, rows):
         add(r.get("source_id"), r.get("relation"), r.get("target"), source_kind=r.get("source_kind", "object"),
             target_kind=r.get("target_kind", "object"), quality=quality,
             evidence={"stream":"world_system_relations.jsonl","kind":"domain_relation","relation_id":r.get("relation_id","")})
+    # Blueprint relation rows may refer to reconstructed editor nodes whose raw
+    # NodeGuid changes between otherwise equivalent UE loads. Keep raw canonical
+    # IDs in the canonical Blueprint streams, but normalize project-graph
+    # evidence to authored/stable node fields so deterministic graph output does
+    # not inherit capture-local GUID churn.
+    blueprint_node_locator = {}
+    for node_row in rows(output / "blueprint_nodes.jsonl"):
+        node_id = str(node_row.get("node_id", ""))
+        if not node_id:
+            continue
+        blueprint_node_locator[node_id] = {
+            "graph_id": str(node_row.get("graph_id", "")),
+            "node_class": str(node_row.get("node_class", "")),
+            "operation": str(node_row.get("operation", "")),
+            "symbol": str(node_row.get("symbol", "")),
+            "owner": str(node_row.get("owner", "")),
+            "title": str(node_row.get("title", "")),
+            "x": int(node_row.get("x", 0) or 0),
+            "y": int(node_row.get("y", 0) or 0),
+        }
+
     for r in rows(output / "blueprint_relations.jsonl"):
+        source_kind = str(r.get("source_kind", ""))
+        source_id = str(r.get("source_id", ""))
+        evidence = {
+            "stream": "blueprint_relations.jsonl",
+            "kind": "blueprint_relation",
+            "graph_id": str(r.get("graph_id", "")),
+            "source_kind": source_kind,
+        }
+        detail = r.get("detail", {})
+        if isinstance(detail, dict) and detail:
+            evidence["detail"] = detail
+        if source_kind == "node" and source_id in blueprint_node_locator:
+            evidence["source_locator"] = blueprint_node_locator[source_id]
+        elif source_id:
+            evidence["source_id"] = source_id
         add(r.get("blueprint_path"), r.get("relation"), r.get("target"), source_kind="blueprint",
             target_kind=r.get("target_kind", "object"), quality="exact_reference",
-            evidence={"stream":"blueprint_relations.jsonl","kind":"blueprint_relation","relation_id":r.get("relation_id",""),
-                      "source_kind":r.get("source_kind",""),"source_id":r.get("source_id","")})
+            evidence=evidence)
     for filename in ("ai_relations.jsonl", "visual_relations.jsonl"):
         for r in rows(output / filename):
             source = r.get("asset_path") or r.get("source") or r.get("source_id")
@@ -345,14 +380,20 @@ def derive(output, rows):
         if raw_id:
             meta_node_id[(asset, raw_id)] = node
         add(asset, "contains_metasound_node", node, target_kind="metasound_node", quality="exact_semantic",
-            evidence={"stream":"metasound_nodes.jsonl","kind":"canonical_structure","node_index":idx,"node_id":raw_id})
+            evidence={
+                "stream":"metasound_nodes.jsonl","kind":"canonical_structure","node_index":idx,
+                "property_path":r.get("property_path",""),"struct_type":r.get("struct_type",""),
+            })
     for r in rows(output / "metasound_edges.jsonl"):
         asset = str(r.get("asset_path", "")); src = meta_node_id.get((asset, str(r.get("from_node_id", ""))))
         dst = meta_node_id.get((asset, str(r.get("to_node_id", ""))))
         if src and dst:
             add(src, "metasound_connects_to", dst, source_kind="metasound_node", target_kind="metasound_node",
-                quality="exact_semantic", evidence={"stream":"metasound_edges.jsonl","kind":"canonical_structure",
-                    "edge_index":r.get("edge_index",0),"from_vertex_id":r.get("from_vertex_id",""),"to_vertex_id":r.get("to_vertex_id","")})
+                quality="exact_semantic", evidence={
+                    "stream":"metasound_edges.jsonl","kind":"canonical_structure",
+                    "edge_index":r.get("edge_index",0),"property_path":r.get("property_path",""),
+                    "struct_type":r.get("struct_type",""),
+                })
 
     for r in rows(output / "input_mappings.jsonl"):
         context = str(r.get("context_path", "")); idx = int(r.get("mapping_index",0))
