@@ -803,6 +803,41 @@ def _parse_declarations_and_calls(
         if delimiter is None:
             break
 
+        if (
+            tokens[i].text == "extern"
+            and delimiter == "{"
+            and i + 1 < j
+            and tokens[i + 1].kind == "literal"
+        ):
+            body_close = _matching(tokens, j, "{", "}")
+            if body_close is None:
+                i = j + 1
+                continue
+            linkage = tokens[i + 1].text.strip("\"'")
+            linkage_name = f"extern_{linkage}" if linkage else "extern"
+            add_decl(
+                "linkage_block",
+                linkage_name,
+                i,
+                j,
+                definition=True,
+                language_linkage=linkage,
+            )
+            nested_declarations, nested_parameters, nested_calls = (
+                _parse_declarations_and_calls(
+                    tokens[j + 1:body_close],
+                    path,
+                    module_name,
+                    scope_name,
+                    scope_kind,
+                )
+            )
+            declarations.extend(nested_declarations)
+            parameters.extend(nested_parameters)
+            calls.extend(nested_calls)
+            i = body_close + 1
+            continue
+
         if tokens[i].text == "namespace" and delimiter == "{":
             body_close = _matching(tokens, j, "{", "}")
             if body_close is None:
