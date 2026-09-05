@@ -37,10 +37,31 @@ class NativeSourceSchema1Test(unittest.TestCase):
                 """
                 #pragma once
 
+                #define SYNTH_CHECK(v) \
+                    do { if (!(v)) abort(); } while (0)
+
+                namespace TestHelpers
+                {
+                    inline int HeaderHelper(int Value)
+                    {
+                        return Value + 1;
+                    }
+                }
+
+                UENUM(BlueprintType)
+                enum class EThingState : uint8
+                {
+                    Idle,
+                    Active,
+                };
+
                 USTRUCT(BlueprintType)
                 struct HRRAI_API FThing
                 {
                     GENERATED_BODY()
+
+                    UPROPERTY(EditAnywhere)
+                    FName Label = TEXT("Thing");
 
                     UFUNCTION(BlueprintCallable)
                     int32 DoThing(int32 Input) const;
@@ -109,7 +130,20 @@ class NativeSourceSchema1Test(unittest.TestCase):
                     "type_path": "/Script/HRRAI.Thing",
                     "module_name": "HRRAI",
                     "kind": "script_struct",
-                    "name": "FThing",
+                    "name": "Thing",
+                    "cpp_name": "FThing",
+                    "metadata": {"ModuleRelativePath": "Public/Api.h"},
+                }
+            ],
+        )
+        write_jsonl(
+            output / "native_enums.jsonl",
+            [
+                {
+                    "enum_path": "/Script/HRRAI.EThingState",
+                    "module_name": "HRRAI",
+                    "name": "EThingState",
+                    "cpp_type": "EThingState",
                     "metadata": {"ModuleRelativePath": "Public/Api.h"},
                 }
             ],
@@ -143,6 +177,12 @@ class NativeSourceSchema1Test(unittest.TestCase):
             by_kind_name = {(row["kind"], row["name"]) for row in declarations}
             self.assertIn(("struct", "FThing"), by_kind_name)
             self.assertIn(("method", "DoThing"), by_kind_name)
+            self.assertIn(("field", "Label"), by_kind_name)
+            self.assertIn(("namespace", "TestHelpers"), by_kind_name)
+            self.assertIn(("function", "HeaderHelper"), by_kind_name)
+            self.assertIn(("enum_class", "EThingState"), by_kind_name)
+            self.assertNotIn(("method", "TEXT"), by_kind_name)
+            self.assertNotIn(("function", "abort"), by_kind_name)
             self.assertIn(("struct", "HRPoint"), by_kind_name)
             self.assertIn(("typedef", "HRPoint"), by_kind_name)
             self.assertIn(("global", "g_counter"), by_kind_name)
@@ -155,12 +195,13 @@ class NativeSourceSchema1Test(unittest.TestCase):
             self.assertTrue(all(not row["compiler_resolved"] for row in calls))
 
             joins = list(native_source._rows(output / "native_source_reflection_joins.jsonl"))
-            self.assertEqual(len(joins), 2)
+            self.assertEqual(len(joins), 3)
             self.assertEqual(
                 {row["join_kind"] for row in joins},
                 {
                     "reflected_function_source_declaration",
                     "reflected_type_source_declaration",
+                    "reflected_enum_source_declaration",
                 },
             )
 
