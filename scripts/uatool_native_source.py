@@ -898,3 +898,218 @@ def _reflection_joins(
             continue
         source = candidates[0]
         join_id = _stable_id("function", reflected.get("function_path", ""), source["declaration_id"])
+        joins.append({
+            "join_id": join_id,
+            "join_kind": "reflected_function_source_declaration",
+            "module_name": module_name,
+            "reflected_path": reflected.get("function_path", ""),
+            "source_declaration_id": source["declaration_id"],
+            "source_path": source["path"],
+            "source_line": source["start_line"],
+            "proof": "module_relative_path+symbol_name+unique_source_candidate",
+            "evidence_level": "exact_join",
+        })
+
+    for reflected in _reflection_rows(output, "native_types.jsonl"):
+        module_name = str(reflected.get("module_name", "") or "")
+        metadata = reflected.get("metadata") or {}
+        rel = str(metadata.get("ModuleRelativePath", "") or "")
+        project_path = expected_path(module_name, rel)
+        name = str(reflected.get("name", "") or "")
+        candidates = by_key.get((module_name, project_path, name), [])
+        if len(candidates) != 1:
+            continue
+        source = candidates[0]
+        join_id = _stable_id("type", reflected.get("type_path", ""), source["declaration_id"])
+        joins.append({
+            "join_id": join_id,
+            "join_kind": "reflected_type_source_declaration",
+            "module_name": module_name,
+            "reflected_path": reflected.get("type_path", ""),
+            "source_declaration_id": source["declaration_id"],
+            "source_path": source["path"],
+            "source_line": source["start_line"],
+            "proof": "module_relative_path+symbol_name+unique_source_candidate",
+            "evidence_level": "exact_join",
+        })
+
+    joins.sort(key=lambda row: (row["join_kind"], row["reflected_path"], row["source_path"]))
+    return joins
+
+
+def capture(project_dir: Path, output: Path) -> dict:
+    project_dir = Path(project_dir).resolve()
+    output = Path(output).resolve()
+    output.mkdir(parents=True, exist_ok=True)
+
+    native_manifest = output / "native_manifest.json"
+    if not native_manifest.is_file():
+        raise RuntimeError("native_manifest.json is required before native source capture")
+
+    file_specs = _source_paths(project_dir, output)
+    indexed_paths = {path for _, _, path in file_specs}
+
+    file_rows: list[dict] = []
+    include_rows: list[dict] = []
+    declaration_rows: list[dict] = []
+    parameter_rows: list[dict] = []
+    call_rows: list[dict] = []
+
+    for module_name, module_root, path in file_specs:
+        raw = path.read_bytes()
+        text = raw.decode("utf-8", errors="replace")
+        rel = _relative(project_dir, path)
+        file_rows.append({
+            "module_name": module_name,
+            "path": rel,
+            "module_relative_path": path.relative_to(module_root).as_posix(),
+            "language": _language(path),
+            "size": len(raw),
+            "line_count": len(text.splitlines()),
+            "sha256": hashlib.sha256(raw).hexdigest(),
+            "evidence_level": EVIDENCE_LEVEL,
+        })
+        include_rows.extend(_include_rows(
+            project_dir, module_name, module_root, path, indexed_paths
+        ))
+        declarations, parameters, calls = _parse_declarations_and_calls(
+            tokenize(text), rel, module_name
+        )
+        declaration_rows.extend(declarations)
+        parameter_rows.extend(parameters)
+        call_rows.extend(calls)
+
+    file_rows.sort(key=lambda row: (row["path"], row["module_name"]))
+    include_rows.sort(key=lambda row: (row["path"], row["line"], row["column"], row["target_spelling"]))
+    declaration_rows.sort(key=lambda row: (row["path"], row["start_line"], row["start_column"], row["kind"], row["name"]))
+    parameter_rows.sort(key=lambda row: (row["declaration_id"], row["parameter_index"]))
+    call_rows.sort(key=lambda row: (row["path"], row["start_line"], row["start_column"], row["callee_spelling"]))
+    join_rows = _reflection_joins(project_dir, output, declaration_rows)
+
+    streams = {
+        "native_source_files.jsonl": file_rows,
+        "native_source_includes.jsonl": include_rows,
+        "native_source_declarations.jsonl": declaration_rows,
+        "native_source_parameters.jsonl": parameter_rows,
+        "native_source_calls.jsonl": call_rows,
+        "native_source_reflection_joins.jsonl": join_rows,
+    }
+    counts = {
+        "files": len(file_rows),
+        "includes": len(include_rows),
+        "declarations": len(declaration_rows),
+        "parameters": len(parameter_rows),
+        "calls": len(call_rows),
+        "reflection_joins": len(join_rows),
+    }
+    for filename, rows in streams.items():
+        _write_jsonl(output / filename, rows)
+
+    modules = [str(row.get("module_name", "") or "") for row in _module_rows(output)]
+    manifest = {
+        "schema_version": SCHEMA_VERSION,
+        "pass": PASS_NAME,
+        "success": True,
+        "error": "",
+        "evidence_level": EVIDENCE_LEVEL,
+        "compiler_resolved": False,
+        "capture_scope": (
+            "project and project-plugin C/C++ source syntax under native module roots; "
+            "compiler overload/callee resolution is not claimed"
+        ),
+        "files": list(JSONL_FILES),
+        "modules": sorted(name for name in modules if name),
+        "counts": counts,
+    }
+    (output / MANIFEST_FILE).write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    return manifest
+
+
+def read_manifest(output: Path) -> dict | None:
+    path = Path(output) / MANIFEST_FILE
+    if not path.is_file():
+        return None
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def validation_error(output: Path) -> str | None:
+    output = Path(output)
+    manifest = read_manifest(output)
+    if not manifest:
+        return f"{MANIFEST_FILE} missing or invalid"
+    if int(manifest.get("schema_version", 0) or 0) != SCHEMA_VERSION:
+        return f"expected native source schema {SCHEMA_VERSION}, got {manifest.get('schema_version')}"
+    if manifest.get("pass") != PASS_NAME:
+        return f"unexpected native source pass {manifest.get('pass')!r}"
+    if not bool(manifest.get("success", False)):
+        return f"native source scanner failed: {manifest.get('error', '')}"
+    if manifest.get("evidence_level") != EVIDENCE_LEVEL:
+        return "native source manifest evidence level is not source_syntax"
+    if bool(manifest.get("compiler_resolved", True)):
+        return "native source schema 1 must not claim compiler resolution"
+    if tuple(manifest.get("files", [])) != JSONL_FILES:
+        return f"native source manifest file list does not match schema {SCHEMA_VERSION}"
+
+    count_keys = {
+        "native_source_files.jsonl": "files",
+        "native_source_includes.jsonl": "includes",
+        "native_source_declarations.jsonl": "declarations",
+        "native_source_parameters.jsonl": "parameters",
+        "native_source_calls.jsonl": "calls",
+        "native_source_reflection_joins.jsonl": "reflection_joins",
+    }
+    counts = manifest.get("counts", {})
+    if not isinstance(counts, dict):
+        return "native source manifest counts missing or invalid"
+
+    for filename in JSONL_FILES:
+        path = output / filename
+        if not path.is_file():
+            return f"native source stream missing: {filename}"
+        rows = list(_rows(path))
+        key = count_keys[filename]
+        if int(counts.get(key, -1)) != len(rows):
+            return (
+                f"native source count mismatch for {key}: "
+                f"manifest={counts.get(key)} actual={len(rows)}"
+            )
+
+    files = list(_rows(output / "native_source_files.jsonl"))
+    if len({row.get("path") for row in files}) != len(files):
+        return "duplicate native source file path"
+
+    declarations = list(_rows(output / "native_source_declarations.jsonl"))
+    if len({row.get("declaration_id") for row in declarations}) != len(declarations):
+        return "duplicate native source declaration id"
+    if any(row.get("evidence_level") != EVIDENCE_LEVEL for row in declarations):
+        return "native source declaration mislabeled evidence level"
+
+    calls = list(_rows(output / "native_source_calls.jsonl"))
+    if len({row.get("call_id") for row in calls}) != len(calls):
+        return "duplicate native source call id"
+    for row in calls:
+        if row.get("evidence_level") != EVIDENCE_LEVEL:
+            return "native source call mislabeled evidence level"
+        if bool(row.get("compiler_resolved", True)):
+            return "native source call incorrectly claims compiler resolution"
+        if row.get("resolution") != "unresolved_source_syntax":
+            return "native source schema 1 call must remain unresolved_source_syntax"
+
+    native_modules = {
+        str(row.get("module_name", "") or "")
+        for row in _module_rows(output)
+        if row.get("module_name")
+    }
+    manifest_modules = {str(value) for value in manifest.get("modules", [])}
+    if native_modules != manifest_modules:
+        return "native source module list does not match native_modules.jsonl"
+
+    return None
