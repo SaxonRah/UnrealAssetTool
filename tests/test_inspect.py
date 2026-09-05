@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import sqlite3
 import sys
@@ -253,6 +254,35 @@ class InspectReportTest(unittest.TestCase):
         relations = {(row["direction"], row["relation"]): row["count"] for row in report["graph"]["relation_counts"]}
         self.assertEqual(relations[("out", "uses_cost_gameplay_effect_class")], 1)
         self.assertEqual(relations[("out", "references_effect")], 1)
+
+    def test_json_cli_output_is_ascii_safe_and_unicode_round_trips(self) -> None:
+        report = {
+            "found": True,
+            "query": "/Game/Test.Test",
+            "canonical_facts": [
+                {
+                    "table": "assets",
+                    "identity_column": "object_path",
+                    "record": {"display_name": "Café → テスト"},
+                }
+            ],
+        }
+        stream = io.StringIO()
+        with mock.patch.object(inspect_report, "build_report", return_value=report), \
+             mock.patch.object(inspect_report, "_canonical_module", return_value=None), \
+             mock.patch.object(sys, "stdout", stream):
+            result = inspect_report._cli([
+                str(self.output),
+                "/Game/Test.Test",
+                "--json",
+            ])
+        self.assertEqual(result, 0)
+        payload = stream.getvalue()
+        payload.encode("ascii")
+        self.assertEqual(
+            json.loads(payload)["canonical_facts"][0]["record"]["display_name"],
+            "Café → テスト",
+        )
 
     def test_install_wraps_runtime_without_creating_an_alternate_launcher(self) -> None:
         fake = types.SimpleNamespace(main=lambda: 17)
