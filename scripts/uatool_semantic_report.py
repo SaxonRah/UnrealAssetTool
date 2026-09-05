@@ -281,10 +281,17 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
         if str(edge.get("edge_kind", "") or "") == "data"
     ]
     exec_outgoing_by_pin: dict[str, list[dict]] = collections.defaultdict(list)
+    exec_incident_by_node: dict[str, list[dict]] = collections.defaultdict(list)
     for edge in raw_exec_edges:
         source_pin_id = str(edge.get("source_pin_id", "") or "")
         if source_pin_id:
             exec_outgoing_by_pin[source_pin_id].append(edge)
+        source_node_id = str(edge.get("source_node_id", "") or "")
+        target_node_id = str(edge.get("target_node_id", "") or "")
+        if source_node_id:
+            exec_incident_by_node[source_node_id].append(edge)
+        if target_node_id and target_node_id != source_node_id:
+            exec_incident_by_node[target_node_id].append(edge)
 
     data_incoming_by_pin: dict[str, list[dict]] = collections.defaultdict(list)
     data_outgoing_by_pin: dict[str, list[dict]] = collections.defaultdict(list)
@@ -412,6 +419,7 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
     macro_exec_mismatches = collections.Counter()
     macro_exec_exact_instance_count = 0
     macro_exec_data_only_instance_count = 0
+    macro_exec_disconnected_instance_count = 0
     macro_exec_input_binding_count = 0
     macro_exec_exact_entry_bridge_count = 0
     macro_exec_output_binding_count = 0
@@ -443,11 +451,19 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
             macro_exec_status["data_only_instance"] += 1
             continue
 
-        macro_exec_exact_instance_count += 1
         caller_block = block_by_node.get(node_id, "")
+        caller_exec_edges = exec_incident_by_node.get(node_id, [])
+        if not caller_block and not caller_exec_edges:
+            macro_exec_disconnected_instance_count += 1
+            macro_exec_status["disconnected_exec_shaped_instance"] += 1
+            continue
+
+        macro_exec_exact_instance_count += 1
         if not caller_block:
-            macro_exec_status["missing_caller_block"] += 1
-            macro_exec_mismatches[f"{node_id} :: missing_caller_block"] += 1
+            macro_exec_status["missing_caller_block_with_exec_wiring"] += 1
+            macro_exec_mismatches[
+                f"{node_id} :: missing_caller_block_with_exec_wiring"
+            ] += 1
 
         for edge in input_exec:
             macro_exec_input_binding_count += 1
@@ -2035,6 +2051,7 @@ def build_report(output: Path, rows, *, limit: int = 25) -> dict:
         "macro_data_mismatches": top(macro_data_mismatches),
         "macro_exec_exact_instance_count": macro_exec_exact_instance_count,
         "macro_exec_data_only_instance_count": macro_exec_data_only_instance_count,
+        "macro_exec_disconnected_instance_count": macro_exec_disconnected_instance_count,
         "macro_exec_input_binding_count": macro_exec_input_binding_count,
         "macro_exec_exact_entry_bridge_count": macro_exec_exact_entry_bridge_count,
         "macro_exec_output_binding_count": macro_exec_output_binding_count,
@@ -2317,6 +2334,7 @@ def print_report(report: dict) -> None:
     print(
         f"executable_exact_instances={int(report.get('macro_exec_exact_instance_count', 0) or 0)} "
         f"data_only_exact_instances={int(report.get('macro_exec_data_only_instance_count', 0) or 0)} "
+        f"disconnected_exec_shaped_instances={int(report.get('macro_exec_disconnected_instance_count', 0) or 0)} "
         f"exec_input_bindings={int(report.get('macro_exec_input_binding_count', 0) or 0)} "
         f"exact_entry_block_bridges={int(report.get('macro_exec_exact_entry_bridge_count', 0) or 0)} "
         f"exec_output_bindings={int(report.get('macro_exec_output_binding_count', 0) or 0)} "
