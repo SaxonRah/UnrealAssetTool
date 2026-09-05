@@ -126,6 +126,37 @@ class BuildPolicyRegressionTest(unittest.TestCase):
         with patch.dict(os.environ, {"UATOOL_BUILD_CACHE": "0"}, clear=False):
             self.assertFalse(build_perf._cache_enabled())
 
+    def test_staged_plugin_cleanup_retries_transient_windows_lock(self) -> None:
+        stage = self.root / "Plugins" / "UnrealAssetTool"
+        stage.mkdir(parents=True)
+        (stage / "locked.dll").write_text("x", encoding="utf-8")
+
+        with patch.object(
+            build_perf.shutil,
+            "rmtree",
+            side_effect=[PermissionError(5, "Access is denied"), None],
+        ) as remove, patch.object(build_perf.time, "sleep") as sleep:
+            self.assertTrue(build_perf._remove_staged_plugin_tree(stage))
+
+        self.assertEqual(remove.call_count, 2)
+        sleep.assert_called_once_with(build_perf.STAGE_CLEANUP_RETRY_DELAYS[0])
+
+    def test_staged_plugin_cleanup_persistent_lock_is_nonthrowing(self) -> None:
+        stage = self.root / "Plugins" / "UnrealAssetTool"
+        stage.mkdir(parents=True)
+
+        with patch.object(
+            build_perf.shutil,
+            "rmtree",
+            side_effect=PermissionError(5, "Access is denied"),
+        ) as remove, patch.object(build_perf.time, "sleep"):
+            self.assertFalse(build_perf._remove_staged_plugin_tree(stage))
+
+        self.assertEqual(
+            remove.call_count,
+            len(build_perf.STAGE_CLEANUP_RETRY_DELAYS) + 1,
+        )
+
     def test_module_failure_falls_back_to_full_target_and_reuses_produced_module(self) -> None:
         build_script = self.root / "Build.bat"
         build_script.write_text("", encoding="utf-8")
