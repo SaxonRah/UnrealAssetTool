@@ -1077,12 +1077,30 @@ def _include_rows(
         form = "angle" if opener == "<" else "quote"
         column = line.find(target) + 1
         resolved = ""
+        resolution = "unresolved_source_syntax"
         candidates = [path.parent / target] + [root / target for root in public_roots]
         for candidate in candidates:
             candidate = candidate.resolve()
             if candidate in indexed_paths:
                 resolved = _relative(project_dir, candidate)
+                resolution = "project_filesystem"
                 break
+
+        if not resolved:
+            normalized_target = target.replace("\\", "/").lstrip("./")
+            suffix = "/" + normalized_target
+            suffix_matches = sorted(
+                (
+                    candidate
+                    for candidate in indexed_paths
+                    if candidate.as_posix().endswith(suffix)
+                ),
+                key=lambda candidate: candidate.as_posix().lower(),
+            )
+            if len(suffix_matches) == 1:
+                resolved = _relative(project_dir, suffix_matches[0])
+                resolution = "project_unique_suffix"
+
         result.append({
             "include_id": _stable_id(rel, line_number, target, form),
             "module_name": module_name,
@@ -1092,7 +1110,7 @@ def _include_rows(
             "target_spelling": target,
             "form": form,
             "resolved_project_path": resolved,
-            "resolution": "project_filesystem" if resolved else "unresolved_source_syntax",
+            "resolution": resolution,
             "compiler_resolved": False,
             "evidence_level": EVIDENCE_LEVEL,
         })
