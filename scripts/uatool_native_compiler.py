@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Iterable
@@ -304,6 +305,65 @@ def ingest_database(project_dir: Path, output: Path, database: Path) -> dict:
     return manifest
 
 
+def _resolve_dotnet(engine_dir: Path) -> Path | str:
+    """Resolve the engine-bundled dotnet host, falling back to PATH.
+
+    Epic Launcher installs may omit RunUBT.bat while still shipping
+    UnrealBuildTool.dll and a private .NET runtime. Prefer that private host so
+    the compiler capture uses the same runtime family as the normal UE build.
+    """
+    third_party = engine_dir / "Binaries" / "ThirdParty" / "DotNet"
+    if third_party.is_dir():
+        candidates = sorted(
+            (
+                path
+                for path in third_party.rglob("dotnet.exe")
+                if path.is_file()
+            ),
+            key=lambda path: (
+                "win-x64" not in path.as_posix().lower(),
+                path.as_posix().lower(),
+            ),
+        )
+        if candidates:
+            return candidates[0]
+
+    on_path = shutil.which("dotnet")
+    if on_path:
+        return on_path
+
+    raise FileNotFoundError(
+        "UnrealBuildTool.dll exists, but no dotnet host was found under "
+        f"{third_party} and 'dotnet' is not on PATH"
+    )
+
+
+def _resolve_ubt_command(engine_dir: Path) -> list[str]:
+    """Return the executable prefix for UBT on source or Launcher engines."""
+    ubt_dir = engine_dir / "Binaries" / "DotNET" / "UnrealBuildTool"
+    ubt_exe = ubt_dir / "UnrealBuildTool.exe"
+    if ubt_exe.is_file():
+        return [str(ubt_exe)]
+
+    ubt_dll = ubt_dir / "UnrealBuildTool.dll"
+    if ubt_dll.is_file():
+        dotnet = _resolve_dotnet(engine_dir)
+        return [str(dotnet), str(ubt_dll)]
+
+    # Source checkouts commonly expose RunUBT.bat. Keep it as a final
+    # compatibility path, but do not require it for installed Launcher builds.
+    run_ubt = engine_dir / "Build" / "BatchFiles" / "RunUBT.bat"
+    if run_ubt.is_file():
+        return [str(run_ubt)]
+
+    raise FileNotFoundError(
+        "Could not locate UnrealBuildTool. Checked:\n"
+        f"  {ubt_exe}\n"
+        f"  {ubt_dll}\n"
+        f"  {run_ubt}"
+    )
+
+
 def generate_database(
     project: Path,
     editor: Path,
@@ -320,9 +380,7 @@ def generate_database(
     except IndexError as exc:
         raise FileNotFoundError("could not derive Engine directory from --editor") from exc
 
-    run_ubt = engine_dir / "Build" / "BatchFiles" / "RunUBT.bat"
-    if not run_ubt.is_file():
-        raise FileNotFoundError(f"RunUBT.bat not found: {run_ubt}")
+    ubt_prefix = _resolve_ubt_command(engine_dir)
 
     database_dir = output / "compiler-db"
     database_dir.mkdir(parents=True, exist_ok=True)
@@ -330,8 +388,7 @@ def generate_database(
     database.unlink(missing_ok=True)
 
     target = f"{project.stem}Editor"
-    command = [
-        str(run_ubt),
+    command = ubt_prefix + [
         "-Mode=GenerateClangDatabase",
         f"-Project={project}",
         target,
