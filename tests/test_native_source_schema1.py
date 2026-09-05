@@ -30,6 +30,9 @@ class NativeSourceSchema1Test(unittest.TestCase):
         private = module / "Private"
         public.mkdir(parents=True)
         private.mkdir()
+        nested = public / "Runtime" / "include"
+        nested.mkdir(parents=True)
+        (nested / "Nested.h").write_text("#pragma once\n", encoding="utf-8")
         (module / "HRRAI.Build.cs").write_text("// synthetic module\n", encoding="utf-8")
 
         (public / "Api.h").write_text(
@@ -75,6 +78,7 @@ class NativeSourceSchema1Test(unittest.TestCase):
             textwrap.dedent(
                 """
                 #include "../Public/Api.h"
+                #include "Nested.h"
 
                 typedef struct { int x, y; } HRPoint;
                 typedef enum { RawIdle, RawActive } HRRawState;
@@ -166,14 +170,26 @@ class NativeSourceSchema1Test(unittest.TestCase):
             self.assertFalse(manifest["compiler_resolved"])
 
             files = list(native_source._rows(output / "native_source_files.jsonl"))
-            self.assertEqual(len(files), 2)
+            self.assertEqual(len(files), 3)
             self.assertTrue(any(row["path"].endswith("/Private/raw.c") for row in files))
             self.assertTrue(any(row["path"].endswith("/Public/Api.h") for row in files))
 
             includes = list(native_source._rows(output / "native_source_includes.jsonl"))
-            self.assertEqual(len(includes), 1)
-            self.assertTrue(includes[0]["resolved_project_path"].endswith("/Public/Api.h"))
-            self.assertFalse(includes[0]["compiler_resolved"])
+            self.assertEqual(len(includes), 2)
+            include_by_target = {row["target_spelling"]: row for row in includes}
+            self.assertTrue(
+                include_by_target["../Public/Api.h"]["resolved_project_path"].endswith("/Public/Api.h")
+            )
+            self.assertEqual(
+                include_by_target["Nested.h"]["resolution"],
+                "project_unique_suffix",
+            )
+            self.assertTrue(
+                include_by_target["Nested.h"]["resolved_project_path"].endswith(
+                    "/Public/Runtime/include/Nested.h"
+                )
+            )
+            self.assertTrue(all(not row["compiler_resolved"] for row in includes))
 
             declarations = list(native_source._rows(output / "native_source_declarations.jsonl"))
             by_kind_name = {(row["kind"], row["name"]) for row in declarations}
