@@ -16,7 +16,7 @@
 - systems scanner schema: **11**
 - mesh companion schema: **1**
 - world-geometry companion schema: **1**
-- derived schema: **38**
+- derived schema: **40**
 - capability contract schema: **1**
 
 The schemas are independently versioned because they represent different extraction lifecycles. A change to a Python-only derived view does not require renumbering canonical Unreal scanner output.
@@ -218,7 +218,12 @@ python scripts\uatool.py derive "E:\Path\Project\.uatool"
 python scripts\uatool.py pack   "E:\Path\Project\.uatool"
 python scripts\uatool.py bundle "E:\Path\Project\.uatool" `
     --destination "E:\Path\Project\Project.uatool.zip"
+python scripts\uatool.py verify-bundle `
+    "E:\Path\Project\.uatool" `
+    "E:\Path\Project\Project.uatool.zip"
 ```
+
+`verify-bundle` validates the ZIP against the current source corpus without launching Unreal. It can also compare against a previous bundle with `--baseline` and, when needed, enforce an exact allowed member-diff set with `--expect-changed`.
 
 A validated freshness stamp lets `pack` and `bundle` reuse current derived output instead of rebuilding it unnecessarily.
 
