@@ -56,6 +56,8 @@ class NativeSourceSchema1Test(unittest.TestCase):
                     int CApi(int Value);
                 }
 
+                class UForward;
+
                 UENUM(BlueprintType)
                 enum class EThingState : uint8
                 {
@@ -67,6 +69,8 @@ class NativeSourceSchema1Test(unittest.TestCase):
                 struct HRRAI_API FThing
                 {
                     GENERATED_BODY()
+
+                    FThing();
 
                     UPROPERTY(EditAnywhere)
                     FName Label = TEXT("Thing");
@@ -199,7 +203,15 @@ class NativeSourceSchema1Test(unittest.TestCase):
             declarations = list(native_source._rows(output / "native_source_declarations.jsonl"))
             by_kind_name = {(row["kind"], row["name"]) for row in declarations}
             self.assertIn(("struct", "FThing"), by_kind_name)
+            self.assertIn(("method", "FThing"), by_kind_name)
             self.assertIn(("method", "DoThing"), by_kind_name)
+            self.assertIn(("class", "UForward"), by_kind_name)
+            forward_globals = [
+                row
+                for row in declarations
+                if row["kind"] == "global" and row["name"] == "UForward"
+            ]
+            self.assertEqual(forward_globals, [])
             self.assertIn(("field", "Label"), by_kind_name)
             self.assertIn(("namespace", "TestHelpers"), by_kind_name)
             self.assertIn(("function", "HeaderHelper"), by_kind_name)
