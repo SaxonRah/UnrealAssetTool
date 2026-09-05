@@ -1,4 +1,5 @@
 #include "UnrealAssetToolCommandlet.h"
+#include "UnrealAssetToolNativeScanner.h"
 
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
@@ -6399,6 +6400,13 @@ int32 UUnrealAssetToolCommandlet::Main(const FString& Params)
         return 4;
     }
 
+    FString NativeError;
+    if (!UnrealAssetToolNative::Scan(ProjectDir, ToolPluginDir, OutputDir, NativeError))
+    {
+        UE_LOG(LogTemp, Error, TEXT("UnrealAssetTool: native C++ scan failed: %s"), *NativeError);
+        return 6;
+    }
+
     const TSharedRef<FJsonObject> Manifest = MakeShared<FJsonObject>();
     Manifest->SetNumberField(TEXT("schema_version"), SchemaVersion);
     Manifest->SetStringField(TEXT("tool"), TEXT("UnrealAssetTool"));
@@ -6412,6 +6420,7 @@ int32 UUnrealAssetToolCommandlet::Main(const FString& Params)
     Manifest->SetBoolField(TEXT("include_engine"), bIncludeEngine);
     Manifest->SetBoolField(TEXT("include_self"), bIncludeSelf);
     Manifest->SetBoolField(TEXT("include_raw_rigvm_properties"), bIncludeRawRigVMProperties);
+    Manifest->SetNumberField(TEXT("native_schema_version"), UnrealAssetToolNative::SchemaVersion);
 
     const TSharedRef<FJsonObject> CountsJson = MakeShared<FJsonObject>();
     CountsJson->SetNumberField(TEXT("files"), static_cast<double>(Counts.Files));
