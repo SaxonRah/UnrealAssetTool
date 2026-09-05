@@ -25,6 +25,7 @@ PASS_NAME = "UnrealAssetToolNativeCompiler"
 
 JSONL_FILES = (
     "native_compile_units.jsonl",
+    "native_compiler_response_files.jsonl",
     "native_compiler_symbols.jsonl",
     "native_compiler_references.jsonl",
     "native_compiler_calls.jsonl",
@@ -33,7 +34,7 @@ JSONL_FILES = (
     "native_compiler_reflection_joins.jsonl",
 )
 
-EMPTY_SCHEMA_STREAMS = JSONL_FILES[1:]
+EMPTY_SCHEMA_STREAMS = JSONL_FILES[2:]
 TRANSLATION_SUFFIXES = {".c", ".cc", ".cpp", ".cxx"}
 
 
@@ -161,6 +162,34 @@ def _entry_command(entry: dict) -> tuple[list[str], str, bool]:
     return [], command, False
 
 
+def _decode_response_bytes(raw: bytes) -> tuple[str, str]:
+    if raw.startswith(b"\xef\xbb\xbf"):
+        return raw[3:].decode("utf-8"), "utf-8-sig"
+    if raw.startswith(b"\xff\xfe"):
+        return raw[2:].decode("utf-16-le"), "utf-16-le"
+    if raw.startswith(b"\xfe\xff"):
+        return raw[2:].decode("utf-16-be"), "utf-16-be"
+    try:
+        return raw.decode("utf-8"), "utf-8"
+    except UnicodeDecodeError:
+        # Response files are compiler command evidence. Refuse lossy decoding:
+        # AST work depends on reproducing the actual argument text.
+        raise RuntimeError("response file is not valid UTF-8/UTF-16 text")
+
+
+def _resolve_response_path(path_text: str, working_directory: str) -> Path:
+    path = Path(path_text)
+    if path.is_absolute():
+        return path.resolve()
+    if re.match(r"^[A-Za-z]:[\\/]", path_text):
+        # On Windows this branch is normally unnecessary because pathlib
+        # already recognizes drive-qualified paths. Keep the spelling intact
+        # for tests/tools running on another host.
+        return Path(path_text)
+    base = Path(working_directory) if working_directory else Path.cwd()
+    return (base / path).resolve()
+
+
 def ingest_database(project_dir: Path, output: Path, database: Path) -> dict:
     project_dir = Path(project_dir).resolve()
     output = Path(output).resolve()
@@ -193,6 +222,7 @@ def ingest_database(project_dir: Path, output: Path, database: Path) -> dict:
         translation_units_by_module.setdefault(module_name, set()).add(path)
 
     units: list[dict] = []
+    response_rows: list[dict] = []
     seen_source_paths: set[str] = set()
     seen_modules: set[str] = set()
 
@@ -239,6 +269,38 @@ def ingest_database(project_dir: Path, output: Path, database: Path) -> dict:
             )
             response_files = [first or second for first, second in response_files]
 
+        response_file_ids: list[str] = []
+        for response_index, response_path_text in enumerate(response_files):
+            response_path = _resolve_response_path(
+                response_path_text,
+                working_directory,
+            )
+            response_id = _stable_id(
+                unit_id,
+                response_index,
+                response_path_text,
+            )
+            response_file_ids.append(response_id)
+            if not response_path.is_file():
+                raise RuntimeError(
+                    "compile command references missing response file: "
+                    f"{response_path_text} (resolved {response_path})"
+                )
+            raw_response = response_path.read_bytes()
+            response_text, response_encoding = _decode_response_bytes(raw_response)
+            response_rows.append({
+                "response_file_id": response_id,
+                "compile_unit_id": unit_id,
+                "response_index": response_index,
+                "path_spelling": response_path_text,
+                "resolved_path": str(response_path),
+                "encoding": response_encoding,
+                "size": len(raw_response),
+                "sha256": hashlib.sha256(raw_response).hexdigest(),
+                "content": response_text,
+                "evidence_level": "compiler_command",
+            })
+
         seen_modules.add(module_name)
         units.append({
             "compile_unit_id": unit_id,
@@ -254,6 +316,8 @@ def ingest_database(project_dir: Path, output: Path, database: Path) -> dict:
             "command_exact": bool(command),
             "command_sha256": hashlib.sha256(command.encode("utf-8")).hexdigest(),
             "response_files": response_files,
+            "response_file_ids": response_file_ids,
+            "response_files_snapshotted": len(response_file_ids) == len(response_files),
             "output": output_file,
             "database_entry_index": entry_index,
             "evidence_level": "compiler_command",
@@ -261,7 +325,15 @@ def ingest_database(project_dir: Path, output: Path, database: Path) -> dict:
         seen_source_paths.add(source_path)
 
     units.sort(key=lambda row: (row["module_name"], row["source_path"], row["compile_unit_id"]))
+    response_rows.sort(
+        key=lambda row: (
+            row["compile_unit_id"],
+            row["response_index"],
+            row["response_file_id"],
+        )
+    )
     _write_jsonl(output / "native_compile_units.jsonl", units)
+    _write_jsonl(output / "native_compiler_response_files.jsonl", response_rows)
     for filename in EMPTY_SCHEMA_STREAMS:
         _write_jsonl(output / filename, [])
 
@@ -303,12 +375,15 @@ def ingest_database(project_dir: Path, output: Path, database: Path) -> dict:
             "module source; AST symbols/references/calls are not yet claimed"
         ),
         "database_path": str(database),
+        "database_sha256": hashlib.sha256(database.read_bytes()).hexdigest(),
+        "database_entry_count": len(payload),
         "files": list(JSONL_FILES),
         "compiler_families": compiler_families,
         "active_modules": active_modules,
         "inactive_modules": inactive_modules,
         "counts": {
             "compile_units": len(units),
+            "response_files": len(response_rows),
             "expected_translation_units": len(expected_units),
             "inactive_translation_units": len(inactive_units),
             "missing_translation_units": len(missing),
@@ -468,6 +543,7 @@ def validation_error(output: Path) -> str | None:
 
     count_keys = {
         "native_compile_units.jsonl": "compile_units",
+        "native_compiler_response_files.jsonl": "response_files",
         "native_compiler_symbols.jsonl": "symbols",
         "native_compiler_references.jsonl": "references",
         "native_compiler_calls.jsonl": "calls",
@@ -493,6 +569,27 @@ def validation_error(output: Path) -> str | None:
     unit_ids = [row.get("compile_unit_id") for row in units]
     if len(unit_ids) != len(set(unit_ids)):
         return "duplicate native compile unit id"
+    unit_id_set = {str(value) for value in unit_ids if value}
+
+    responses = streams["native_compiler_response_files.jsonl"]
+    response_ids = [row.get("response_file_id") for row in responses]
+    if len(response_ids) != len(set(response_ids)):
+        return "duplicate native compiler response-file id"
+    response_by_id = {
+        str(row.get("response_file_id", "") or ""): row
+        for row in responses
+        if row.get("response_file_id")
+    }
+    for row in responses:
+        if row.get("evidence_level") != "compiler_command":
+            return "native compiler response file mislabeled evidence level"
+        if row.get("compile_unit_id") not in unit_id_set:
+            return "native compiler response file references unknown compile unit"
+        content = row.get("content")
+        if not isinstance(content, str):
+            return "native compiler response file has no exact text content"
+        if not row.get("sha256"):
+            return "native compiler response file is missing content hash"
 
     source_rows = list(_rows(output / "native_source_files.jsonl"))
     source_paths = {
@@ -526,6 +623,18 @@ def validation_error(output: Path) -> str | None:
             return "native compile unit is missing exact command text"
         if not row.get("compiler_executable"):
             return "native compile unit is missing compiler executable"
+        response_paths = list(row.get("response_files", []))
+        response_ids_for_unit = list(row.get("response_file_ids", []))
+        if len(response_paths) != len(response_ids_for_unit):
+            return "native compile unit response-file identity count mismatch"
+        if response_paths and not bool(row.get("response_files_snapshotted", False)):
+            return "native compile unit response files were not snapshotted"
+        for response_id in response_ids_for_unit:
+            response = response_by_id.get(str(response_id))
+            if response is None:
+                return "native compile unit references missing response-file row"
+            if response.get("compile_unit_id") != row.get("compile_unit_id"):
+                return "native compiler response-file ownership mismatch"
 
     active_modules = {
         str(row.get("module_name", "") or "")
