@@ -272,6 +272,35 @@ class BlueprintInterproceduralExecutionTest(unittest.TestCase):
             str(interproc.validation_error(self.output, rows)),
         )
 
+    def test_disconnected_exec_shaped_macro_emits_no_execution_rows(self) -> None:
+        self._write_fixture()
+        blocks = list(rows(self.output / "blueprint_execution_blocks.jsonl"))
+        write_jsonl(
+            self.output / "blueprint_execution_blocks.jsonl",
+            [row for row in blocks if row["block_id"] != "caller-block"],
+        )
+        write_jsonl(self.output / "blueprint_edges.jsonl", [])
+
+        edges, terminals, data_routes = interproc.derive(self.output, rows)
+
+        self.assertEqual(edges, [])
+        self.assertEqual(terminals, [])
+        self.assertEqual(data_routes, [])
+
+    def test_exec_wired_macro_without_caller_block_still_fails_closed(self) -> None:
+        self._write_fixture()
+        blocks = list(rows(self.output / "blueprint_execution_blocks.jsonl"))
+        write_jsonl(
+            self.output / "blueprint_execution_blocks.jsonl",
+            [row for row in blocks if row["block_id"] != "caller-block"],
+        )
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "lacks caller block despite canonical exec wiring",
+        ):
+            interproc.derive(self.output, rows)
+
     def test_missing_continuation_block_is_a_derivation_error(self) -> None:
         self._write_fixture()
         blocks = list(rows(self.output / "blueprint_execution_blocks.jsonl"))
