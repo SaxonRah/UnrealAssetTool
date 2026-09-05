@@ -65,8 +65,9 @@ class StaticMeshNormalScanTest(unittest.TestCase):
             for filename in schema.JSONL_FILES:
                 (output / filename).write_text('{"stale":true}\n', encoding="utf-8")
             write_json(capture / "staticmesh_capture_manifest.json", {
-                "schema_version": 1,
+                "schema_version": 2,
                 "success": True,
+                "selected_struct_field_policy": "direct_safe_scalar_leaves_only: bool,numeric,enum,name,string,text; object/container/delegate/nested-struct members skipped",
                 "diagnostic_only": True,
                 "semantic_promotion": False,
                 "schema_promotion": False,
