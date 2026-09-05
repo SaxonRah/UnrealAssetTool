@@ -764,53 +764,111 @@ def _parse_declarations_and_calls(
 
         if tokens[i].text == "typedef":
             if delimiter == "{":
-                type_info = _type_declaration(tokens, i, j)
                 body_close = _matching(tokens, j, "{", "}")
-                if type_info and body_close is not None:
-                    kind, tag_name, type_start = type_info
-                    add_decl(
-                        kind,
-                        tag_name,
-                        type_start,
-                        body_close + 1,
-                        definition=True,
-                        type_text=_tokens_text(tokens[type_start:j]),
-                    )
-                    nested_declarations, nested_parameters, nested_calls = (
-                        _parse_declarations_and_calls(
-                            tokens[j + 1:body_close],
-                            path,
-                            module_name,
-                            f"{scope_name}::{tag_name}" if scope_name else tag_name,
-                            "record",
-                        )
-                    )
-                    declarations.extend(nested_declarations)
-                    parameters.extend(nested_parameters)
-                    calls.extend(nested_calls)
+                prefix = tokens[i:j]
+                type_local_index = next(
+                    (
+                        index
+                        for index, token in enumerate(prefix)
+                        if token.text in TYPE_WORDS
+                    ),
+                    None,
+                )
+                if body_close is not None and type_local_index is not None:
+                    kind = prefix[type_local_index].text
+                    type_start = i + type_local_index
+                    after_type = type_local_index + 1
+                    if (
+                        kind == "enum"
+                        and after_type < len(prefix)
+                        and prefix[after_type].text == "class"
+                    ):
+                        kind = "enum_class"
+                        after_type += 1
+
+                    tag_name = ""
+                    for token in prefix[after_type:]:
+                        if token.kind == "identifier":
+                            if token.text.endswith("_API"):
+                                continue
+                            tag_name = token.text
+                            break
 
                     semi = body_close + 1
                     while semi < len(tokens) and tokens[semi].text != ";":
                         semi += 1
-                    alias_tokens = tokens[body_close + 1:semi]
-                    alias_name = next(
-                        (
-                            token.text
-                            for token in reversed(alias_tokens)
-                            if token.kind == "identifier"
-                        ),
-                        "",
+
+                    alias_parts = _split_parameters(tokens[body_close + 1:semi])
+                    alias_names: list[str] = []
+                    for part in alias_parts:
+                        alias_name = next(
+                            (
+                                token.text
+                                for token in reversed(part)
+                                if token.kind == "identifier"
+                            ),
+                            "",
+                        )
+                        if alias_name:
+                            alias_names.append(alias_name)
+
+                    anonymous = not bool(tag_name)
+                    type_name = (
+                        tag_name
+                        if tag_name
+                        else f"<anonymous@{tokens[type_start].line}>"
                     )
-                    if alias_name:
-                        add_decl(
+                    type_row = add_decl(
+                        kind,
+                        type_name,
+                        type_start,
+                        body_close + 1,
+                        definition=True,
+                        type_text=_tokens_text(tokens[type_start:j]),
+                        anonymous=anonymous,
+                        typedef_aliases=alias_names,
+                    )
+
+                    if kind in {"struct", "class", "union"}:
+                        record_scope = (
+                            alias_names[0]
+                            if alias_names
+                            else tag_name
+                            if tag_name
+                            else type_name
+                        )
+                        if scope_name:
+                            record_scope = f"{scope_name}::{record_scope}"
+                        nested_declarations, nested_parameters, nested_calls = (
+                            _parse_declarations_and_calls(
+                                tokens[j + 1:body_close],
+                                path,
+                                module_name,
+                                record_scope,
+                                "record",
+                            )
+                        )
+                        declarations.extend(nested_declarations)
+                        parameters.extend(nested_parameters)
+                        calls.extend(nested_calls)
+
+                    for alias_name in alias_names:
+                        alias_row = add_decl(
                             "typedef",
                             alias_name,
                             i,
                             semi,
-                            type_text=f"{kind} {tag_name}",
+                            type_text=(
+                                f"{kind} {tag_name}".strip()
+                                if tag_name
+                                else kind
+                            ),
+                            target_declaration_id=type_row["declaration_id"],
+                            anonymous_target=anonymous,
                         )
                     i = min(len(tokens), semi + 1)
                     continue
+
             info = _typedef_declaration(tokens, i, j)
             if info:
                 name, type_text = info
