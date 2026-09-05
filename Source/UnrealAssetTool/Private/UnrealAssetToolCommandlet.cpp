@@ -1,4 +1,5 @@
 #include "UnrealAssetToolCommandlet.h"
+#include "UnrealAssetToolNativeScanner.h"
 
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
@@ -6210,7 +6211,7 @@ UUnrealAssetToolCommandlet::UUnrealAssetToolCommandlet()
     ShowErrorCount = true;
     UseCommandletResultAsExitCode = true;
     HelpDescription = TEXT("Indexes an Unreal project into AI-friendly JSONL records.");
-    HelpUsage = TEXT("UnrealEditor-Cmd.exe Project.uproject -run=UnrealAssetTool -Output=<dir> [-IncludeGenerated] [-IncludeEngine] [-IncludeSelf] [-IncludeRawRigVMProperties]");
+    HelpUsage = TEXT("UnrealEditor-Cmd.exe Project.uproject -run=UnrealAssetTool -Output=<dir> [-NativeOnly] [-IncludeGenerated] [-IncludeEngine] [-IncludeSelf] [-IncludeRawRigVMProperties]");
 }
 
 int32 UUnrealAssetToolCommandlet::Main(const FString& Params)
@@ -6221,6 +6222,7 @@ int32 UUnrealAssetToolCommandlet::Main(const FString& Params)
 
     FString OutputDir;
     FParse::Value(*Params, TEXT("Output="), OutputDir);
+    const bool bNativeOnly = FParse::Param(*Params, TEXT("NativeOnly"));
     const bool bIncludeGenerated = FParse::Param(*Params, TEXT("IncludeGenerated"));
     const bool bIncludeEngine = FParse::Param(*Params, TEXT("IncludeEngine"));
     const bool bIncludeSelf = FParse::Param(*Params, TEXT("IncludeSelf"));
@@ -6250,6 +6252,18 @@ int32 UUnrealAssetToolCommandlet::Main(const FString& Params)
     }
 
     IFileManager::Get().MakeDirectory(*OutputDir, true);
+
+    if (bNativeOnly)
+    {
+        FString NativeError;
+        if (!UnrealAssetToolNative::Scan(ProjectDir, ToolPluginDir, OutputDir, NativeError))
+        {
+            UE_LOG(LogTemp, Error, TEXT("UnrealAssetTool: native-only C++ scan failed: %s"), *NativeError);
+            return 6;
+        }
+        UE_LOG(LogTemp, Display, TEXT("UnrealAssetTool: native-only capture complete: %s"), *OutputDir);
+        return 0;
+    }
 
     FJsonlWriter FilesWriter(FPaths::Combine(OutputDir, TEXT("files.jsonl")));
     FJsonlWriter SourceWriter(FPaths::Combine(OutputDir, TEXT("source_chunks.jsonl")));
@@ -6399,6 +6413,13 @@ int32 UUnrealAssetToolCommandlet::Main(const FString& Params)
         return 4;
     }
 
+    FString NativeError;
+    if (!UnrealAssetToolNative::Scan(ProjectDir, ToolPluginDir, OutputDir, NativeError))
+    {
+        UE_LOG(LogTemp, Error, TEXT("UnrealAssetTool: native C++ scan failed: %s"), *NativeError);
+        return 6;
+    }
+
     const TSharedRef<FJsonObject> Manifest = MakeShared<FJsonObject>();
     Manifest->SetNumberField(TEXT("schema_version"), SchemaVersion);
     Manifest->SetStringField(TEXT("tool"), TEXT("UnrealAssetTool"));
@@ -6412,6 +6433,7 @@ int32 UUnrealAssetToolCommandlet::Main(const FString& Params)
     Manifest->SetBoolField(TEXT("include_engine"), bIncludeEngine);
     Manifest->SetBoolField(TEXT("include_self"), bIncludeSelf);
     Manifest->SetBoolField(TEXT("include_raw_rigvm_properties"), bIncludeRawRigVMProperties);
+    Manifest->SetNumberField(TEXT("native_schema_version"), UnrealAssetToolNative::SchemaVersion);
 
     const TSharedRef<FJsonObject> CountsJson = MakeShared<FJsonObject>();
     CountsJson->SetNumberField(TEXT("files"), static_cast<double>(Counts.Files));
