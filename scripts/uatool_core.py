@@ -5677,6 +5677,88 @@ def create_upload_bundle(
     return destination
 
 
+
+def native_capture(args: argparse.Namespace) -> int:
+    project = Path(args.project).expanduser().resolve()
+    if not project.is_file() or project.suffix.lower() != ".uproject":
+        raise FileNotFoundError(f"Not a .uproject file: {project}")
+
+    output = (
+        Path(args.output).expanduser()
+        if args.output
+        else project.parent / ".uatool-native"
+    )
+    if not output.is_absolute():
+        output = (project.parent / output).resolve()
+    output.mkdir(parents=True, exist_ok=True)
+
+    native_manifest_path = output / native_cpp.MANIFEST_FILE
+    native_manifest_path.unlink(missing_ok=True)
+
+    editor = require_editor(args.editor)
+    command = [
+        str(editor),
+        str(project),
+        "-run=UnrealAssetTool",
+        f"-Output={output}",
+        f"-EnablePlugins={MODULE_NAME}",
+        "-NativeOnly",
+        "-unattended",
+        "-RUNNINGUNATTENDEDSCRIPT",
+        "-nop4",
+        "-nosplash",
+        "-NoShaderCompile",
+        "-stdout",
+        "-FullStdOutLogOutput",
+        "-forcelogflush",
+    ]
+
+    with stage_invoking_plugin_checkout(project) as active_plugin_root:
+        ensure_plugin_binary(
+            project,
+            editor,
+            args.build_script,
+            args.no_build,
+            active_plugin_root,
+        )
+        print("running native C++ capture:", subprocess.list2cmdline(command))
+        result = subprocess.run(command, check=False)
+        if result.returncode != 0:
+            report_editor_failure(project, result.returncode)
+            return result.returncode
+
+    error = native_cpp.validation_error(output)
+    if error:
+        print(f"ERROR: native C++ capture incomplete: {error}", file=sys.stderr)
+        latest_log = newest_project_log(project)
+        if latest_log is not None:
+            print(f"latest Unreal log: {latest_log}", file=sys.stderr)
+        return 24
+
+    manifest = native_cpp.read_manifest(output) or {}
+    counts = manifest.get("counts", {}) if isinstance(manifest, dict) else {}
+    print(
+        "native C++ capture complete: "
+        + " ".join(
+            f"{name}={counts.get(name, 0)}"
+            for name in (
+                "modules",
+                "loaded_modules",
+                "classes",
+                "structs",
+                "functions",
+                "function_parameters",
+                "properties",
+                "enums",
+                "enum_values",
+            )
+        )
+    )
+    print(f"native schema: {manifest.get('schema_version', 0)}")
+    print(f"output: {output}")
+    return 0
+
+
 def scan(args: argparse.Namespace) -> int:
     project = Path(args.project).expanduser().resolve()
     if not project.is_file() or project.suffix.lower() != ".uproject":
@@ -6584,6 +6666,18 @@ def query(args: argparse.Namespace) -> int:
 def make_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="uatool", description="UnrealAssetTool project indexer")
     sub = parser.add_subparsers(dest="command", required=True)
+
+
+    p_native = sub.add_parser(
+        "native-capture",
+        help="build if needed and capture project-owned reflected native C++ only",
+    )
+    p_native.add_argument("project", help="path to .uproject")
+    p_native.add_argument("--editor", required=True, help="exact path to UnrealEditor-Cmd.exe")
+    p_native.add_argument("--build-script", help="optional exact path to Engine/Build/BatchFiles/Build.bat")
+    p_native.add_argument("--no-build", action="store_true", help="do not build automatically when the plugin DLL is missing")
+    p_native.add_argument("--output", help="output directory; default: <project>/.uatool-native")
+    p_native.set_defaults(func=native_capture)
 
     p_scan = sub.add_parser("scan", help="build if needed, run the Unreal commandlet, and build uat.db")
     p_scan.add_argument("project", help="path to .uproject")
