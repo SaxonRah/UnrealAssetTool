@@ -188,6 +188,14 @@ class NativeCppSchema1Test(unittest.TestCase):
         self.assertIn('sub.add_parser(\n        "native-capture"', launcher)
         self.assertIn('"-NativeOnly"', launcher)
         self.assertNotIn("-run=UnrealAssetToolNative", launcher)
+        self.assertNotIn("EFieldIterationFlags::ExcludeSuper", source)
+        self.assertNotIn("GetFunctionFlags()", source)
+        self.assertNotIn("GetCppType()", source)
+        self.assertNotIn("Property->ElementSize", source)
+        self.assertIn("EFieldIterationFlags::None", source)
+        self.assertIn("Function->FunctionFlags", source)
+        self.assertIn("Enum->CppType", source)
+        self.assertIn("Property->GetElementSize()", source)
 
 
 if __name__ == "__main__":
