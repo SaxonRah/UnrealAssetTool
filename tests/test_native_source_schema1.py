@@ -51,6 +51,11 @@ class NativeSourceSchema1Test(unittest.TestCase):
                     }
                 }
 
+                extern "C"
+                {
+                    int CApi(int Value);
+                }
+
                 UENUM(BlueprintType)
                 enum class EThingState : uint8
                 {
@@ -198,6 +203,8 @@ class NativeSourceSchema1Test(unittest.TestCase):
             self.assertIn(("field", "Label"), by_kind_name)
             self.assertIn(("namespace", "TestHelpers"), by_kind_name)
             self.assertIn(("function", "HeaderHelper"), by_kind_name)
+            self.assertIn(("linkage_block", "extern_C"), by_kind_name)
+            self.assertIn(("function", "CApi"), by_kind_name)
             self.assertIn(("enum_class", "EThingState"), by_kind_name)
             self.assertNotIn(("method", "TEXT"), by_kind_name)
             self.assertNotIn(("function", "abort"), by_kind_name)
