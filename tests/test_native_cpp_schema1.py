@@ -203,6 +203,9 @@ class NativeCppSchema1Test(unittest.TestCase):
         self.assertIn("Function->FunctionFlags", native_source)
         self.assertIn("Enum->CppType", native_source)
         self.assertIn("Property->GetElementSize()", native_source)
+        self.assertIn("Property->GetCPPType(&ExtendedTypeText)", native_source)
+        self.assertIn("return BaseType + ExtendedTypeText;", native_source)
+        self.assertIn('Row->SetStringField(TEXT("cpp_type"), FullCppType(Property));', native_source)
 
 
 if __name__ == "__main__":
