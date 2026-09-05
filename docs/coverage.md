@@ -256,6 +256,14 @@ Blueprint semantic schema 4 proves exact project-authored macro graph identity a
 
 The accepted GASP evidence behind the promotion contains 12 exact executable project macro instances, 14 exact caller-block -> macro-entry-block bridges, 9 exact macro-exit -> caller-continuation bridges and 8 authored terminal/unconnected macro exits, with zero bridge mismatches or duplicate block assignments.
 
+An exact macro interface may expose exec-shaped input/output pins even when the authored
+call-site node is completely disconnected. Execution participation is therefore proven
+from canonical caller-graph execution edges, not from interface shape alone. An
+exec-shaped macro with zero incoming and zero outgoing caller execution edges has no
+caller execution block and emits no interprocedural execution edge or terminal; its
+ordinary macro/data evidence remains available. Conversely, any macro with canonical
+caller execution wiring but no caller block remains a hard derivation error.
+
 Derived schema 33 adds:
 
 - `blueprint_interprocedural_execution_edges.jsonl` for real cross-graph `macro_enter` and `macro_return` block edges;
