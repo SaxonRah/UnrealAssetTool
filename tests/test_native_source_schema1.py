@@ -89,7 +89,12 @@ class NativeSourceSchema1Test(unittest.TestCase):
                 #include "../Public/Api.h"
                 #include "Nested.h"
 
-                typedef struct { int x, y; } HRPoint;
+                typedef struct {
+                    int x, y;
+                    char name[16];
+                    int slots[HR_COUNT];
+                    unsigned flags : HR_BITS;
+                } HRPoint;
                 typedef enum { RawIdle, RawActive } HRRawState;
                 typedef void (*HRCallback)(int value, void *userdata);
                 static int g_counter = 0, g_other = 1;
@@ -228,6 +233,18 @@ class NativeSourceSchema1Test(unittest.TestCase):
             self.assertNotIn(("typedef", "enum"), by_kind_name)
             self.assertIn(("field", "x"), by_kind_name)
             self.assertIn(("field", "y"), by_kind_name)
+            self.assertIn(("field", "name"), by_kind_name)
+            self.assertIn(("field", "slots"), by_kind_name)
+            self.assertIn(("field", "flags"), by_kind_name)
+            self.assertNotIn(("field", "HR_COUNT"), by_kind_name)
+            self.assertNotIn(("field", "HR_BITS"), by_kind_name)
+            array_fields = {
+                row["name"]: row["type_text"]
+                for row in declarations
+                if row["kind"] == "field" and row["name"] in {"name", "slots"}
+            }
+            self.assertIn("[16]", array_fields["name"].replace(" ", ""))
+            self.assertIn("[HR_COUNT]", array_fields["slots"].replace(" ", ""))
             self.assertNotIn(("global", "x"), by_kind_name)
             self.assertNotIn(("global", "y"), by_kind_name)
             self.assertIn(("global", "g_counter"), by_kind_name)
@@ -250,6 +267,20 @@ class NativeSourceSchema1Test(unittest.TestCase):
                     "reflected_enum_source_declaration",
                 },
             )
+
+    def test_out_of_class_destructor_keeps_qualification(self) -> None:
+        declarations, parameters, calls = native_source._parse_declarations_and_calls(
+            native_source.tokenize("MyClass::~MyClass() {}\n"),
+            "Source/Test.cpp",
+            "Test",
+        )
+        self.assertEqual(len(declarations), 1)
+        row = declarations[0]
+        self.assertEqual(row["name"], "~MyClass")
+        self.assertEqual(row["qualified_name"], "MyClass::~MyClass")
+        self.assertEqual(row["return_type_text"], "")
+        self.assertEqual(parameters, [])
+        self.assertEqual(calls, [])
 
     def test_validation_rejects_compiler_claim_on_lexical_call(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
