@@ -56,8 +56,9 @@ class StaticMeshCaptureTest(unittest.TestCase):
             for filename, values in rows.items():
                 write_jsonl(root / filename, values)
             manifest = {
-                "schema_version": 1,
+                "schema_version": 2,
                 "success": True,
+                "selected_struct_field_policy": "direct_safe_scalar_leaves_only: bool,numeric,enum,name,string,text; object/container/delegate/nested-struct members skipped",
                 "diagnostic_only": True,
                 "semantic_promotion": False,
                 "schema_promotion": False,
