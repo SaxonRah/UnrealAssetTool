@@ -40,6 +40,10 @@ class NativeSourceSchema1Test(unittest.TestCase):
                 """
                 #pragma once
 
+                HRSIM_EXTERN_C_BEGIN
+                typedef unsigned int HRSimTypeId;
+                HRSIM_EXTERN_C_END
+
                 #define SYNTH_CHECK(v) \
                     do { if (!(v)) abort(); } while (0)
 
@@ -228,6 +232,8 @@ class NativeSourceSchema1Test(unittest.TestCase):
             self.assertIn(("typedef", "HRPoint"), by_kind_name)
             self.assertIn(("typedef", "HRRawState"), by_kind_name)
             self.assertIn(("typedef", "HRCallback"), by_kind_name)
+            self.assertIn(("typedef", "HRSimTypeId"), by_kind_name)
+            self.assertNotIn(("global", "HRSimTypeId"), by_kind_name)
             self.assertNotIn(("typedef", "userdata"), by_kind_name)
             self.assertNotIn(("typedef", "struct"), by_kind_name)
             self.assertNotIn(("typedef", "enum"), by_kind_name)
