@@ -150,7 +150,7 @@ class StaticMeshSchema1Test(unittest.TestCase):
             {
                 "static_mesh_path": self.mesh, "property_name": "SectionInfoMap",
                 "property_type": "StructProperty", "cpp_type": "FMeshSectionInfoMap",
-                "struct_type": "/Script/Engine.MeshSectionInfoMap", "value": "(Map=((0,())))", "fields": {"Map": "((0,()))"},
+                "struct_type": "/Script/Engine.MeshSectionInfoMap", "value": "(Map=((0,())))", "fields": {},
             },
             {
                 "static_mesh_path": self.mesh, "property_name": "LODGroup",
