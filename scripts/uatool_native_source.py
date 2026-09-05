@@ -528,35 +528,79 @@ def _parameter_row(
     }
 
 
-def _simple_global(tokens: list[Token], start: int, end: int):
+def _simple_globals(tokens: list[Token], start: int, end: int) -> list[tuple[str, str, str]]:
     body = _strip_leading_decl_annotations(tokens[start:end])
     if not body:
-        return None
+        return []
     if body[0].text in {"typedef", "using", "static_assert"}:
-        return None
+        return []
 
-    eq_index = _top_level_token_index(body, "=")
-    eq = len(body) if eq_index is None else eq_index
-    left = body[:eq]
+    parts = _split_parameters(body)
+    if not parts:
+        return []
 
-    # Parentheses on the declaration side imply a function/function-pointer
-    # shape. Parentheses in an initializer are fine and common in UE fields.
-    if any(t.text in {"(", ")"} for t in left):
-        return None
+    def split_decl(part: list[Token]):
+        eq_index = _top_level_token_index(part, "=")
+        eq = len(part) if eq_index is None else eq_index
+        left = part[:eq]
+        if any(t.text in {"(", ")"} for t in left):
+            return None
+        name_index = None
+        for index in range(len(left) - 1, -1, -1):
+            if left[index].kind == "identifier":
+                name_index = index
+                break
+        if name_index is None:
+            return None
+        return (
+            left,
+            name_index,
+            part[eq + 1:] if eq < len(part) else [],
+        )
 
-    name_index = None
-    for i in range(len(left) - 1, -1, -1):
-        if left[i].kind == "identifier":
-            name_index = i
-            break
-    if name_index is None or name_index == 0:
-        return None
-    name = left[name_index].text
-    type_text = _tokens_text(left[:name_index])
-    if not type_text:
-        return None
-    initializer = _tokens_text(body[eq + 1:]) if eq < len(body) else ""
-    return name, type_text, initializer
+    first = split_decl(parts[0])
+    if first is None:
+        return []
+    first_left, first_name_index, first_initializer = first
+    if first_name_index == 0:
+        return []
+
+    first_prefix = first_left[:first_name_index]
+    # In "char *a, *b", "char" is shared while "*" belongs to each
+    # declarator. Keep trailing pointer/reference/cv tokens declarator-local.
+    base_end = len(first_prefix)
+    while (
+        base_end > 0
+        and first_prefix[base_end - 1].text in {"*", "&", "&&", "const", "volatile"}
+    ):
+        base_end -= 1
+    shared_type = first_prefix[:base_end]
+    first_decl_prefix = first_prefix[base_end:]
+    if not shared_type:
+        return []
+
+    result = [
+        (
+            first_left[first_name_index].text,
+            _tokens_text(shared_type + first_decl_prefix),
+            _tokens_text(first_initializer),
+        )
+    ]
+
+    for part in parts[1:]:
+        parsed = split_decl(part)
+        if parsed is None:
+            continue
+        left, name_index, initializer = parsed
+        declarator_prefix = left[:name_index]
+        result.append(
+            (
+                left[name_index].text,
+                _tokens_text(shared_type + declarator_prefix),
+                _tokens_text(initializer),
+            )
+        )
+    return result
 
 
 def _type_declaration(tokens: list[Token], start: int, end: int):
@@ -591,6 +635,36 @@ def _typedef_declaration(tokens: list[Token], start: int, end: int):
     body = tokens[start:end]
     if not body or body[0].text != "typedef":
         return None
+
+    # Function-pointer typedefs must take the identifier from the declarator,
+    # not from the final parameter name:
+    #   typedef void (*HRSimEventCallback)(..., void *userdata);
+    for i in range(1, len(body) - 3):
+        if body[i].text != "(":
+            continue
+        close = _matching(body, i, "(", ")")
+        if close is None:
+            continue
+        star = next(
+            (j for j in range(i + 1, close) if body[j].text == "*"),
+            None,
+        )
+        if star is None:
+            continue
+        alias_index = next(
+            (
+                j
+                for j in range(star + 1, close)
+                if body[j].kind == "identifier"
+            ),
+            None,
+        )
+        if alias_index is None:
+            continue
+        name = body[alias_index].text
+        type_tokens = body[1:alias_index] + body[alias_index + 1:]
+        return name, _tokens_text(type_tokens)
+
     for i in range(len(body) - 1, 0, -1):
         if body[i].kind == "identifier":
             return body[i].text, _tokens_text(body[1:i])
@@ -961,9 +1035,7 @@ def _parse_declarations_and_calls(
             continue
 
         if delimiter == ";":
-            global_info = _simple_global(tokens, i, j)
-            if global_info:
-                name, type_text, initializer = global_info
+            for name, type_text, initializer in _simple_globals(tokens, i, j):
                 add_decl(
                     "field" if scope_kind == "record" else "global",
                     name,
