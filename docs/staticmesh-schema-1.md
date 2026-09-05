@@ -57,7 +57,7 @@ The 32 LOD mismatches are not topology failures. In every reported case the Asse
 - `static_mesh_body_setups.jsonl`
 - `static_mesh_collision_shapes.jsonl`
 
-The focused `staticmesh-native-capture` directory remains diagnostic evidence and is not the public corpus contract.
+The focused `staticmesh-native-capture` directory remains diagnostic evidence and is not the public corpus contract. Its native capture manifest is schema **2**. Schema 2 keeps the complete top-level authored text for selected StaticMesh properties, but expands selected struct `fields` only for direct scalar leaves (bool, numeric, enum, name, string and text). Object references, arrays/maps/sets, delegates and nested opaque structs are not recursively fed through generic `ExportTextItem_Direct`; this avoids dereferencing editor-internal struct members while preserving the exact top-level authored value. `NaniteSettings.bEnabled` remains a safe direct boolean leaf and continues to drive canonical `nanite_enabled`.
 
 ### `static_meshes.jsonl`
 
