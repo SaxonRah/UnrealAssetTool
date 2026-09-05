@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import sys
 import tempfile
@@ -147,6 +148,26 @@ class AnimationMeshPhysicsSchema3Test(unittest.TestCase):
         self.assertEqual(manifest["mesh_physics_schema_version"], 1)
         self.assertEqual(manifest["counts"]["skeletal_meshes"], 1)
         self.assertIn("physics_constraints.jsonl", manifest["files"])
+
+    def test_normalize_is_idempotent_on_current_schema3_manifest(self) -> None:
+        self._write_valid()
+        manifest_path = self.output / "animation_manifest.json"
+        manifest_path.write_text(json.dumps({
+            "schema_version": 3,
+            "pass": "UnrealAssetToolAnimation",
+            "counts": {"animation_assets": 7},
+            "files": ["animation_assets.jsonl"],
+            "curve_key_encoding": "float64-blocks-v1",
+        }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
+        self.assertTrue(mesh_physics.normalize_output(self.output))
+
+        frozen = 1_700_000_000_000_000_000
+        os.utime(manifest_path, ns=(frozen, frozen))
+        before = manifest_path.read_bytes()
+
+        self.assertTrue(mesh_physics.normalize_output(self.output))
+        self.assertEqual(manifest_path.read_bytes(), before)
+        self.assertEqual(manifest_path.stat().st_mtime_ns, frozen)
 
     def test_schema3_retains_animation_property_block_storage(self) -> None:
         self._write_valid()
