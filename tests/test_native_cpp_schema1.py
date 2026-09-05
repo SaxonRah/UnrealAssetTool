@@ -180,9 +180,13 @@ class NativeCppSchema1Test(unittest.TestCase):
             / "UnrealAssetToolCommandlet.cpp"
         ).read_text(encoding="utf-8")
         self.assertIn("UnrealAssetToolNative::Scan(", source)
+        self.assertIn('FParse::Param(*Params, TEXT("NativeOnly"))', source)
+        self.assertIn("native-only capture complete", source)
 
         launcher = (SCRIPTS / "uatool_core.py").read_text(encoding="utf-8")
         self.assertIn("native C++ pass incomplete", launcher)
+        self.assertIn('sub.add_parser(\n        "native-capture"', launcher)
+        self.assertIn('"-NativeOnly"', launcher)
         self.assertNotIn("-run=UnrealAssetToolNative", launcher)
 
 
