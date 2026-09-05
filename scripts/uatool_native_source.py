@@ -1024,6 +1024,12 @@ def _parse_declarations_and_calls(
                     i += 1
                 continue
 
+            # A forward declaration such as "class UFoo;" or "struct Bar;"
+            # is complete here. Do not let it fall through into ordinary
+            # variable parsing, which would fabricate a global named UFoo/Bar.
+            i = j + 1
+            continue
+
         signature = _function_signature(tokens, i, j, allow_bare=bool(scope_name))
         if signature:
             qualified_name, name_start, open_index, close_index = signature
@@ -1170,6 +1176,9 @@ def _reflection_joins(
         ).append(row)
 
     joins: list[dict] = []
+    function_kinds = {"function", "method"}
+    reflected_type_kinds = {"class", "struct", "union"}
+    enum_kinds = {"enum", "enum_class"}
 
     def expected_path(module_name: str, module_relative: str) -> str:
         module = modules.get(module_name)
@@ -1186,7 +1195,11 @@ def _reflection_joins(
         rel = str(metadata.get("ModuleRelativePath", "") or "")
         project_path = expected_path(module_name, rel)
         name = str(reflected.get("name", "") or "")
-        candidates = by_key.get((module_name, project_path, name), [])
+        candidates = [
+            row
+            for row in by_key.get((module_name, project_path, name), [])
+            if row.get("kind") in function_kinds
+        ]
         if len(candidates) != 1:
             continue
         source = candidates[0]
@@ -1213,7 +1226,11 @@ def _reflection_joins(
             or reflected.get("name", "")
             or ""
         )
-        candidates = by_key.get((module_name, project_path, name), [])
+        candidates = [
+            row
+            for row in by_key.get((module_name, project_path, name), [])
+            if row.get("kind") in reflected_type_kinds
+        ]
         if len(candidates) != 1:
             continue
         source = candidates[0]
@@ -1240,7 +1257,11 @@ def _reflection_joins(
             or reflected.get("name", "")
             or ""
         )
-        candidates = by_key.get((module_name, project_path, name), [])
+        candidates = [
+            row
+            for row in by_key.get((module_name, project_path, name), [])
+            if row.get("kind") in enum_kinds
+        ]
         if len(candidates) != 1:
             continue
         source = candidates[0]
