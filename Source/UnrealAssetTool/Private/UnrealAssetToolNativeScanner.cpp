@@ -370,7 +370,7 @@ static void AddPropertyShape(const FProperty* Property, const TSharedRef<FJsonOb
     Row->SetStringField(TEXT("cpp_type"), Property ? Property->GetCPPType() : FString());
     Row->SetStringField(TEXT("container_kind"), ContainerKind(Property));
     Row->SetNumberField(TEXT("array_dim"), Property ? Property->ArrayDim : 0);
-    Row->SetNumberField(TEXT("element_size"), Property ? Property->ElementSize : 0);
+    Row->SetNumberField(TEXT("element_size"), Property ? Property->GetElementSize() : 0);
     Row->SetStringField(
         TEXT("property_flags_hex"),
         Property ? Hex64(static_cast<uint64>(Property->GetPropertyFlags())) : Hex64(0));
@@ -518,7 +518,7 @@ static bool WriteTypeProperties(
     FCounts& Counts)
 {
     int32 DeclarationIndex = 0;
-    for (TFieldIterator<FProperty> It(Struct, EFieldIterationFlags::ExcludeSuper); It; ++It)
+    for (TFieldIterator<FProperty> It(Struct, EFieldIterationFlags::None); It; ++It)
     {
         const FProperty* Property = *It;
         if (!Property || Property->HasAnyPropertyFlags(CPF_Parm))
@@ -641,7 +641,9 @@ static FString ParameterKind(const FProperty* Property)
     {
         return TEXT("return");
     }
-    if (Property->HasAnyPropertyFlags(CPF_OutParm | CPF_ReferenceParm))
+    if (
+        Property->HasAnyPropertyFlags(CPF_OutParm) &&
+        Property->HasAnyPropertyFlags(CPF_ReferenceParm))
     {
         return TEXT("inout");
     }
@@ -673,7 +675,7 @@ static bool WriteFunction(
     Row->SetStringField(TEXT("access"), FunctionAccess(Function));
     Row->SetStringField(
         TEXT("function_flags_hex"),
-        Hex64(static_cast<uint64>(Function->GetFunctionFlags())));
+        Hex64(static_cast<uint64>(Function->FunctionFlags)));
     Row->SetNumberField(TEXT("parameter_count"), Function->NumParms);
     Row->SetNumberField(TEXT("parameter_size"), Function->ParmsSize);
     Row->SetBoolField(TEXT("native"), Function->HasAnyFunctionFlags(FUNC_Native));
@@ -702,7 +704,7 @@ static bool WriteFunction(
     ++Counts.Functions;
 
     int32 ParameterIndex = 0;
-    for (TFieldIterator<FProperty> It(Function, EFieldIterationFlags::ExcludeSuper); It; ++It)
+    for (TFieldIterator<FProperty> It(Function, EFieldIterationFlags::None); It; ++It)
     {
         const FProperty* Property = *It;
         if (!Property || !Property->HasAnyPropertyFlags(CPF_Parm))
@@ -757,7 +759,7 @@ static bool WriteEnum(
     Row->SetStringField(TEXT("enum_path"), EnumPath);
     Row->SetStringField(TEXT("module_name"), ModuleNameForObject(Enum));
     Row->SetStringField(TEXT("name"), Enum->GetName());
-    Row->SetStringField(TEXT("cpp_type"), Enum->GetCppType());
+    Row->SetStringField(TEXT("cpp_type"), Enum->CppType);
     Row->SetStringField(TEXT("cpp_form"), EnumCppForm(Enum));
     Row->SetNumberField(TEXT("value_count"), Enum->NumEnums());
     Row->SetObjectField(TEXT("metadata"), UFieldMetadata(Enum));
