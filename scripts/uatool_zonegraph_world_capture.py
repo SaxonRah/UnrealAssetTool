@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import collections
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -188,6 +189,181 @@ def _validate_capture(output: Path, expected_shapes: set[str]) -> dict:
     if int(counts.get("worlds_requested", -1)) != int(counts.get("worlds_loaded", -2)):
         raise RuntimeError("ZoneGraph focused capture did not load every requested world")
     return manifest
+
+
+def promote_capture(systems_module, corpus: Path, capture: Path) -> dict:
+    """Overlay validated world-owned ZoneGraph rows onto the current systems schema.
+
+    The current corpus remains the source for every non-ZoneGraph systems stream.
+    This deliberately does not run Unreal or derive.
+    """
+    corpus = Path(corpus).expanduser().resolve()
+    capture = Path(capture).expanduser().resolve()
+
+    manifest_path = corpus / "systems_manifest.json"
+    if not manifest_path.is_file():
+        raise RuntimeError("current corpus is missing systems_manifest.json")
+    try:
+        current_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"invalid current systems_manifest.json: {exc}") from exc
+    if not isinstance(current_manifest, dict):
+        raise RuntimeError("current systems_manifest.json root is not an object")
+
+    current_schema = int(getattr(systems_module, "SYSTEMS_SCHEMA_VERSION", 0) or 0)
+    if int(current_manifest.get("schema_version", 0) or 0) != current_schema:
+        raise RuntimeError(
+            "ZoneGraph promotion requires the current composed systems schema: "
+            f"manifest={current_manifest.get('schema_version')} scripts={current_schema}"
+        )
+
+    current_error = systems_module.validation_error(corpus)
+    if current_error:
+        raise RuntimeError(
+            "current systems corpus must validate before ZoneGraph promotion: "
+            f"{current_error}"
+        )
+
+    worlds, expected_shapes = discover_zonegraph_worlds(corpus)
+    zone_manifest = _validate_capture(capture, expected_shapes)
+    shapes = list(_rows(capture / "zonegraph_shapes.jsonl"))
+    points = list(_rows(capture / "zonegraph_shape_points.jsonl"))
+
+    stage = corpus / ".zonegraph-world-promote-staging"
+    if stage.exists():
+        shutil.rmtree(stage)
+    stage.mkdir(parents=True, exist_ok=True)
+
+    try:
+        raw_files = tuple(getattr(systems_module, "RAW_FILES", ()))
+        if "systems_manifest.json" not in raw_files:
+            raise RuntimeError("current systems module RAW_FILES lacks systems_manifest.json")
+        for filename in raw_files:
+            source = corpus / filename
+            if not source.is_file():
+                raise RuntimeError(f"current systems corpus missing {filename}")
+            shutil.copy2(source, stage / filename)
+
+        for filename in ("zonegraph_shapes.jsonl", "zonegraph_shape_points.jsonl"):
+            source = capture / filename
+            if not source.is_file():
+                raise RuntimeError(f"focused ZoneGraph capture missing {filename}")
+            shutil.copy2(source, stage / filename)
+
+        staged_manifest_path = stage / "systems_manifest.json"
+        staged_manifest = json.loads(staged_manifest_path.read_text(encoding="utf-8"))
+        counts = staged_manifest.get("counts")
+        if not isinstance(counts, dict):
+            raise RuntimeError("current systems manifest counts missing or invalid")
+        counts["zonegraph_shapes"] = len(shapes)
+        counts["zonegraph_shape_points"] = len(points)
+        staged_manifest["zonegraph_authored_source"] = (
+            "focused_world_placed_actor_reflection"
+        )
+        staged_manifest["zonegraph_world_manifest_schema"] = int(
+            zone_manifest.get("schema_version", 0) or 0
+        )
+        staged_manifest["zonegraph_worlds_requested"] = len(worlds)
+        staged_manifest["zonegraph_expected_shape_count"] = len(expected_shapes)
+        staged_manifest["generated_lane_topology"] = False
+        staged_manifest_path.write_text(
+            json.dumps(staged_manifest, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+
+        staged_error = systems_module.validation_error(stage)
+        if staged_error:
+            raise RuntimeError(
+                "current-schema systems tree failed after ZoneGraph overlay: "
+                f"{staged_error}"
+            )
+
+        # Prepare every replacement before committing anything. The systems
+        # manifest is replaced last and remains the commit marker.
+        replacements = (
+            "zonegraph_shapes.jsonl",
+            "zonegraph_shape_points.jsonl",
+        )
+        prepared: list[tuple[Path, Path]] = []
+        for filename in replacements:
+            temp = corpus / f".{filename}.zonegraph-promote.tmp"
+            shutil.copy2(stage / filename, temp)
+            prepared.append((temp, corpus / filename))
+
+        zone_manifest_temp = corpus / ".zonegraph_world_manifest.json.zonegraph-promote.tmp"
+        shutil.copy2(capture / "zonegraph_world_manifest.json", zone_manifest_temp)
+
+        systems_manifest_temp = corpus / ".systems_manifest.json.zonegraph-promote.tmp"
+        shutil.copy2(staged_manifest_path, systems_manifest_temp)
+
+        for temp, destination in prepared:
+            os.replace(temp, destination)
+        os.replace(zone_manifest_temp, corpus / "zonegraph_world_manifest.json")
+        os.replace(systems_manifest_temp, corpus / "systems_manifest.json")
+    finally:
+        if stage.exists():
+            shutil.rmtree(stage)
+
+    final_error = systems_module.validation_error(corpus)
+    if final_error:
+        raise RuntimeError(
+            "promoted current systems corpus failed validation: "
+            f"{final_error}"
+        )
+
+    return {
+        "systems_schema_version": current_schema,
+        "zonegraph_worlds": len(worlds),
+        "zonegraph_shapes": len(shapes),
+        "zonegraph_shape_points": len(points),
+        "exact_shape_set_match": True,
+        "generated_lane_topology": False,
+        "capture": str(capture),
+        "corpus": str(corpus),
+    }
+
+
+def _promote_cli(systems_module, argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="uatool zonegraph-world-promote",
+        description=(
+            "overlay an already validated focused authored ZoneGraph capture onto "
+            "the current composed systems schema; does not run Unreal or derive"
+        ),
+    )
+    parser.add_argument("project", help="path to .uproject; used to resolve defaults")
+    parser.add_argument(
+        "--corpus",
+        help="current canonical corpus; defaults to <Project>/.uatool",
+    )
+    parser.add_argument(
+        "--capture",
+        help=(
+            "existing focused ZoneGraph capture directory; defaults to "
+            "<corpus>/zonegraph-world-capture"
+        ),
+    )
+    args = parser.parse_args(argv)
+
+    project = _resolve_project(args.project)
+    corpus = _resolve_corpus(project, args.corpus)
+    capture = (
+        Path(args.capture).expanduser().resolve()
+        if args.capture
+        else corpus / "zonegraph-world-capture"
+    )
+    result = promote_capture(systems_module, corpus, capture)
+    print(f"promoted focused ZoneGraph into current systems schema: {corpus}")
+    print(f"  systems_schema: {result['systems_schema_version']}")
+    print(f"  zonegraph_worlds: {result['zonegraph_worlds']}")
+    print(f"  zonegraph_shapes: {result['zonegraph_shapes']}")
+    print(f"  zonegraph_shape_points: {result['zonegraph_shape_points']}")
+    print(f"  exact_shape_set_match: {result['exact_shape_set_match']}")
+    print(f"  generated_lane_topology: {result['generated_lane_topology']}")
+    print("  Unreal launched: False")
+    print("  derive run: False")
+    return 0
 
 
 def _short(value, limit: int = 180) -> str:
@@ -400,6 +576,12 @@ def install(runtime_module, core_module, systems_module) -> None:
             except Exception as exc:
                 print(f"ERROR: {exc}", file=sys.stderr)
                 return 38
+        if len(sys.argv) > 1 and sys.argv[1] == "zonegraph-world-promote":
+            try:
+                return _promote_cli(systems_module, sys.argv[2:])
+            except Exception as exc:
+                print(f"ERROR: {exc}", file=sys.stderr)
+                return 41
         return original_main()
 
     runtime_module.main = main
