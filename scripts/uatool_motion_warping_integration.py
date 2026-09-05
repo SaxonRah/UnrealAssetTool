@@ -143,7 +143,10 @@ def install(runtime_module, core_module) -> None:
         output = Path(output).expanduser().resolve()
         _promote_pending_capture(output)
         if (output / motion_schema.MANIFEST_FILE).is_file():
-            motion_schema.normalize_output(output)
+            animation_manifest = _read_json(output / "animation_manifest.json")
+            public_schema = int(animation_manifest.get("schema_version", 0) or 0) if animation_manifest is not None else 0
+            if public_schema < motion_schema.PUBLIC_ANIMATION_SCHEMA_VERSION:
+                motion_schema.normalize_output(output)
             error = motion_schema.validation_error(output, require_present=True)
             if error:
                 raise RuntimeError(f"Motion Warping animation schema 4 incomplete: {error}")
