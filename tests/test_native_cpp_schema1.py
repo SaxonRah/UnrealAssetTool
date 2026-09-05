@@ -188,14 +188,21 @@ class NativeCppSchema1Test(unittest.TestCase):
         self.assertIn('sub.add_parser(\n        "native-capture"', launcher)
         self.assertIn('"-NativeOnly"', launcher)
         self.assertNotIn("-run=UnrealAssetToolNative", launcher)
-        self.assertNotIn("EFieldIterationFlags::ExcludeSuper", source)
-        self.assertNotIn("GetFunctionFlags()", source)
-        self.assertNotIn("GetCppType()", source)
-        self.assertNotIn("Property->ElementSize", source)
-        self.assertIn("EFieldIterationFlags::None", source)
-        self.assertIn("Function->FunctionFlags", source)
-        self.assertIn("Enum->CppType", source)
-        self.assertIn("Property->GetElementSize()", source)
+        native_source = (
+            ROOT
+            / "Source"
+            / "UnrealAssetTool"
+            / "Private"
+            / "UnrealAssetToolNativeScanner.cpp"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("EFieldIterationFlags::ExcludeSuper", native_source)
+        self.assertNotIn("GetFunctionFlags()", native_source)
+        self.assertNotIn("GetCppType()", native_source)
+        self.assertNotIn("Property->ElementSize", native_source)
+        self.assertIn("EFieldIterationFlags::None", native_source)
+        self.assertIn("Function->FunctionFlags", native_source)
+        self.assertIn("Enum->CppType", native_source)
+        self.assertIn("Property->GetElementSize()", native_source)
 
 
 if __name__ == "__main__":
