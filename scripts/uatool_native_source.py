@@ -598,3 +598,303 @@ def _parse_declarations_and_calls(
 ) -> tuple[list[dict], list[dict], list[dict]]:
     declarations: list[dict] = []
     parameters: list[dict] = []
+    calls: list[dict] = []
+    i = 0
+
+    def add_decl(kind: str, name: str, start: int, end: int, **extra):
+        first = tokens[start]
+        last = tokens[max(start, end - 1)]
+        qualified_name = extra.pop(
+            "qualified_name",
+            f"{scope_name}::{name}" if scope_name else name,
+        )
+        declaration_id = _stable_id(
+            path, kind, qualified_name, first.line, first.column
+        )
+        row = {
+            "declaration_id": declaration_id,
+            "module_name": module_name,
+            "path": path,
+            "kind": kind,
+            "name": name,
+            "qualified_name": qualified_name,
+            "start_line": first.line,
+            "start_column": first.column,
+            "end_line": last.line,
+            "end_column": last.column + max(0, len(last.text) - 1),
+            "definition": bool(extra.pop("definition", False)),
+            "evidence_level": EVIDENCE_LEVEL,
+        }
+        row.update(extra)
+        declarations.append(row)
+        return row
+
+    while i < len(tokens):
+        if tokens[i].text == ";":
+            i += 1
+            continue
+
+        # Find the next top-level statement delimiter.
+        paren = bracket = 0
+        j = i
+        delimiter = None
+        while j < len(tokens):
+            t = tokens[j].text
+            if t == "(":
+                paren += 1
+            elif t == ")":
+                paren = max(0, paren - 1)
+            elif t == "[":
+                bracket += 1
+            elif t == "]":
+                bracket = max(0, bracket - 1)
+            elif paren == 0 and bracket == 0 and t in {";", "{"}:
+                delimiter = t
+                break
+            j += 1
+        if delimiter is None:
+            break
+
+        if tokens[i].text == "typedef":
+            if delimiter == "{":
+                type_info = _type_declaration(tokens, i, j)
+                body_close = _matching(tokens, j, "{", "}")
+                if type_info and body_close is not None:
+                    kind, tag_name, type_start = type_info
+                    add_decl(
+                        kind,
+                        tag_name,
+                        type_start,
+                        body_close + 1,
+                        definition=True,
+                        type_text=_tokens_text(tokens[type_start:j]),
+                    )
+                    nested_declarations, nested_parameters, nested_calls = (
+                        _parse_declarations_and_calls(
+                            tokens[j + 1:body_close],
+                            path,
+                            module_name,
+                            f"{scope_name}::{tag_name}" if scope_name else tag_name,
+                        )
+                    )
+                    declarations.extend(nested_declarations)
+                    parameters.extend(nested_parameters)
+                    calls.extend(nested_calls)
+
+                    semi = body_close + 1
+                    while semi < len(tokens) and tokens[semi].text != ";":
+                        semi += 1
+                    alias_tokens = tokens[body_close + 1:semi]
+                    alias_name = next(
+                        (
+                            token.text
+                            for token in reversed(alias_tokens)
+                            if token.kind == "identifier"
+                        ),
+                        "",
+                    )
+                    if alias_name:
+                        add_decl(
+                            "typedef",
+                            alias_name,
+                            i,
+                            semi,
+                            type_text=f"{kind} {tag_name}",
+                        )
+                    i = min(len(tokens), semi + 1)
+                    continue
+            info = _typedef_declaration(tokens, i, j)
+            if info:
+                name, type_text = info
+                add_decl("typedef", name, i, j, type_text=type_text)
+            i = j + 1
+            continue
+
+        if tokens[i].text == "using":
+            info = _using_alias(tokens, i, j)
+            if info:
+                name, type_text = info
+                add_decl("type_alias", name, i, j, type_text=type_text)
+            i = j + 1
+            continue
+
+        type_info = _type_declaration(tokens, i, j)
+        if type_info:
+            kind, name, type_start = type_info
+            body_close = _matching(tokens, j, "{", "}") if delimiter == "{" else None
+            end = (body_close + 1) if body_close is not None else j
+            add_decl(
+                kind,
+                name,
+                type_start,
+                max(type_start + 1, end),
+                definition=body_close is not None,
+                type_text=_tokens_text(tokens[type_start:j]),
+            )
+            if body_close is not None:
+                nested_declarations, nested_parameters, nested_calls = (
+                    _parse_declarations_and_calls(
+                        tokens[j + 1:body_close],
+                        path,
+                        module_name,
+                        f"{scope_name}::{name}" if scope_name else name,
+                    )
+                )
+                declarations.extend(nested_declarations)
+                parameters.extend(nested_parameters)
+                calls.extend(nested_calls)
+                i = body_close + 1
+                if i < len(tokens) and tokens[i].text == ";":
+                    i += 1
+                continue
+
+        signature = _function_signature(tokens, i, j, allow_bare=bool(scope_name))
+        if signature:
+            qualified_name, name_start, open_index, close_index = signature
+            name = qualified_name.split("::")[-1]
+            definition = delimiter == "{"
+            end_for_decl = j
+            if scope_name and "::" not in qualified_name:
+                qualified_name = f"{scope_name}::{qualified_name}"
+            row = add_decl(
+                "method" if scope_name else "function",
+                name,
+                i,
+                end_for_decl,
+                qualified_name=qualified_name,
+                definition=definition,
+                return_type_text=_tokens_text(tokens[i:name_start]),
+                signature_text=_tokens_text(tokens[i:j]),
+                parameter_count=0,
+            )
+            param_parts = _split_parameters(tokens[open_index + 1:close_index])
+            if len(param_parts) == 1 and len(param_parts[0]) == 1 and param_parts[0][0].text == "void":
+                param_parts = []
+            param_rows = [
+                _parameter_row(row["declaration_id"], index, part)
+                for index, part in enumerate(param_parts)
+            ]
+            row["parameter_count"] = len(param_rows)
+            parameters.extend(param_rows)
+
+            if definition:
+                body_close = _matching(tokens, j, "{", "}")
+                if body_close is None:
+                    i = j + 1
+                    continue
+                row["body_start_line"] = tokens[j].line
+                row["body_end_line"] = tokens[body_close].line
+                calls.extend(_calls_for_function(
+                    tokens, j, body_close, row, path, module_name
+                ))
+                i = body_close + 1
+                continue
+            i = j + 1
+            continue
+
+        if delimiter == ";":
+            global_info = _simple_global(tokens, i, j)
+            if global_info:
+                name, type_text, initializer = global_info
+                add_decl(
+                    "field" if scope_name else "global",
+                    name,
+                    i,
+                    j,
+                    type_text=type_text,
+                    initializer_text=initializer,
+                )
+            i = j + 1
+            continue
+
+        # Unknown top-level brace construct: skip its balanced body rather than
+        # interpreting nested syntax as global declarations.
+        body_close = _matching(tokens, j, "{", "}")
+        i = (body_close + 1) if body_close is not None else (j + 1)
+
+    declarations.sort(key=lambda r: (r["path"], r["start_line"], r["start_column"], r["kind"], r["name"]))
+    parameters.sort(key=lambda r: (r["declaration_id"], r["parameter_index"]))
+    calls.sort(key=lambda r: (r["path"], r["start_line"], r["start_column"], r["callee_spelling"]))
+    return declarations, parameters, calls
+
+
+def _include_rows(
+    project_dir: Path,
+    module_name: str,
+    module_root: Path,
+    path: Path,
+    indexed_paths: set[Path],
+) -> list[dict]:
+    text = path.read_text(encoding="utf-8", errors="replace")
+    result: list[dict] = []
+    rel = _relative(project_dir, path)
+    public_roots = [module_root / "Public", module_root / "Private", module_root]
+    for line_number, line in enumerate(text.splitlines(), 1):
+        match = INCLUDE_RE.match(line)
+        if not match:
+            continue
+        opener, target = match.groups()
+        form = "angle" if opener == "<" else "quote"
+        column = line.find(target) + 1
+        resolved = ""
+        candidates = [path.parent / target] + [root / target for root in public_roots]
+        for candidate in candidates:
+            candidate = candidate.resolve()
+            if candidate in indexed_paths:
+                resolved = _relative(project_dir, candidate)
+                break
+        result.append({
+            "include_id": _stable_id(rel, line_number, target, form),
+            "module_name": module_name,
+            "path": rel,
+            "line": line_number,
+            "column": max(1, column),
+            "target_spelling": target,
+            "form": form,
+            "resolved_project_path": resolved,
+            "resolution": "project_filesystem" if resolved else "unresolved_source_syntax",
+            "compiler_resolved": False,
+            "evidence_level": EVIDENCE_LEVEL,
+        })
+    return result
+
+
+def _reflection_rows(output: Path, filename: str) -> list[dict]:
+    return list(_rows(output / filename))
+
+
+def _reflection_joins(
+    project_dir: Path,
+    output: Path,
+    declarations: list[dict],
+) -> list[dict]:
+    modules = {str(row.get("module_name", "") or ""): row for row in _module_rows(output)}
+    by_key: dict[tuple[str, str, str], list[dict]] = {}
+    for row in declarations:
+        by_key.setdefault(
+            (row.get("module_name", ""), row.get("path", ""), row.get("name", "")),
+            [],
+        ).append(row)
+
+    joins: list[dict] = []
+
+    def expected_path(module_name: str, module_relative: str) -> str:
+        module = modules.get(module_name)
+        if not module:
+            return ""
+        build_cs = str(module.get("build_cs", "") or "")
+        if not build_cs or not module_relative:
+            return ""
+        return (Path(build_cs).parent / Path(module_relative)).as_posix()
+
+    for reflected in _reflection_rows(output, "native_functions.jsonl"):
+        module_name = str(reflected.get("module_name", "") or "")
+        metadata = reflected.get("metadata") or {}
+        rel = str(metadata.get("ModuleRelativePath", "") or "")
+        project_path = expected_path(module_name, rel)
+        name = str(reflected.get("name", "") or "")
+        candidates = by_key.get((module_name, project_path, name), [])
+        if len(candidates) != 1:
+            continue
+        source = candidates[0]
+        join_id = _stable_id("function", reflected.get("function_path", ""), source["declaration_id"])
