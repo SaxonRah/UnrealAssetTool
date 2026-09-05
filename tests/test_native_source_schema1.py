@@ -42,6 +42,7 @@ class NativeSourceSchema1Test(unittest.TestCase):
 
                 HRSIM_EXTERN_C_BEGIN
                 typedef unsigned int HRSimTypeId;
+                HRSIM_API int SentinelApi(int Value);
                 HRSIM_EXTERN_C_END
 
                 #define SYNTH_CHECK(v) \
@@ -234,6 +235,13 @@ class NativeSourceSchema1Test(unittest.TestCase):
             self.assertIn(("typedef", "HRCallback"), by_kind_name)
             self.assertIn(("typedef", "HRSimTypeId"), by_kind_name)
             self.assertNotIn(("global", "HRSimTypeId"), by_kind_name)
+            sentinel_api = next(
+                row
+                for row in declarations
+                if row["kind"] == "function" and row["name"] == "SentinelApi"
+            )
+            self.assertEqual(sentinel_api["return_type_text"], "HRSIM_API int")
+            self.assertNotIn("HRSIM_EXTERN_C_BEGIN", sentinel_api["signature_text"])
             self.assertNotIn(("typedef", "userdata"), by_kind_name)
             self.assertNotIn(("typedef", "struct"), by_kind_name)
             self.assertNotIn(("typedef", "enum"), by_kind_name)
