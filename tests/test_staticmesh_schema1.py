@@ -164,6 +164,7 @@ class StaticMeshSchema1Test(unittest.TestCase):
     def test_promotion_uses_loaded_source_models_and_preserves_structural_12(self):
         manifest = schema.promote_capture(self.corpus, self.capture)
         self.assertEqual(manifest["schema_version"], 1)
+        self.assertEqual(manifest["source_capture_schema_version"], 2)
         top = json.loads((self.corpus / "manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(top["schema_version"], 12)
         self.assertEqual(top["mesh_schema_version"], 1)
