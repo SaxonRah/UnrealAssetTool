@@ -172,6 +172,33 @@ class SemanticReportMacroExecutionTest(unittest.TestCase):
             self.assertEqual(result["interprocedural_execution_terminal_count"], 0)
             self.assertTrue(result["interprocedural_stream_alignment"])
 
+    def test_disconnected_exec_shaped_macro_is_not_an_execution_bridge_defect(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self._fixture(root, connected=False)
+            blocks = list(rows(root / "blueprint_execution_blocks.jsonl"))
+            write_jsonl(
+                root / "blueprint_execution_blocks.jsonl",
+                [row for row in blocks if row["block_id"] != "caller-block"],
+            )
+            self._write_interprocedural_streams(root)
+            result = report.build_report(root, rows)
+
+            self.assertEqual(result["macro_exec_exact_instance_count"], 0)
+            self.assertEqual(result["macro_exec_disconnected_instance_count"], 1)
+            self.assertEqual(result["macro_exec_input_binding_count"], 0)
+            self.assertEqual(result["macro_exec_output_binding_count"], 0)
+            self.assertEqual(result["macro_exec_exact_entry_bridge_count"], 0)
+            self.assertEqual(result["macro_exec_exact_return_bridge_count"], 0)
+            self.assertIn(
+                ("disconnected_exec_shaped_instance", 1),
+                result["macro_exec_status"],
+            )
+            self.assertEqual(result["macro_exec_mismatches"], [])
+            self.assertEqual(result["interprocedural_execution_edge_count"], 0)
+            self.assertEqual(result["interprocedural_execution_terminal_count"], 0)
+            self.assertTrue(result["interprocedural_stream_alignment"])
+
     def test_terminal_macro_exec_output_is_not_a_bridge_defect(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

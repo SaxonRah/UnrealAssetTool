@@ -66,8 +66,9 @@ class StaticMeshSchema1Test(unittest.TestCase):
             "canonical_passes": ["structural", "world", "animation"],
         })
         write_json(self.capture / "staticmesh_capture_manifest.json", {
-            "schema_version": 1,
+            "schema_version": 2,
             "success": True,
+            "selected_struct_field_policy": "direct_safe_scalar_leaves_only: bool,numeric,enum,name,string,text; object/container/delegate/nested-struct members skipped",
             "diagnostic_only": True,
             "semantic_promotion": False,
             "schema_promotion": False,
@@ -149,7 +150,7 @@ class StaticMeshSchema1Test(unittest.TestCase):
             {
                 "static_mesh_path": self.mesh, "property_name": "SectionInfoMap",
                 "property_type": "StructProperty", "cpp_type": "FMeshSectionInfoMap",
-                "struct_type": "/Script/Engine.MeshSectionInfoMap", "value": "(Map=((0,())))", "fields": {"Map": "((0,()))"},
+                "struct_type": "/Script/Engine.MeshSectionInfoMap", "value": "(Map=((0,())))", "fields": {},
             },
             {
                 "static_mesh_path": self.mesh, "property_name": "LODGroup",
@@ -163,6 +164,7 @@ class StaticMeshSchema1Test(unittest.TestCase):
     def test_promotion_uses_loaded_source_models_and_preserves_structural_12(self):
         manifest = schema.promote_capture(self.corpus, self.capture)
         self.assertEqual(manifest["schema_version"], 1)
+        self.assertEqual(manifest["source_capture_schema_version"], 2)
         top = json.loads((self.corpus / "manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(top["schema_version"], 12)
         self.assertEqual(top["mesh_schema_version"], 1)

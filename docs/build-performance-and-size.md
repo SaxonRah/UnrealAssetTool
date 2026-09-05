@@ -58,6 +58,13 @@ total         78.99 MB
 
 The cache is moved, not duplicated.
 
+After an abnormal Unreal exit, Windows can briefly keep the just-loaded staged
+module DLL locked. Staging cleanup retries transient `PermissionError` locks
+before giving up. A persistent lock is reported as a cleanup warning rather
+than replacing the scanner's original failure result; if a pre-existing target
+plugin had been moved aside, its backup location is retained and reported until
+the staging path can be cleared safely.
+
 ## Freshness-safe module-only build
 
 If the target runtime manifest has a valid BuildId and no target-owned native/build input is newer than it, the launcher skips the full Editor target and builds only:

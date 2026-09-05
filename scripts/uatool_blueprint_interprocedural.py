@@ -191,6 +191,7 @@ def derive(output: Path, rows) -> tuple[list[dict], list[dict], list[dict]]:
         raise RuntimeError(f"Blueprint execution node belongs to multiple blocks: {sample}")
 
     canonical_exec_by_source_pin: dict[str, list[dict]] = collections.defaultdict(list)
+    canonical_exec_incident_by_node: dict[str, list[dict]] = collections.defaultdict(list)
     canonical_data_incoming_by_pin: dict[str, list[dict]] = collections.defaultdict(list)
     canonical_data_outgoing_by_pin: dict[str, list[dict]] = collections.defaultdict(list)
     for raw_edge in rows(output / "blueprint_edges.jsonl"):
@@ -200,6 +201,12 @@ def derive(output: Path, rows) -> tuple[list[dict], list[dict], list[dict]]:
         if edge_kind == "execution":
             if source_pin_id:
                 canonical_exec_by_source_pin[source_pin_id].append(raw_edge)
+            source_node_id = str(raw_edge.get("source_node_id", "") or "")
+            target_node_id = str(raw_edge.get("target_node_id", "") or "")
+            if source_node_id:
+                canonical_exec_incident_by_node[source_node_id].append(raw_edge)
+            if target_node_id and target_node_id != source_node_id:
+                canonical_exec_incident_by_node[target_node_id].append(raw_edge)
             continue
         if edge_kind != "data":
             continue
@@ -388,7 +395,18 @@ def derive(output: Path, rows) -> tuple[list[dict], list[dict], list[dict]]:
             and str(edge.get("pin_category", "") or "").lower() == "exec"
         ]
         if exec_bindings and caller_block is None:
-            raise RuntimeError(f"executable macro instance lacks caller block: {macro_node_id}")
+            caller_exec_edges = canonical_exec_incident_by_node.get(macro_node_id, [])
+            if caller_exec_edges:
+                raise RuntimeError(
+                    f"executable macro instance lacks caller block despite canonical exec wiring: "
+                    f"{macro_node_id}"
+                )
+            # Exact macro-interface proof can expose exec-shaped pins on a
+            # completely disconnected authored macro node. With no canonical
+            # caller execution edge there is no execution occurrence to bridge.
+            # Preserve macro/data proof, but do not invent a caller block,
+            # macro-enter edge, macro-return edge, or terminal.
+            continue
         if caller_block is None:
             # A data-only exact macro has no interprocedural execution rows.
             continue

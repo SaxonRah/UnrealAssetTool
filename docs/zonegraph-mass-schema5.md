@@ -164,6 +164,31 @@ generated_lane_topology:   false
 
 Promotion never launches Unreal and never runs derive.
 
+### Promoting an existing focused capture into later systems schemas
+
+The original `systems-schema5-accept` command intentionally remains locked to
+systems schema 5 and must not be used to replace a newer systems tree. Later
+composed systems schemas use the Python-only `zonegraph-world-promote` command
+instead. It validates the focused capture against the current corpus's exact
+world-owned ZoneShape set, stages all current systems `RAW_FILES`, overlays only
+`zonegraph_shapes.jsonl` and `zonegraph_shape_points.jsonl`, updates the current
+manifest's ZoneGraph counts/provenance, validates the entire staged current-schema
+tree, and commits the systems manifest last.
+
+For example, a current City Sample corpus can reuse a previously accepted focused
+capture without another Unreal launch:
+
+```powershell
+python scripts\uatool.py zonegraph-world-promote `
+    "N:\EpicVault\Projects\CitySample\CitySample.uproject" `
+    --corpus "E:\TheDigitalGame\ue\CitySample\.uatool" `
+    --capture "N:\EpicVault\Projects\CitySample\.uatool\zonegraph-world-capture"
+```
+
+This command never runs derive. Canonical promotion intentionally invalidates
+derived freshness, so one subsequent derive is required before querying or RC
+validation against the updated ZoneGraph evidence.
+
 ## Final derived schema 21 graph contract
 
 Mass/ZoneGraph exact-semantic graph integration advances the composed final derived schema from 20 to **21**. The schema-5 installer promotes the already-loaded one-launcher composition's schema value during startup; no alternate public launcher is introduced.

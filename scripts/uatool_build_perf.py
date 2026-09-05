@@ -416,6 +416,41 @@ def _save_cache(cache_root: Path, stage_root: Path) -> None:
         print(f"staged plugin build cache save elapsed: {elapsed:.2f}s (nothing saved)")
 
 
+STAGE_CLEANUP_RETRY_DELAYS = (0.10, 0.25, 0.50, 1.00, 1.50)
+
+
+def _remove_staged_plugin_tree(stage_root: Path) -> bool:
+    """Best-effort removal that does not mask an already-known scanner failure.
+
+    Unreal/Windows can transiently retain a just-loaded module DLL after a
+    crashed editor process reports its exit code. Retry that specific lock. If
+    it remains locked, leave the staged tree in place and report it explicitly;
+    the original scanner result remains authoritative.
+    """
+    last_error: PermissionError | None = None
+    for attempt in range(len(STAGE_CLEANUP_RETRY_DELAYS) + 1):
+        try:
+            shutil.rmtree(stage_root, ignore_errors=False)
+            return True
+        except PermissionError as exc:
+            last_error = exc
+            if attempt >= len(STAGE_CLEANUP_RETRY_DELAYS):
+                break
+            delay = STAGE_CLEANUP_RETRY_DELAYS[attempt]
+            print(
+                f"staged plugin cleanup hit a transient Windows lock; "
+                f"retrying ({attempt + 1}/{len(STAGE_CLEANUP_RETRY_DELAYS)})"
+            )
+            time.sleep(delay)
+
+    print(
+        "WARNING: staged target plugin remains locked after Unreal exit; "
+        f"leaving it in place instead of masking the scanner result: {stage_root} "
+        f"({last_error})"
+    )
+    return False
+
+
 @contextmanager
 def _optimized_stage(core, project: Path):
     """Stage the canonical checkout without recursively walking plugin payloads."""
@@ -474,21 +509,29 @@ def _optimized_stage(core, project: Path):
         print(f"canonical plugin source: {canonical}")
         yield stage_root
     finally:
+        staging_removed = True
         if stage_root.exists():
             print(f"removing staged target plugin: {stage_root}")
             cleanup_started = time.perf_counter()
-            shutil.rmtree(stage_root, ignore_errors=False)
-            print(f"plugin staging cleanup elapsed: {time.perf_counter() - cleanup_started:.2f}s")
+            staging_removed = _remove_staged_plugin_tree(stage_root)
+            if staging_removed:
+                print(f"plugin staging cleanup elapsed: {time.perf_counter() - cleanup_started:.2f}s")
 
-        for original, backup in reversed(moved):
-            if backup.exists():
-                original.parent.mkdir(parents=True, exist_ok=True)
-                restore_started = time.perf_counter()
-                shutil.move(str(backup), str(original))
-                print(
-                    f"restored target plugin: {original} "
-                    f"elapsed={time.perf_counter() - restore_started:.2f}s"
-                )
+        if staging_removed:
+            for original, backup in reversed(moved):
+                if backup.exists():
+                    original.parent.mkdir(parents=True, exist_ok=True)
+                    restore_started = time.perf_counter()
+                    shutil.move(str(backup), str(original))
+                    print(
+                        f"restored target plugin: {original} "
+                        f"elapsed={time.perf_counter() - restore_started:.2f}s"
+                    )
+        elif moved:
+            print(
+                "WARNING: pre-existing target UnrealAssetTool plugin backups were "
+                f"not restored because the staging path is still locked; backups remain at {backup_root}"
+            )
 
         if backup_root.exists():
             # Remove only empty scaffolding created by this invocation.

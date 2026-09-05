@@ -16,7 +16,7 @@
 
 namespace UnrealAssetToolStaticMesh
 {
-constexpr int32 SchemaVersion = 1;
+constexpr int32 SchemaVersion = 2;
 constexpr int32 MaxExportChars = 32768;
 static const TCHAR* StaticMeshClassPath = TEXT("/Script/Engine.StaticMesh");
 
@@ -225,6 +225,48 @@ static TSharedRef<FJsonObject> StructFields(
     return Result;
 }
 
+static bool IsSafeSelectedStructLeaf(const FProperty* Field)
+{
+    if (!Field) return false;
+    return
+        CastField<FBoolProperty>(Field) != nullptr ||
+        CastField<FNumericProperty>(Field) != nullptr ||
+        CastField<FEnumProperty>(Field) != nullptr ||
+        CastField<FNameProperty>(Field) != nullptr ||
+        CastField<FStrProperty>(Field) != nullptr ||
+        CastField<FTextProperty>(Field) != nullptr;
+}
+
+static TSharedRef<FJsonObject> SelectedStructFields(
+    const UStruct* Struct,
+    const void* ValuePtr,
+    UObject* Owner)
+{
+    TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+    if (!Struct || !ValuePtr) return Result;
+
+    // Selected StaticMesh structs can contain editor-only object/container
+    // internals that are unsafe to feed through generic ExportTextItem_Direct.
+    // Preserve only direct scalar leaves here. The complete top-level selected
+    // property text is still captured separately by WriteSelectedProperties.
+    for (TFieldIterator<FProperty> It(Struct); It; ++It)
+    {
+        const FProperty* Field = *It;
+        if (!ShouldInspectProperty(Field) || !IsSafeSelectedStructLeaf(Field)) continue;
+
+        for (int32 StaticIndex = 0; StaticIndex < Field->ArrayDim; ++StaticIndex)
+        {
+            FString Key = Field->GetName();
+            if (Field->ArrayDim > 1) Key += FString::Printf(TEXT("[%d]"), StaticIndex);
+
+            const void* FieldValue = Field->ContainerPtrToValuePtr<void>(ValuePtr, StaticIndex);
+            if (!FieldValue) continue;
+            Result->SetStringField(Key, ExportProperty(Field, FieldValue, Owner));
+        }
+    }
+    return Result;
+}
+
 static FString StructFieldText(const UStruct* Struct, const void* ValuePtr, const TCHAR* Name, UObject* Owner)
 {
     if (!Struct || !ValuePtr) return FString();
@@ -266,6 +308,7 @@ static int32 ArrayCount(UObject* Object, const TCHAR* Name)
 
 static bool WriteSelectedProperties(UObject* Mesh, const FString& AssetPath, FWriters& Writers, FCounts& Counts)
 {
+    UE_LOG(LogTemp, Display, TEXT("UnrealAssetToolStaticMesh selected properties: %s"), *AssetPath);
     for (const TCHAR* Name : SelectedMeshProperties)
     {
         const FProperty* Property = Mesh->GetClass()->FindPropertyByName(FName(Name));
@@ -280,7 +323,12 @@ static bool WriteSelectedProperties(UObject* Mesh, const FString& AssetPath, FWr
         {
             Row->SetStringField(TEXT("struct_type"), StructProperty->Struct ? StructProperty->Struct->GetPathName() : FString());
             if (StructProperty->Struct)
-                Row->SetObjectField(TEXT("fields"), StructFields(StructProperty->Struct, Property->ContainerPtrToValuePtr<void>(Mesh), Mesh));
+                Row->SetObjectField(
+                    TEXT("fields"),
+                    SelectedStructFields(
+                        StructProperty->Struct,
+                        Property->ContainerPtrToValuePtr<void>(Mesh),
+                        Mesh));
         }
         if (const FObjectPropertyBase* ObjectProperty = CastField<FObjectPropertyBase>(Property))
         {
@@ -490,6 +538,9 @@ static bool WriteManifest(const FString& OutputDir, const FCounts& Counts, bool 
     Root->SetBoolField(TEXT("runtime_physics_state_captured"), false);
     Root->SetBoolField(TEXT("maps_loaded"), false);
     Root->SetBoolField(TEXT("include_engine"), bIncludeEngine);
+    Root->SetStringField(
+        TEXT("selected_struct_field_policy"),
+        TEXT("direct_safe_scalar_leaves_only: bool,numeric,enum,name,string,text; object/container/delegate/nested-struct members skipped"));
     Root->SetStringField(TEXT("engine_version"), FEngineVersion::Current().ToString());
     Root->SetStringField(TEXT("capture_scope"), TEXT("exact project StaticMesh authored source models/build-reduction settings, static material slots, sockets, BodySetup/simple collision shapes, selected Nanite/section/lightmap/collision properties; no render buffers, generated Nanite resources, cooked collision or runtime physics"));
 
