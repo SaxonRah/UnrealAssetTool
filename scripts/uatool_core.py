@@ -5729,7 +5729,6 @@ def native_compiler_capture(args: argparse.Namespace) -> int:
         configuration,
         args.compiler,
     )
-    print("generating UBT compilation database:", subprocess.list2cmdline(command))
     if returncode != 0:
         print(
             f"ERROR: GenerateClangDatabase exited with code {returncode}",
@@ -5763,6 +5762,7 @@ def native_compiler_capture(args: argparse.Namespace) -> int:
             for name in (
                 "compile_units",
                 "expected_translation_units",
+                "inactive_translation_units",
                 "missing_translation_units",
                 "extra_translation_units",
             )
@@ -5772,6 +5772,16 @@ def native_compiler_capture(args: argparse.Namespace) -> int:
         "compiler families: "
         + ", ".join(manifest.get("compiler_families", []))
     )
+    print(
+        "active modules: "
+        + ", ".join(manifest.get("active_modules", []))
+    )
+    inactive_modules = manifest.get("inactive_modules", [])
+    if inactive_modules:
+        print(
+            "target-inactive modules: "
+            + ", ".join(inactive_modules)
+        )
     print(f"native compiler schema: {manifest.get('schema_version', 0)}")
     print(f"compilation database: {database}")
     print(f"output: {output}")
