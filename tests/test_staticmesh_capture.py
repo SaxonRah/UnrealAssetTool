@@ -110,6 +110,22 @@ class StaticMeshCaptureTest(unittest.TestCase):
         self.assertIn('SetBoolField(TEXT("nanite_resources_captured"), false)', source)
         self.assertIn('SetBoolField(TEXT("runtime_physics_state_captured"), false)', source)
         self.assertIn('SetBoolField(TEXT("maps_loaded"), false)', source)
+        self.assertIn("constexpr int32 SchemaVersion = 2;", source)
+        self.assertIn("static bool IsSafeSelectedStructLeaf", source)
+        self.assertIn("static TSharedRef<FJsonObject> SelectedStructFields", source)
+        self.assertIn("CastField<FBoolProperty>", source)
+        self.assertIn("CastField<FNumericProperty>", source)
+        self.assertIn("CastField<FEnumProperty>", source)
+        self.assertIn("CastField<FNameProperty>", source)
+        self.assertIn("CastField<FStrProperty>", source)
+        self.assertIn("CastField<FTextProperty>", source)
+        selected_block = source[
+            source.index("static bool WriteSelectedProperties"):
+            source.index("static bool WriteSourceModels")
+        ]
+        self.assertIn("SelectedStructFields(", selected_block)
+        self.assertNotIn("StructFields(StructProperty->Struct", selected_block)
+        self.assertIn("selected_struct_field_policy", source)
 
     def test_launcher_is_canonical_and_headless(self) -> None:
         launcher = (SCRIPTS / "uatool_staticmesh_capture.py").read_text(encoding="utf-8")
