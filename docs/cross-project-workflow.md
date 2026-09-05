@@ -229,6 +229,20 @@ python scripts\uatool.py scan `
 
 Choose regression corpora based on the changed subsystem rather than rerunning everything blindly.
 
+### Post-completion editor teardown failures
+
+A nonzero Unreal exit is normally fatal. The launcher has one narrow recovery case for
+large projects that finish all canonical world-process outputs and then crash during
+engine teardown: the current invocation must have written structural schema 13 and
+world schema 12, every declared world JSONL stream must reconcile exactly to its
+manifest count, and the current VFX/systems manifests must report success. The
+launcher prints an explicit warning and then continues through the ordinary
+VFX/systems/derived/database validators.
+
+The required completion manifests are deleted before each scan, so an older successful
+run cannot satisfy this recovery. Missing, stale, failed or count-inconsistent evidence
+keeps the original nonzero editor exit fatal.
+
 ## Output locations
 
 ```text
