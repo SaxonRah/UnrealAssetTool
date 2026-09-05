@@ -619,7 +619,7 @@ static bool WriteScriptStruct(
     Row->SetNumberField(TEXT("structure_size"), Struct->GetStructureSize());
     Row->SetNumberField(TEXT("min_alignment"), Struct->GetMinAlignment());
     Row->SetStringField(TEXT("struct_flags_hex"), Hex64(static_cast<uint64>(Struct->StructFlags)));
-    Row->SetBoolField(TEXT("native"), EnumHasAnyFlags(Struct->StructFlags, STRUCT_Native));
+    Row->SetBoolField(TEXT("native"), (Struct->StructFlags & STRUCT_Native) != 0);
     Row->SetObjectField(TEXT("metadata"), UFieldMetadata(Struct));
     if (!Writers.Types.Write(Row))
     {
@@ -774,7 +774,7 @@ static bool WriteEnum(
         ValueRow->SetNumberField(TEXT("value_index"), Index);
         ValueRow->SetStringField(TEXT("name"), Enum->GetNameStringByIndex(Index));
         ValueRow->SetStringField(TEXT("full_name"), Enum->GetNameByIndex(Index).ToString());
-        ValueRow->SetNumberField(TEXT("value"), static_cast<double>(Enum->GetValueByIndex(Index)));
+        ValueRow->SetStringField(TEXT("value"), FString::Printf(TEXT("%lld"), static_cast<long long>(Enum->GetValueByIndex(Index))));
         ValueRow->SetStringField(TEXT("display_name"), Enum->GetDisplayNameTextByIndex(Index).ToString());
         ValueRow->SetBoolField(TEXT("hidden"), Enum->HasMetaData(TEXT("Hidden"), Index));
         ValueRow->SetStringField(TEXT("tooltip"), Enum->GetMetaData(TEXT("ToolTip"), Index));
