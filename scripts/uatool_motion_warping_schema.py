@@ -127,8 +127,11 @@ def _rows(path: Path):
 
 
 def _write_json(path: Path, value: dict) -> None:
+    text = json.dumps(value, ensure_ascii=False, indent=2) + "\n"
+    if path.is_file() and path.read_text(encoding="utf-8") == text:
+        return
     temp = path.with_name(f".{path.name}.tmp")
-    temp.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
+    temp.write_text(text, encoding="utf-8", newline="\n")
     os.replace(temp, path)
 
 
