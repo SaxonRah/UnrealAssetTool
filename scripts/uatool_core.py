@@ -18,6 +18,8 @@ import zipfile
 from pathlib import Path
 from typing import Iterable, Iterator
 
+import uatool_native as native_cpp
+
 DB_NAME = "uat.db"
 MODULE_NAME = "UnrealAssetTool"
 BLUEPRINT_CALL_BINDING_SCHEMA_VERSION = 2
@@ -5558,6 +5560,15 @@ DEFAULT_BUNDLE_FILES = (
     "world_partition_actor_descs.jsonl",
     "files.jsonl",
     "source_chunks.jsonl",
+    "native_manifest.json",
+    "native_modules.jsonl",
+    "native_types.jsonl",
+    "native_interfaces.jsonl",
+    "native_functions.jsonl",
+    "native_function_parameters.jsonl",
+    "native_properties.jsonl",
+    "native_enums.jsonl",
+    "native_enum_values.jsonl",
     "assets.jsonl",
     "asset_dependencies.jsonl",
     "behavior_trees.jsonl",
@@ -5682,11 +5693,13 @@ def scan(args: argparse.Namespace) -> int:
     world_manifest_path = output / "world_manifest.json"
     vfx_manifest_path = output / "vfx_manifest.json"
     systems_manifest_path = output / "systems_manifest.json"
+    native_manifest_path = output / "native_manifest.json"
     for stale_manifest in (
         manifest_path,
         world_manifest_path,
         vfx_manifest_path,
         systems_manifest_path,
+        native_manifest_path,
     ):
         if stale_manifest.exists():
             stale_manifest.unlink()
@@ -5748,6 +5761,14 @@ def scan(args: argparse.Namespace) -> int:
         if result.returncode != 0:
             report_editor_failure(project, result.returncode)
             return result.returncode
+
+        native_error = native_cpp.validation_error(output)
+        if native_error:
+            print(f"ERROR: native C++ pass incomplete: {native_error}", file=sys.stderr)
+            latest_log = newest_project_log(project)
+            if latest_log is not None:
+                print(f"latest Unreal log: {latest_log}", file=sys.stderr)
+            return 24
 
         print("running world pass:", subprocess.list2cmdline(world_command))
         world_result = subprocess.run(world_command, check=False)
@@ -5812,6 +5833,14 @@ def scan(args: argparse.Namespace) -> int:
         )
         return 23
 
+    native_manifest = native_cpp.read_manifest(output) or {}
+    manifest["native_schema_version"] = int(
+        native_manifest.get("schema_version", 0) or 0
+    )
+    manifest["native_counts"] = native_manifest.get("counts", {})
+    manifest["native_files"] = native_manifest.get("files", [])
+    manifest["native_pass"] = native_manifest.get("pass", native_cpp.PASS_NAME)
+
     manifest["world_schema_version"] = world_schema
     manifest["world_counts"] = world_manifest.get("counts", {})
     manifest["world_files"] = world_manifest.get("files", [])
@@ -5837,6 +5866,7 @@ def scan(args: argparse.Namespace) -> int:
 
     structural_counts = manifest.get("counts", {}) if isinstance(manifest, dict) else {}
     world_counts = world_manifest.get("counts", {}) if isinstance(world_manifest, dict) else {}
+    native_counts = native_manifest.get("counts", {}) if isinstance(native_manifest, dict) else {}
 
     def count_line(counts: dict, names: tuple[str, ...]) -> str:
         return " ".join(f"{name}={counts.get(name, 0)}" for name in names)
@@ -5845,8 +5875,9 @@ def scan(args: argparse.Namespace) -> int:
     print("=== UATOOL FINAL SUMMARY ===")
     print("structural scan complete: " + count_line(structural_counts, ("files", "assets", "blueprints", "blueprint_graphs", "blueprint_nodes", "blueprint_pins", "blueprint_edges")))
     print("world scan complete: " + count_line(world_counts, ("worlds", "levels", "streaming_relationships", "actors", "components", "instance_overrides", "references", "data_layers", "world_partition_worlds", "world_partition_initialized_for_scan", "world_partition_actor_descs")))
+    print("native C++ scan complete: " + count_line(native_counts, ("modules", "loaded_modules", "classes", "structs", "functions", "function_parameters", "properties", "enums", "enum_values")))
     print("derived complete: " + count_line(derived_counts, ("blueprint_call_bindings", "blueprint_data_dependencies", "blueprint_relations", "ai_relations", "visual_relations")))
-    print(f"schemas: structural={manifest.get('schema_version', 0)} world={world_manifest.get('schema_version', 0)} derived={manifest.get('derived_schema_version', 0)}")
+    print(f"schemas: structural={manifest.get('schema_version', 0)} native={manifest.get('native_schema_version', 0)} world={world_manifest.get('schema_version', 0)} derived={manifest.get('derived_schema_version', 0)}")
     print(f"database: {db_path}")
     if bundle_path is not None:
         print(f"upload bundle: {bundle_path}")
