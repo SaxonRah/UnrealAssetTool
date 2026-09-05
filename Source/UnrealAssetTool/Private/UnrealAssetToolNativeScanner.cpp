@@ -364,10 +364,22 @@ static TArray<TSharedPtr<FJsonValue>> ReferencedTypeArray(const FProperty* Prope
     return Result;
 }
 
+static FString FullCppType(const FProperty* Property)
+{
+    if (!Property)
+    {
+        return FString();
+    }
+
+    FString ExtendedTypeText;
+    const FString BaseType = Property->GetCPPType(&ExtendedTypeText);
+    return BaseType + ExtendedTypeText;
+}
+
 static void AddPropertyShape(const FProperty* Property, const TSharedRef<FJsonObject>& Row)
 {
     Row->SetStringField(TEXT("property_class"), Property ? Property->GetClass()->GetName() : FString());
-    Row->SetStringField(TEXT("cpp_type"), Property ? Property->GetCPPType() : FString());
+    Row->SetStringField(TEXT("cpp_type"), FullCppType(Property));
     Row->SetStringField(TEXT("container_kind"), ContainerKind(Property));
     Row->SetNumberField(TEXT("array_dim"), Property ? Property->ArrayDim : 0);
     Row->SetNumberField(TEXT("element_size"), Property ? Property->GetElementSize() : 0);
