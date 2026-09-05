@@ -385,7 +385,9 @@ def normalize_output(output: Path) -> bool:
     manifest["mesh_physics_schema_version"] = MESH_PHYSICS_SCHEMA_VERSION
     manifest["mesh_physics_pass"] = sidecar.get("pass", "UnrealAssetToolAnimationMeshPhysics")
     manifest["runtime_state_captured"] = False
-    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
+    text = json.dumps(manifest, ensure_ascii=False, indent=2) + "\n"
+    if not manifest_path.is_file() or manifest_path.read_text(encoding="utf-8") != text:
+        manifest_path.write_text(text, encoding="utf-8", newline="\n")
     return True
 
 

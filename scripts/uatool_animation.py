@@ -390,7 +390,10 @@ def prepare_output(output: Path, rows) -> None:
 
 
 def load_database(conn, output: Path, rows) -> None:
-    prepare_output(output, rows)
+    # Canonical animation output is prepared during scan/derive. SQLite packing
+    # is a read-only cache build and must never mutate canonical manifests after
+    # the derived freshness stamp has been written.
+    output = Path(output)
 
     for row in rows(output / "animation_assets.jsonl"):
         conn.execute("INSERT OR REPLACE INTO animation_assets VALUES(?,?,?,?,?,?,?)", (
@@ -550,9 +553,10 @@ def query(conn, print_rows, pattern: str, limit: int) -> None:
 
 
 def read_manifest(output: Path) -> dict | None:
-    output = Path(output)
-    prepare_output(output, _iter_jsonl)
-    return _read_json(output / "animation_manifest.json")
+    # Reading a manifest must be side-effect free. Preparation/normalization is
+    # explicit in scan/derive so query, inspect, capabilities, and summaries
+    # cannot invalidate an otherwise fresh corpus.
+    return _read_json(Path(output) / "animation_manifest.json")
 
 
 def validation_error(output: Path) -> str | None:

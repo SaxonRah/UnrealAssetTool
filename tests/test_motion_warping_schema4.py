@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import sys
 import tempfile
@@ -261,6 +262,26 @@ class MotionWarpingSchema4Test(unittest.TestCase):
             ).fetchone()
             self.assertEqual(prop, ("MaxSpeedClampRatio", "float", "0.000000"))
             conn.close()
+
+    def test_normalize_is_idempotent_on_current_schema4_manifests(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            corpus = Path(temp)
+            schema.promote_capture(corpus, self._fixture(corpus))
+
+            animation_path = corpus / "animation_manifest.json"
+            top_path = corpus / "manifest.json"
+            frozen_animation = 1_700_000_000_000_000_000
+            frozen_top = 1_700_000_001_000_000_000
+            os.utime(animation_path, ns=(frozen_animation, frozen_animation))
+            os.utime(top_path, ns=(frozen_top, frozen_top))
+            animation_before = animation_path.read_bytes()
+            top_before = top_path.read_bytes()
+
+            self.assertTrue(schema.normalize_output(corpus))
+            self.assertEqual(animation_path.read_bytes(), animation_before)
+            self.assertEqual(top_path.read_bytes(), top_before)
+            self.assertEqual(animation_path.stat().st_mtime_ns, frozen_animation)
+            self.assertEqual(top_path.stat().st_mtime_ns, frozen_top)
 
     def test_clear_schema_downgrades_only_motion_layer(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

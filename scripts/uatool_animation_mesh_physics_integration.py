@@ -211,7 +211,14 @@ def install(runtime_module, core_module) -> None:
     def build_database(output):
         ensure_animation_api()
         output = Path(output).expanduser().resolve()
-        mesh_physics.normalize_output(output)
+        manifest = mesh_physics._read_json(output / "animation_manifest.json")
+        public_schema = int(manifest.get("schema_version", 0) or 0) if manifest is not None else 0
+        if (output / "animation_mesh_physics_manifest.json").is_file():
+            if public_schema < mesh_physics.PUBLIC_ANIMATION_SCHEMA_VERSION:
+                mesh_physics.normalize_output(output)
+            error = mesh_physics.validation_error(output, require_present=True)
+            if error:
+                raise RuntimeError(f"SkeletalMesh/PhysicsAsset animation schema 3 incomplete: {error}")
         db = original_build_database(output)
         if (output / "animation_mesh_physics_manifest.json").is_file():
             conn = sqlite3.connect(db)

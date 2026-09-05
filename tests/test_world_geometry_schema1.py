@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -44,6 +45,22 @@ class WorldGeometrySchema1Test(unittest.TestCase):
         self.assertEqual(accept.CONTENTEXAMPLES_EXACT_COUNTS["world_geometry_hlod_layers"], 4)
         self.assertEqual(accept.CONTENTEXAMPLES_EXACT_COUNTS["foliage_infos_native_editor_array"], 6)
         self.assertEqual(accept.CONTENTEXAMPLES_EXACT_COUNTS["foliage_instances_native_editor_array"], 101)
+
+    def test_query_uses_shared_printer_contract(self):
+        conn = sqlite3.connect(":memory:")
+        try:
+            schema.create_schema(conn)
+            calls = []
+
+            def print_rows(rows_value, fields):
+                calls.append((list(rows_value), tuple(fields)))
+
+            schema.query(conn, print_rows, "%NoMatch%", 5)
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(calls[0][1], ("kind", "path", "detail"))
+            self.assertEqual(calls[0][0], [])
+        finally:
+            conn.close()
 
     def test_schema_is_independent_and_authored_only(self):
         source = (SCRIPTS / "uatool_world_geometry_schema.py").read_text(encoding="utf-8")
