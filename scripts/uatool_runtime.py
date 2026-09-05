@@ -176,7 +176,7 @@ _old_schema=core.create_schema; _old_derive=core.derive_output; _old_db=core.bui
 def create_schema(c):
     _old_schema(c); c.executescript(_SQL); world_stitch.create_schema(c); animation.create_schema(c); animation_breadth.create_schema(c); animation_stitch.create_schema(c)
 def derive_output(output):
-    output=Path(output).expanduser().resolve(); animation_breadth.prepare_output(output); counts=dict(_old_derive(output)); rel,ctx,sums=_derive_world(output)
+    output=Path(output).expanduser().resolve(); animation.prepare_output(output,_rows); animation_breadth.prepare_output(output); counts=dict(_old_derive(output)); rel,ctx,sums=_derive_world(output)
     system_relations=world_stitch.derive(output,_rows); ctx=world_stitch.augment_context(ctx,system_relations)
     wc={"world_relations":_write(output/"world_relations.jsonl",rel),world_stitch.SYSTEM_DERIVED_FILE.removesuffix(".jsonl"):_write(output/world_stitch.SYSTEM_DERIVED_FILE,system_relations),"world_context":_write(output/"world_context.jsonl",ctx),"world_summaries":_write(output/"world_summaries.jsonl",sums)}; counts.update(wc)
     anim_rel,anim_ctx,anim_sums=animation_stitch.derive(output,_rows)
