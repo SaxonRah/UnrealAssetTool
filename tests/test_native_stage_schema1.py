@@ -266,6 +266,91 @@ class NativeStageSchema1Test(unittest.TestCase):
             )
         )
 
+    def test_runtime_replication_setup_flag_is_semantically_ignored(self) -> None:
+        self.stage()
+        self.install_current_reflection()
+
+        current_types = self.output / "native_types.jsonl"
+        rows = [
+            json.loads(line)
+            for line in current_types.read_text(
+                encoding="utf-8"
+            ).splitlines()
+            if line.strip()
+        ]
+        self.assertTrue(rows)
+        original = int(rows[0]["class_flags_hex"], 16)
+        rows[0]["class_flags_hex"] = (
+            f"0x{(original ^ native_stage.CLASS_REPLICATION_DATA_IS_SET_UP):016X}"
+        )
+        current_types.write_text(
+            "".join(
+                json.dumps(row, separators=(",", ":")) + "\n"
+                for row in rows
+            ),
+            encoding="utf-8",
+            newline="\n",
+        )
+
+        self.assertIsNone(
+            native_stage.validation_error(
+                self.output,
+                require_current_reflected=True,
+            )
+        )
+        report = native_stage.reflected_diff(
+            self.output,
+            limit=20,
+        )
+        self.assertEqual(report["status"], "same")
+        self.assertEqual(report["difference_count"], 0)
+
+    def test_other_class_flag_change_remains_semantic(self) -> None:
+        self.stage()
+        self.install_current_reflection()
+
+        current_types = self.output / "native_types.jsonl"
+        rows = [
+            json.loads(line)
+            for line in current_types.read_text(
+                encoding="utf-8"
+            ).splitlines()
+            if line.strip()
+        ]
+        self.assertTrue(rows)
+        original = int(rows[0]["class_flags_hex"], 16)
+        rows[0]["class_flags_hex"] = f"0x{(original ^ 0x00000001):016X}"
+        current_types.write_text(
+            "".join(
+                json.dumps(row, separators=(",", ":")) + "\n"
+                for row in rows
+            ),
+            encoding="utf-8",
+            newline="\n",
+        )
+
+        error = native_stage.validation_error(
+            self.output,
+            require_current_reflected=True,
+        )
+        self.assertIsNotNone(error)
+        self.assertIn(
+            "current reflected native semantics differ",
+            error,
+        )
+        report = native_stage.reflected_diff(
+            self.output,
+            limit=20,
+        )
+        self.assertEqual(report["status"], "different")
+        changed = next(
+            diff
+            for file_row in report["files"]
+            if file_row["filename"] == "native_types.jsonl"
+            for diff in file_row["differences"]
+        )
+        self.assertIn("class_flags_hex", changed["fields"])
+
     def test_reflected_diff_reports_exact_changed_fields(self) -> None:
         self.stage()
         self.install_current_reflection()
