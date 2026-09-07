@@ -302,6 +302,7 @@ class Capture:
         self.parameters: list[dict] = []
         self.calls: list[dict] = []
         self.parameter_owner_mismatches = 0
+        self.nested_callable_calls_suppressed = 0
 
     def location(self, cursor: CXCursor) -> tuple[str | None, int, int, int]:
         file_name, line, column, offset = self.clang.location(cursor)
@@ -421,6 +422,7 @@ class Capture:
         cursor: CXCursor,
         inherited_project_path: str | None,
         function_context: tuple[str, str] | None,
+        inside_unmaterialized_local_callable: bool = False,
     ) -> None:
         kind = self.clang.kind(cursor)
         source_path, line, column, offset = self.location(cursor)
@@ -441,6 +443,10 @@ class Capture:
             return
 
         next_function_context = function_context
+        next_inside_local_callable = (
+            inside_unmaterialized_local_callable
+            or kind == "LambdaExpr"
+        )
         if kind in SYMBOL_KIND:
             semantic, occurrence = self.identity(
                 cursor, kind, source_path, line, column, offset
@@ -472,6 +478,7 @@ class Capture:
             self.symbols.append(symbol)
             if kind in FUNCTION_KINDS:
                 next_function_context = (semantic, occurrence)
+                next_inside_local_callable = False
 
         if kind == "ParmDecl" and function_context:
             if self.parameter_belongs_to_context(
@@ -496,41 +503,44 @@ class Capture:
                 self.parameter_owner_mismatches += 1
 
         if kind in CALL_KINDS and function_context:
-            referenced = self.referenced_for_call(cursor)
-            target_id, target_usr, target_kind, target_name = (
-                self.target_identity(referenced)
-            )
-            self.calls.append({
-                "call_id": _stable_id(
-                    f"{self.translation_unit}|{source_path}|{offset}|"
-                    f"{function_context[1]}|{target_usr}|"
-                    f"{target_kind}|{target_name}"
-                ),
-                "caller_symbol_id": function_context[0],
-                "caller_occurrence_id": function_context[1],
-                "source_path": source_path,
-                "translation_unit": self.translation_unit,
-                "language": self.language,
-                "line": line,
-                "column": column,
-                "offset": offset,
-                "target_symbol_id": target_id,
-                "target_clang_node_id": "",
-                "target_usr": target_usr,
-                "target_kind": target_kind,
-                "target_name": target_name,
-                "target_type_spelling": (
-                    self.clang.type_spelling(referenced)
-                    if not self.clang.is_null(referenced) else ""
-                ),
-                "resolution": (
-                    "compiler_resolved"
-                    if not self.clang.is_null(referenced)
-                    else "compiler_unresolved"
-                ),
-                "compatibility_overrides": self.compatibility_overrides,
-                "evidence": self.evidence,
-            })
+            if inside_unmaterialized_local_callable:
+                self.nested_callable_calls_suppressed += 1
+            else:
+                referenced = self.referenced_for_call(cursor)
+                target_id, target_usr, target_kind, target_name = (
+                    self.target_identity(referenced)
+                )
+                self.calls.append({
+                    "call_id": _stable_id(
+                        f"{self.translation_unit}|{source_path}|{offset}|"
+                        f"{function_context[1]}|{target_usr}|"
+                        f"{target_kind}|{target_name}"
+                    ),
+                    "caller_symbol_id": function_context[0],
+                    "caller_occurrence_id": function_context[1],
+                    "source_path": source_path,
+                    "translation_unit": self.translation_unit,
+                    "language": self.language,
+                    "line": line,
+                    "column": column,
+                    "offset": offset,
+                    "target_symbol_id": target_id,
+                    "target_clang_node_id": "",
+                    "target_usr": target_usr,
+                    "target_kind": target_kind,
+                    "target_name": target_name,
+                    "target_type_spelling": (
+                        self.clang.type_spelling(referenced)
+                        if not self.clang.is_null(referenced) else ""
+                    ),
+                    "resolution": (
+                        "compiler_resolved"
+                        if not self.clang.is_null(referenced)
+                        else "compiler_unresolved"
+                    ),
+                    "compatibility_overrides": self.compatibility_overrides,
+                    "evidence": self.evidence,
+                })
 
         children: list[CXCursor] = []
 
@@ -545,7 +555,12 @@ class Capture:
         for child in children:
             child_kind = self.clang.kind(child)
             before = len(self.parameters)
-            self.visit(child, source_path, next_function_context)
+            self.visit(
+                child,
+                source_path,
+                next_function_context,
+                next_inside_local_callable,
+            )
             if (
                 child_kind == "ParmDecl"
                 and len(self.parameters) > before
@@ -583,6 +598,7 @@ def run(config_path: Path) -> int:
             "parameters": 0,
             "calls": 0,
             "parameter_owner_mismatches": 0,
+            "nested_callable_calls_suppressed": 0,
         },
         "files": {},
     }
@@ -696,6 +712,9 @@ def run(config_path: Path) -> int:
             "calls": len(capture.calls),
             "parameter_owner_mismatches": (
                 capture.parameter_owner_mismatches
+            ),
+            "nested_callable_calls_suppressed": (
+                capture.nested_callable_calls_suppressed
             ),
         }
         result["success"] = True
