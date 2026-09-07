@@ -668,6 +668,7 @@ def _with_extra_probe_arguments(
 
 def _run_clang_ast_probes(
     frontend: Path,
+    libclang: Path | None,
     compile_rows: list[dict],
     project: Path,
     output: Path,
@@ -773,6 +774,64 @@ def _run_clang_ast_probes(
         )
         syntax_error_lines = _diagnostic_error_lines(syntax_stderr)
 
+        # UE C++ TUs can exceed a gigabyte when dumped through
+        # -ast-dump=json. Once syntax is proven, use libclang cursors instead
+        # so only project-owned semantics are materialized.
+        if language == "cpp":
+            base_diag = {
+                "kind": "clang_ast_probe",
+                "language": language,
+                "source_path": row["source_path"],
+                "success": False,
+                "frontend_major": frontend_major,
+                "semantic_mode_arguments": row.get(
+                    "_semantic_mode_arguments", []
+                ),
+                "compatibility_overrides": compatibility_overrides,
+                "initial_syntax_exit_code": initial_syntax_returncode,
+                "initial_syntax_stderr_file": (
+                    initial_syntax_stderr_path.as_posix()
+                ),
+                "initial_syntax_error_lines": initial_syntax_error_lines,
+                "syntax_exit_code": syntax_returncode,
+                "syntax_launch_error": syntax_launch_error,
+                "syntax_command": subprocess.list2cmdline(syntax_command),
+                "syntax_response_file": syntax_rsp.as_posix(),
+                "syntax_response_argument_count": len(syntax_arguments),
+                "syntax_response_file_bytes": syntax_rsp.stat().st_size,
+                "syntax_stderr_file": syntax_stderr_path.as_posix(),
+                "syntax_error_lines": syntax_error_lines,
+                "syntax_stderr_tail": "\n".join(
+                    syntax_stderr.splitlines()[-120:]
+                ),
+                "extraction_backend": "libclang_cursor",
+                "output": "",
+                "output_bytes": 0,
+                "valid_json": False,
+                "root_kind": "",
+            }
+            diagnostics.append(base_diag)
+
+            if syntax_returncode == 0 and libclang is not None:
+                libclang_diag = native_libclang.run_cursor_probe(
+                    frontend=frontend,
+                    libclang=libclang,
+                    row=row,
+                    source=source,
+                    language=language,
+                    compatibility_overrides=compatibility_overrides,
+                    syntax_arguments=syntax_arguments,
+                    project_root=project.parent,
+                    output=output,
+                )
+                diagnostics.append(libclang_diag)
+                outputs[language] = str(
+                    libclang_diag.get("result_file", "")
+                )
+            else:
+                outputs[language] = ""
+            continue
+
         target = output / f"native_ast_probe_{language}.json"
         target.write_text("", encoding="utf-8")
         ast_rsp = output / f"native_ast_probe_{language}.rsp"
@@ -868,9 +927,11 @@ def _run_clang_ast_probes(
             "output_bytes": target.stat().st_size,
             "valid_json": valid_json,
             "root_kind": node_kind,
+            "extraction_backend": "clang_ast_json",
         })
         outputs[language] = target.as_posix()
     return diagnostics, outputs
+
 
 
 def discover_clangd_indexer(
