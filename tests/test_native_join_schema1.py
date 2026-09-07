@@ -245,6 +245,43 @@ class NativeJoinSchema1Test(unittest.TestCase):
                 ["-Wno-invalid-constexpr"],
             )
 
+    def test_validation_rejects_pre_projection_ruleset_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            reflected = root / "reflected"
+            ast = root / "ast"
+            output = root / "join"
+            reflected.mkdir()
+            ast.mkdir()
+            make_reflected(reflected)
+            make_ast(ast)
+
+            native_join.capture(reflected, ast, output)
+            manifest_path = output / native_join.MANIFEST
+            manifest = json.loads(
+                manifest_path.read_text(encoding="utf-8")
+            )
+            manifest.pop("ruleset", None)
+            manifest["proof_policy"]["functions"] = (
+                "proven owner type + exact qualified function name + "
+                "exact parameter signature + "
+                "single libclang USR-backed semantic identity"
+            )
+            manifest_path.write_text(
+                json.dumps(manifest) + "\n",
+                encoding="utf-8",
+                newline="\n",
+            )
+
+            self.assertEqual(
+                native_join.validation_error(output),
+                (
+                    "native join ruleset is stale or missing; regenerate "
+                    "with the current uatool native-join from the retained "
+                    "reflected and compiler inputs"
+                ),
+            )
+
     def test_module_scope_prevents_same_name_join(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
