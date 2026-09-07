@@ -285,6 +285,117 @@ class NativeASTSchema1Test(unittest.TestCase):
                 calls[0]["caller_symbol_id"],
             )
 
+    def test_macro_expansion_location_is_used_for_occurrence_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "Source" / "Sample" / "sample.c"
+            source.parent.mkdir(parents=True)
+            ast = {
+                "kind": "TranslationUnitDecl",
+                "inner": [
+                    {
+                        "id": "0x100",
+                        "kind": "FieldDecl",
+                        "loc": {
+                            "spellingLoc": {
+                                "offset": 10,
+                                "line": 1,
+                                "col": 2,
+                            },
+                            "expansionLoc": {
+                                "offset": 100,
+                                "line": 10,
+                                "col": 5,
+                                "file": source.as_posix(),
+                            },
+                        },
+                        "name": "len",
+                        "type": {"qualType": "size_t"},
+                    },
+                    {
+                        "id": "0x101",
+                        "kind": "FieldDecl",
+                        "loc": {
+                            "spellingLoc": {
+                                "offset": 10,
+                                "line": 1,
+                                "col": 2,
+                            },
+                            "expansionLoc": {
+                                "offset": 200,
+                                "line": 20,
+                                "col": 5,
+                                "file": source.as_posix(),
+                            },
+                        },
+                        "name": "len",
+                        "type": {"qualType": "size_t"},
+                    },
+                ],
+            }
+            ast_path = root / "macro.json"
+            ast_path.write_text(json.dumps(ast), encoding="utf-8")
+
+            symbols, _, _ = native_ast._normalize_ast_probe(
+                ast_path,
+                root,
+                "Source/Sample/sample.c",
+                "c",
+            )
+
+            self.assertEqual([row["offset"] for row in symbols], [100, 200])
+            self.assertEqual(
+                len({row["occurrence_id"] for row in symbols}),
+                2,
+            )
+            self.assertEqual(
+                len({row["symbol_id"] for row in symbols}),
+                2,
+            )
+
+    def test_compatibility_replay_is_explicit_in_normalized_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "Source" / "Sample" / "sample.cpp"
+            source.parent.mkdir(parents=True)
+            ast = {
+                "kind": "TranslationUnitDecl",
+                "inner": [
+                    {
+                        "id": "0x100",
+                        "kind": "FunctionDecl",
+                        "loc": {
+                            "file": source.as_posix(),
+                            "line": 1,
+                            "col": 5,
+                            "offset": 4,
+                        },
+                        "name": "sample",
+                        "mangledName": "?sample@@YAHXZ",
+                        "type": {"qualType": "int ()"},
+                    }
+                ],
+            }
+            ast_path = root / "compat.json"
+            ast_path.write_text(json.dumps(ast), encoding="utf-8")
+
+            symbols, _, _ = native_ast._normalize_ast_probe(
+                ast_path,
+                root,
+                "Source/Sample/sample.cpp",
+                "cpp",
+                ["-Wno-invalid-constexpr"],
+            )
+
+            self.assertEqual(
+                symbols[0]["evidence"],
+                "clang_frontend_ast_json_compatibility_replay",
+            )
+            self.assertEqual(
+                symbols[0]["compatibility_overrides"],
+                ["-Wno-invalid-constexpr"],
+            )
+
     def test_source_offset_prevents_local_symbol_id_collisions(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -396,6 +507,8 @@ Object: BBB
         self.assertIn("syntax_exit_code", source)
         self.assertIn("syntax_error_lines", source)
         self.assertIn("compatibility_overrides", source)
+        self.assertIn("clang_frontend_ast_json_compatibility_replay", source)
+        self.assertIn("[-Winvalid-constexpr]", source)
         self.assertIn("STL1000: Unexpected compiler version", source)
         self.assertIn("_clang_version_major", source)
         self.assertIn("_normalize_successful_probes", source)
