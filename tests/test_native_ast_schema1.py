@@ -64,7 +64,7 @@ class NativeASTSchema1Test(unittest.TestCase):
             self.assertIn(owned.resolve(), owned_set)
             self.assertEqual(Path(entries[0]["file"]).resolve(), owned.resolve())
 
-    def test_clang_probe_command_uses_compiler_environment(self) -> None:
+    def test_clang_probe_arguments_use_compiler_environment(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             frontend = root / "clang-cl.exe"
@@ -74,18 +74,57 @@ class NativeASTSchema1Test(unittest.TestCase):
                 "definitions": ["FOO=1", "BAR"],
                 "forced_includes": ["C:/defs.h"],
             }
-            command = native_ast._clang_probe_command(
+            arguments = native_ast._clang_probe_arguments(
                 frontend,
                 row,
                 source,
                 "cpp",
             )
-            self.assertIn("/TP", command)
-            self.assertIn("/IC:/inc one", command)
-            self.assertIn("/DFOO=1", command)
-            self.assertIn("/FIC:/defs.h", command)
-            self.assertIn("-ast-dump=json", command)
-            self.assertEqual(command[-1], str(source))
+            self.assertIn("/TP", arguments)
+            self.assertIn("/IC:/inc one", arguments)
+            self.assertIn("/DFOO=1", arguments)
+            self.assertIn("/FIC:/defs.h", arguments)
+            self.assertIn("-ast-dump=json", arguments)
+            self.assertEqual(arguments[-1], str(source))
+
+    def test_plain_clang_probe_uses_gnu_style_flags(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            frontend = root / "clang.exe"
+            source = root / "sample.c"
+            row = {
+                "include_paths": ["C:/inc one"],
+                "definitions": ["FOO=1"],
+                "forced_includes": ["C:/defs.h"],
+            }
+            arguments = native_ast._clang_probe_arguments(
+                frontend,
+                row,
+                source,
+                "c",
+            )
+            self.assertEqual(arguments[:2], ["-x", "c"])
+            self.assertIn("-I", arguments)
+            self.assertIn("C:/inc one", arguments)
+            self.assertIn("-DFOO=1", arguments)
+            self.assertIn("-include", arguments)
+            self.assertIn("C:/defs.h", arguments)
+
+    def test_probe_response_file_preserves_spaced_arguments(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            rsp = Path(temp) / "probe.rsp"
+            native_ast._write_response_file(
+                rsp,
+                [
+                    "/IC:/Program Files/UE/include",
+                    "/DVALUE=hello world",
+                    "C:/Source Dir/sample.cpp",
+                ],
+            )
+            text = rsp.read_text(encoding="utf-8")
+            self.assertIn('"C:/Program Files/UE/include"', text)
+            self.assertIn('"/DVALUE=hello world"', text)
+            self.assertIn('"C:/Source Dir/sample.cpp"', text)
 
     def test_vs_llvm_candidates_come_from_vc_root(self) -> None:
         compiler = (
@@ -133,6 +172,8 @@ Object: BBB
         self.assertIn('"clang_frontend_ast_json_probe"', source)
         self.assertIn("discover_clang_frontend", source)
         self.assertIn("_run_clang_ast_probes", source)
+        self.assertIn("_write_response_file", source)
+        self.assertIn('f"@{rsp}"', source)
 
 
 if __name__ == "__main__":
