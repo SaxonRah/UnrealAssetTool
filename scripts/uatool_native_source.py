@@ -222,15 +222,23 @@ def _run_generate_clang_database(
         for p in candidates
     }
 
+    # GenerateClangDatabase parses target/config/platform as positional
+    # descriptors. A normal Build.bat "-Target=Name Win64 Config" aggregate
+    # is accepted by ordinary builds but leaves this UBT mode reporting
+    # "No configurations specified for target".
     args = [
         str(build_bat),
-        f"-Target={target} Win64 {configuration}",
-        f"-Project={project}",
         "-Mode=GenerateClangDatabase",
+        f"-Project={project}",
+        target,
+        configuration,
+        "Win64",
+        "-Compiler=VisualStudio2022",
         "-WaitMutex",
         "-NoExecCodeGenActions",
     ]
     command_text = subprocess.list2cmdline(args)
+    diagnostics["command"] = command_text
     try:
         completed = subprocess.run(
             ["cmd.exe", "/d", "/s", "/c", command_text],
@@ -699,13 +707,26 @@ _FUNCTION_RE = re.compile(
     r"""(?mx)
     ^[ \t]*
     (?P<prefix>
-        (?:[A-Za-z_~][\w:\<\>\,\*&\s\[\]\(\)\.]*?)
+        [A-Za-z_~][\w:\<\>\,\*&\[\]\(\)\. \t]*?
     )
+    [ \t]+
     (?P<name>[A-Za-z_~]\w*(?:::[A-Za-z_~]\w*)*)
     [ \t]*\(
     (?P<params>[^;{}]*)
     \)
     (?P<suffix>[ \t]*(?:const\b|noexcept\b(?:\s*\([^)]*\))?|override\b|final\b|requires\b[^{;]*)*)[ \t\r\n]*
+    (?P<term>[{;])
+    """
+)
+
+_CTOR_RE = re.compile(
+    r"""(?mx)
+    ^[ \t]*
+    (?P<name>[A-Za-z_]\w*(?:::[~A-Za-z_]\w*)+)
+    [ \t]*\(
+    (?P<params>[^;{}]*)
+    \)
+    (?P<suffix>[ \t]*(?:noexcept\b(?:\s*\([^)]*\))?|override\b|final\b)*)[ \t\r\n]*
     (?P<term>[{;])
     """
 )
@@ -811,26 +832,38 @@ def scan_lexical_file(
             }
         )
 
-    for m in _FUNCTION_RE.finditer(masked):
+    function_matches: list[tuple[re.Match[str], bool]] = [
+        (match, False) for match in _FUNCTION_RE.finditer(masked)
+    ]
+    for match in _CTOR_RE.finditer(masked):
+        scoped = match.group("name").split("::")
+        if len(scoped) < 2:
+            continue
+        owner = scoped[-2]
+        method = scoped[-1].lstrip("~")
+        if method != owner:
+            continue
+        function_matches.append((match, True))
+    function_matches.sort(key=lambda item: item[0].start())
+
+    for m, is_constructor in function_matches:
         name = m.group("name")
         short_name = name.rsplit("::", 1)[-1]
         if short_name in _CONTROL_NAMES:
             continue
-        prefix = re.sub(
-            r"\s+",
-            " ",
-            text[m.start("prefix"):m.end("prefix")],
-        ).strip()
+        prefix = ""
+        if not is_constructor:
+            prefix = re.sub(
+                r"\s+",
+                " ",
+                text[m.start("prefix"):m.end("prefix")],
+            ).strip()
         prefix_words = re.findall(r"[A-Za-z_]\w*", prefix)
         if prefix_words and prefix_words[0] in _CONTROL_NAMES:
             continue
-        if any(op in prefix for op in ("=", "->", ".")):
+        if any(op in prefix for op in ("=", "->")):
             continue
-        if (
-            not prefix
-            and "::" not in name
-            and not name.startswith("~")
-        ):
+        if not is_constructor and not prefix:
             continue
 
         line, column = _line_col(text, m.start("name"))
