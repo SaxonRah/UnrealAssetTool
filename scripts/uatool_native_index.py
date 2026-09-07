@@ -1044,10 +1044,12 @@ def query(
                         (SELECT s.qualified_name
                          FROM native_compiler_symbols s
                          WHERE s.symbol_id=c.target_symbol_id
-                            OR (c.target_usr<>'' AND s.clang_usr=c.target_usr)
-                         ORDER BY
-                           (s.symbol_id=c.target_symbol_id) DESC,
-                           s.is_definition DESC,s.source_path,s.line
+                         ORDER BY s.is_definition DESC,s.source_path,s.line
+                         LIMIT 1),
+                        (SELECT s.qualified_name
+                         FROM native_compiler_symbols s
+                         WHERE c.target_usr<>'' AND s.clang_usr=c.target_usr
+                         ORDER BY s.is_definition DESC,s.source_path,s.line
                          LIMIT 1),
                         c.target_name
                       ) AS callee,
