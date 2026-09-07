@@ -301,6 +301,7 @@ class Capture:
         self.symbols: list[dict] = []
         self.parameters: list[dict] = []
         self.calls: list[dict] = []
+        self.parameter_owner_mismatches = 0
 
     def location(self, cursor: CXCursor) -> tuple[str | None, int, int, int]:
         file_name, line, column, offset = self.clang.location(cursor)
@@ -472,27 +473,27 @@ class Capture:
             if kind in FUNCTION_KINDS:
                 next_function_context = (semantic, occurrence)
 
-        if (
-            kind == "ParmDecl"
-            and self.parameter_belongs_to_context(
+        if kind == "ParmDecl" and function_context:
+            if self.parameter_belongs_to_context(
                 cursor,
                 function_context,
-            )
-        ):
-            self.parameters.append({
-                "function_symbol_id": function_context[0],
-                "function_occurrence_id": function_context[1],
-                "parameter_index": -1,
-                "name": self.clang.spelling(cursor),
-                "type_spelling": self.clang.type_spelling(cursor),
-                "source_path": source_path,
-                "translation_unit": self.translation_unit,
-                "language": self.language,
-                "line": line,
-                "column": column,
-                "compatibility_overrides": self.compatibility_overrides,
-                "evidence": self.evidence,
-            })
+            ):
+                self.parameters.append({
+                    "function_symbol_id": function_context[0],
+                    "function_occurrence_id": function_context[1],
+                    "parameter_index": -1,
+                    "name": self.clang.spelling(cursor),
+                    "type_spelling": self.clang.type_spelling(cursor),
+                    "source_path": source_path,
+                    "translation_unit": self.translation_unit,
+                    "language": self.language,
+                    "line": line,
+                    "column": column,
+                    "compatibility_overrides": self.compatibility_overrides,
+                    "evidence": self.evidence,
+                })
+            else:
+                self.parameter_owner_mismatches += 1
 
         if kind in CALL_KINDS and function_context:
             referenced = self.referenced_for_call(cursor)
@@ -577,7 +578,12 @@ def run(config_path: Path) -> int:
         ),
         "parse_error_code": None,
         "diagnostics": [],
-        "counts": {"symbols": 0, "parameters": 0, "calls": 0},
+        "counts": {
+            "symbols": 0,
+            "parameters": 0,
+            "calls": 0,
+            "parameter_owner_mismatches": 0,
+        },
         "files": {},
     }
 
@@ -688,6 +694,9 @@ def run(config_path: Path) -> int:
             "symbols": len(capture.symbols),
             "parameters": len(capture.parameters),
             "calls": len(capture.calls),
+            "parameter_owner_mismatches": (
+                capture.parameter_owner_mismatches
+            ),
         }
         result["success"] = True
         result_path.write_text(
