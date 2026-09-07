@@ -368,6 +368,38 @@ class Capture:
         self.clang.dll.clang_visitChildren(cursor, visitor, None)
         return found[0] if found else CXCursor()
 
+    def callable_context_for_cursor(
+        self,
+        cursor: CXCursor,
+    ) -> tuple[str, str] | None:
+        if self.clang.is_null(cursor):
+            return None
+        kind = self.clang.kind(cursor)
+        if kind not in FUNCTION_KINDS:
+            return None
+        source_path, line, column, offset = self.location(cursor)
+        if not source_path:
+            return None
+        return self.identity(
+            cursor,
+            kind,
+            source_path,
+            line,
+            column,
+            offset,
+        )
+
+    def parameter_belongs_to_context(
+        self,
+        cursor: CXCursor,
+        function_context: tuple[str, str] | None,
+    ) -> bool:
+        if not function_context:
+            return False
+        parent = self.clang.dll.clang_getCursorSemanticParent(cursor)
+        parent_context = self.callable_context_for_cursor(parent)
+        return parent_context == function_context
+
     def target_identity(self, cursor: CXCursor) -> tuple[str, str, str, str]:
         if self.clang.is_null(cursor):
             return "", "", "", ""
@@ -440,7 +472,13 @@ class Capture:
             if kind in FUNCTION_KINDS:
                 next_function_context = (semantic, occurrence)
 
-        if kind == "ParmDecl" and function_context:
+        if (
+            kind == "ParmDecl"
+            and self.parameter_belongs_to_context(
+                cursor,
+                function_context,
+            )
+        ):
             self.parameters.append({
                 "function_symbol_id": function_context[0],
                 "function_occurrence_id": function_context[1],
