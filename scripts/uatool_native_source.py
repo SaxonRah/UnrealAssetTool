@@ -44,7 +44,8 @@ _EXCLUDED_DIRS = {
 }
 
 _CONTROL_NAMES = {
-    "if", "for", "while", "switch", "catch", "return", "sizeof", "alignof",
+    "if", "for", "while", "switch", "case", "default", "else", "do",
+    "catch", "return", "sizeof", "alignof",
     "decltype", "static_cast", "dynamic_cast", "reinterpret_cast", "const_cast",
     "new", "delete", "throw", "co_await", "co_yield", "co_return",
 }
