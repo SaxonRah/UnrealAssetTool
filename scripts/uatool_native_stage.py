@@ -81,6 +81,231 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+REFLECTED_IDENTITY_FIELDS = {
+    "native_modules.jsonl": ("module_name",),
+    "native_types.jsonl": ("type_path",),
+    "native_interfaces.jsonl": ("class_path", "interface_class"),
+    "native_functions.jsonl": ("function_path",),
+    "native_function_parameters.jsonl": (
+        "function_path",
+        "parameter_name",
+    ),
+    "native_properties.jsonl": ("owner_path", "property_name"),
+    "native_enums.jsonl": ("enum_path",),
+    "native_enum_values.jsonl": ("enum_path", "name"),
+}
+
+
+def _jsonl_objects(path: Path) -> list[dict]:
+    rows: list[dict] = []
+    with path.open("r", encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, 1):
+            text = line.strip()
+            if not text:
+                continue
+            try:
+                value = json.loads(text)
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(
+                    f"invalid JSON in {path}:{line_number}: {exc}"
+                ) from exc
+            if not isinstance(value, dict):
+                raise RuntimeError(
+                    f"expected JSON object in {path}:{line_number}"
+                )
+            rows.append(value)
+    return rows
+
+
+def _row_identity(filename: str, row: dict) -> str:
+    fields = REFLECTED_IDENTITY_FIELDS.get(filename)
+    if not fields:
+        return json.dumps(
+            row,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
+    return "|".join(str(row.get(field, "")) for field in fields)
+
+
+def reflected_diff(
+    output: Path,
+    *,
+    limit: int = 100,
+) -> dict:
+    output = Path(output).expanduser().resolve()
+    staged = root(output) / REFLECTED_DIR
+    result = {
+        "status": "ok",
+        "limit": limit,
+        "files": [],
+        "difference_count": 0,
+        "shown_difference_count": 0,
+    }
+
+    for filename in reflected_native.JSONL_FILES:
+        current_path = output / filename
+        staged_path = staged / filename
+        if not current_path.is_file() or not staged_path.is_file():
+            result["files"].append({
+                "filename": filename,
+                "status": "missing",
+                "current_exists": current_path.is_file(),
+                "staged_exists": staged_path.is_file(),
+                "differences": [],
+            })
+            result["status"] = "different"
+            result["difference_count"] += 1
+            continue
+
+        current_rows = _jsonl_objects(current_path)
+        staged_rows = _jsonl_objects(staged_path)
+
+        current_map: dict[str, list[dict]] = {}
+        staged_map: dict[str, list[dict]] = {}
+        for row in current_rows:
+            current_map.setdefault(
+                _row_identity(filename, row), []
+            ).append(row)
+        for row in staged_rows:
+            staged_map.setdefault(
+                _row_identity(filename, row), []
+            ).append(row)
+
+        differences: list[dict] = []
+        all_ids = sorted(set(current_map) | set(staged_map))
+        for identity in all_ids:
+            current_group = current_map.get(identity, [])
+            staged_group = staged_map.get(identity, [])
+            current_canon = sorted(
+                json.dumps(
+                    row,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                )
+                for row in current_group
+            )
+            staged_canon = sorted(
+                json.dumps(
+                    row,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                )
+                for row in staged_group
+            )
+            if current_canon == staged_canon:
+                continue
+
+            if not staged_group:
+                diff = {
+                    "identity": identity,
+                    "kind": "added",
+                    "current": current_group,
+                    "staged": [],
+                }
+            elif not current_group:
+                diff = {
+                    "identity": identity,
+                    "kind": "removed",
+                    "current": [],
+                    "staged": staged_group,
+                }
+            elif len(current_group) == 1 and len(staged_group) == 1:
+                current_row = current_group[0]
+                staged_row = staged_group[0]
+                fields = {}
+                for key in sorted(set(current_row) | set(staged_row)):
+                    if current_row.get(key) != staged_row.get(key):
+                        fields[key] = {
+                            "current": current_row.get(key),
+                            "staged": staged_row.get(key),
+                        }
+                diff = {
+                    "identity": identity,
+                    "kind": "changed",
+                    "fields": fields,
+                }
+            else:
+                diff = {
+                    "identity": identity,
+                    "kind": "changed_group",
+                    "current": current_group,
+                    "staged": staged_group,
+                }
+
+            result["difference_count"] += 1
+            if result["shown_difference_count"] < limit:
+                differences.append(diff)
+                result["shown_difference_count"] += 1
+
+        file_status = "same" if not differences and all(
+            sorted(
+                json.dumps(
+                    row,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                )
+                for row in current_map.get(identity, [])
+            )
+            == sorted(
+                json.dumps(
+                    row,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                )
+                for row in staged_map.get(identity, [])
+            )
+            for identity in all_ids
+        ) else "different"
+
+        if file_status != "same":
+            result["status"] = "different"
+        result["files"].append({
+            "filename": filename,
+            "status": file_status,
+            "current_rows": len(current_rows),
+            "staged_rows": len(staged_rows),
+            "differences": differences,
+        })
+
+    if result["difference_count"]:
+        result["status"] = "different"
+    return result
+
+
+def print_reflected_diff(report: dict) -> None:
+    print("=== NATIVE STAGE REFLECTION DIFF ===")
+    print(f"Status: {report.get('status', '')}")
+    print(
+        "Differences: "
+        f"{report.get('difference_count', 0)} "
+        f"(showing {report.get('shown_difference_count', 0)})"
+    )
+    for file_row in report.get("files", []):
+        print(
+            f"{file_row.get('filename', '')}: "
+            f"{file_row.get('status', '')} "
+            f"current_rows={file_row.get('current_rows', 0)} "
+            f"staged_rows={file_row.get('staged_rows', 0)}"
+        )
+        for diff in file_row.get("differences", []):
+            print(
+                f"  {diff.get('kind', '')}: "
+                f"{diff.get('identity', '')}"
+            )
+            for field, values in diff.get("fields", {}).items():
+                print(
+                    f"    {field}: "
+                    f"current={json.dumps(values.get('current'), ensure_ascii=False)} "
+                    f"staged={json.dumps(values.get('staged'), ensure_ascii=False)}"
+                )
+
+
 def _canonical_jsonl_rows(path: Path) -> list[str]:
     rows: list[str] = []
     with path.open("r", encoding="utf-8") as handle:
