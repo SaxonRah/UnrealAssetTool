@@ -768,6 +768,138 @@ class NativeIndexSchema1Tests(unittest.TestCase):
             1,
         )
 
+    def test_audit_reports_join_parameter_and_target_anomalies(self) -> None:
+        native_index.import_database(
+            self.db,
+            self.reflected,
+            self.compiler,
+            self.joins,
+        )
+        conn = sqlite3.connect(self.db)
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.execute(
+                """INSERT INTO native_compiler_parameters
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    "do-occurrence",
+                    0,
+                    "do-symbol",
+                    "AliasValue",
+                    "float",
+                    "Plugins/HR_RAI/Source/HRRAI/Private/HRThing.cpp",
+                    "Plugins/HR_RAI/Source/HRRAI/Private/HRThing.cpp",
+                    "cpp",
+                    26,
+                    22,
+                    "[]",
+                    "libclang_cursor_schema1",
+                    json.dumps({
+                        "function_symbol_id": "do-symbol",
+                        "function_occurrence_id": "do-occurrence",
+                        "parameter_index": 0,
+                        "name": "AliasValue",
+                        "type_spelling": "float",
+                    }),
+                ),
+            )
+            conn.execute(
+                """INSERT INTO native_compiler_calls
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    "call-audit-unmaterialized",
+                    "do-symbol",
+                    "do-occurrence",
+                    "project-cursor-only",
+                    "c:@F@ProjectThunk#",
+                    "FunctionDecl",
+                    "ProjectThunk",
+                    "void ()",
+                    "Plugins/HR_RAI/Source/HRRAI/Private/HRThing.cpp",
+                    "Plugins/HR_RAI/Source/HRRAI/Private/HRThing.cpp",
+                    "cpp",
+                    35,
+                    7,
+                    350,
+                    "compiler_resolved",
+                    "[]",
+                    "libclang_cursor_schema1",
+                    "{}",
+                ),
+            )
+            report = native_index.build_audit(conn, limit=100)
+        finally:
+            conn.close()
+
+        self.assertEqual(report["status"], "ok")
+        self.assertEqual(report["counts"]["joined_functions"], 1)
+        self.assertEqual(report["counts"]["function_diagnostics"], 1)
+        self.assertEqual(
+            report["counts"]["duplicate_parameter_slots"],
+            1,
+        )
+        self.assertEqual(
+            report["counts"]["unmaterialized_project_target_calls"],
+            1,
+        )
+        self.assertEqual(
+            report["counts"]["unmaterialized_project_target_identities"],
+            1,
+        )
+        self.assertEqual(
+            report["joined_functions"][0]["source_qualified_name"],
+            "UHRThing::DoThing",
+        )
+        self.assertEqual(
+            report["duplicate_parameter_slots"][0]["function_name"],
+            "UHRThing::DoThing",
+        )
+        self.assertEqual(
+            report["duplicate_parameter_slots"][0]["row_count"],
+            2,
+        )
+        self.assertEqual(
+            report["unmaterialized_project_targets"][0]["target_name"],
+            "ProjectThunk",
+        )
+
+    def test_source_only_report_labels_absent_reflected_join(self) -> None:
+        native_index.import_database(
+            self.db,
+            self.reflected,
+            self.compiler,
+            self.joins,
+        )
+        conn = sqlite3.connect(self.db)
+        try:
+            report = native_index.build_report(
+                conn,
+                "UHRThing::Caller",
+                include_callers=False,
+                include_callees=False,
+            )
+        finally:
+            conn.close()
+
+        self.assertEqual(report["status"], "source")
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            native_index.print_report(report)
+        self.assertIn(
+            "Reflected join: <none; exact compiler symbol is source-only>",
+            output.getvalue(),
+        )
+
+    def test_canonical_launcher_exposes_native_index_audit(self) -> None:
+        launcher = (SCRIPTS / "uatool.py").read_text(encoding="utf-8")
+        self.assertIn('prog="uatool native-index-audit"', launcher)
+        self.assertIn(
+            'sys.argv[1] == "native-index-audit"',
+            launcher,
+        )
+        self.assertIn("native_index.build_audit(", launcher)
+        self.assertIn("native_index.print_audit(report)", launcher)
+
     def test_delegate_signature_remains_visibly_unresolved(self) -> None:
         native_index.import_database(
             self.db,
