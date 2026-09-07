@@ -934,6 +934,20 @@ def _run_clang_ast_probes(
 
 
 
+def _probe_languages_successful(diagnostics: list[dict]) -> bool:
+    by_language: dict[str, bool] = {}
+    for row in diagnostics:
+        language = str(row.get("language", "") or "")
+        if not language:
+            continue
+        if row.get("kind") not in {"clang_ast_probe", "libclang_cursor_probe"}:
+            continue
+        by_language.setdefault(language, False)
+        if row.get("success"):
+            by_language[language] = True
+    return bool(by_language) and all(by_language.values())
+
+
 def discover_clangd_indexer(
     editor: Path,
     compiler_paths: list[str],
@@ -1080,15 +1094,24 @@ def capture(
             errors="replace",
             check=False,
         )
+        libclang, libclang_checked = native_libclang.discover_libclang(
+            frontend
+        )
+        diagnostics.append({
+            "kind": "libclang_discovery",
+            "success": libclang is not None,
+            "checked": libclang_checked,
+            "selected": libclang.as_posix() if libclang else "",
+        })
         probe_diagnostics, probe_outputs = _run_clang_ast_probes(
-            frontend, compile_rows, project, output
+            frontend, libclang, compile_rows, project, output
         )
         diagnostics.extend(probe_diagnostics)
         normalized_counts = _normalize_successful_probes(
             output, probe_diagnostics, project
         )
-        probe_success = bool(probe_diagnostics) and all(
-            row.get("success") for row in probe_diagnostics
+        probe_success = _probe_languages_successful(
+            probe_diagnostics
         )
         diagnostics.append({
             "kind": "clang_frontend_discovery",
@@ -1111,6 +1134,8 @@ def capture(
             "clangd_indexer": "",
             "clang_frontend": frontend.as_posix(),
             "clang_frontend_version": version.stdout.strip(),
+            "libclang": libclang.as_posix() if libclang else "",
+            "checked_libclang_paths": libclang_checked,
             "checked_indexer_paths": checked,
             "checked_frontend_paths": frontend_checked,
             "raw_document_counts": {"symbols": 0, "refs": 0, "relations": 0},
