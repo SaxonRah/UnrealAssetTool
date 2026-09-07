@@ -702,6 +702,36 @@ def _diagnostic_error_lines(stderr: str) -> list[str]:
     ][:80]
 
 
+def _compatibility_overrides_from_stderr(
+    stderr: str,
+    *,
+    language: str,
+    frontend_major: int,
+) -> list[str]:
+    overrides: list[str] = []
+    if language != "cpp":
+        return overrides
+
+    if (
+        frontend_major < 19
+        and "STL1000: Unexpected compiler version" in stderr
+    ):
+        overrides.append(
+            "/D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH=1"
+        )
+    if "[-Winvalid-constexpr]" in stderr:
+        overrides.append("-Wno-invalid-constexpr")
+
+    # Some UE code accepted by MSVC relies on UWorld being completed through
+    # transitive/compiler behavior. Clang rejects member access on the
+    # forward declaration. Preserve source truth and label the indexing-only
+    # semantic supplement instead of modifying the target project.
+    if "member access into incomplete type 'UWorld'" in stderr:
+        overrides.append("/FIEngine/World.h")
+
+    return overrides
+
+
 def _with_extra_probe_arguments(
     arguments: list[str],
     extra: list[str],
@@ -766,19 +796,15 @@ def _run_clang_ast_probes(
             newline="\n",
         )
 
-        compatibility_overrides: list[str] = []
-        if language == "cpp" and syntax_returncode not in {0, None}:
-            if (
-                frontend_major < 19
-                and "STL1000: Unexpected compiler version" in syntax_stderr
-            ):
-                compatibility_overrides.append(
-                    "/D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH=1"
-                )
-            if "[-Winvalid-constexpr]" in syntax_stderr:
-                compatibility_overrides.append(
-                    "-Wno-invalid-constexpr"
-                )
+        compatibility_overrides = (
+            _compatibility_overrides_from_stderr(
+                syntax_stderr,
+                language=language,
+                frontend_major=frontend_major,
+            )
+            if syntax_returncode not in {0, None}
+            else []
+        )
 
         if compatibility_overrides:
             syntax_arguments = _with_extra_probe_arguments(
