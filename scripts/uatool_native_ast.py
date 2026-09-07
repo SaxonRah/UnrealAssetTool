@@ -128,11 +128,55 @@ def discover_clang_frontend(
     return None, checked
 
 
+def _semantic_mode_arguments(entry: dict) -> list[str]:
+    """Extract language/ABI mode flags from the exact expanded UBT command."""
+    directory = _norm(Path(str(entry.get("directory", "."))))
+    tokens = native_source._command_tokens(entry)
+    expanded, _ = native_source._expand_response_tokens(tokens, directory)
+    if expanded:
+        expanded = expanded[1:]
+
+    prefixes = (
+        "/std:", "/permissive", "/Zc:", "/EH", "/GR", "/MD", "/MT",
+        "/arch:", "/fp:", "/volatile:", "/utf-8", "/await",
+        "/constexpr:", "/experimental:", "/favor:",
+        "-std=", "-fms-", "-fdelayed-template-parsing",
+        "-fchar8_t", "-fno-char8_t",
+    )
+    result: list[str] = []
+    for token in expanded:
+        stripped = native_source._strip_quotes(str(token))
+        if stripped.startswith(prefixes) and stripped not in result:
+            result.append(stripped)
+    return result
+
+
+def _attach_semantic_mode_arguments(
+    entries: list[dict],
+    compile_rows: list[dict],
+    project_root: Path,
+) -> None:
+    by_source: dict[Path, dict] = {}
+    for entry in entries:
+        source = native_source._resolve_compile_file(entry)
+        if source is not None:
+            by_source[source] = entry
+
+    for row in compile_rows:
+        source = _norm(project_root / row["source_path"])
+        entry = by_source.get(source)
+        row["_semantic_mode_arguments"] = (
+            _semantic_mode_arguments(entry) if entry is not None else []
+        )
+
+
 def _clang_probe_arguments(
     frontend: Path,
     compile_row: dict,
     source: Path,
     language: str,
+    *,
+    dump_ast: bool,
 ) -> list[str]:
     is_clang_cl = "clang-cl" in frontend.name.lower()
     args: list[str] = []
@@ -154,12 +198,14 @@ def _clang_probe_arguments(
         for forced in compile_row.get("forced_includes", []):
             args.extend(["-include", forced])
 
-    args.extend([
-        "-fsyntax-only",
-        "-Xclang",
-        "-ast-dump=json",
-        str(source),
-    ])
+    args.extend(compile_row.get("_semantic_mode_arguments", []))
+    args.append("-fsyntax-only")
+    if dump_ast:
+        args.extend([
+            "-Xclang",
+            "-ast-dump=json",
+        ])
+    args.append(str(source))
     return args
 
 
@@ -211,36 +257,67 @@ def _run_clang_ast_probes(
     for row, source, language in _select_probe_rows(
         compile_rows, project.parent
     ):
-        arguments = _clang_probe_arguments(
-            frontend, row, source, language
+        syntax_arguments = _clang_probe_arguments(
+            frontend, row, source, language, dump_ast=False
         )
-        rsp = output / f"native_ast_probe_{language}.rsp"
-        _write_response_file(rsp, arguments)
-        command = [str(frontend), f"@{rsp}"]
-        target = output / f"native_ast_probe_{language}.json"
+        syntax_rsp = output / f"native_ast_probe_{language}_syntax.rsp"
+        _write_response_file(syntax_rsp, syntax_arguments)
+        syntax_command = [str(frontend), f"@{syntax_rsp}"]
 
-        launch_error = ""
-        returncode = None
-        stderr = ""
-        with target.open("w", encoding="utf-8", newline="\n") as stdout_fh:
-            try:
-                run = subprocess.run(
-                    command,
-                    cwd=str(Path(row["directory"])),
-                    text=True,
-                    stdout=stdout_fh,
-                    stderr=subprocess.PIPE,
-                    errors="replace",
-                    check=False,
-                )
-                returncode = run.returncode
-                stderr = run.stderr or ""
-            except OSError as exc:
-                launch_error = str(exc)
+        syntax_launch_error = ""
+        syntax_returncode = None
+        syntax_stderr = ""
+        try:
+            syntax_run = subprocess.run(
+                syntax_command,
+                cwd=str(Path(row["directory"])),
+                text=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                errors="replace",
+                check=False,
+            )
+            syntax_returncode = syntax_run.returncode
+            syntax_stderr = syntax_run.stderr or ""
+        except OSError as exc:
+            syntax_launch_error = str(exc)
+
+        target = output / f"native_ast_probe_{language}.json"
+        target.write_text("", encoding="utf-8")
+        ast_rsp = output / f"native_ast_probe_{language}.rsp"
+        ast_returncode = None
+        ast_stderr = ""
+        ast_launch_error = ""
+        ast_argument_count = 0
+
+        if syntax_returncode == 0:
+            ast_arguments = _clang_probe_arguments(
+                frontend, row, source, language, dump_ast=True
+            )
+            ast_argument_count = len(ast_arguments)
+            _write_response_file(ast_rsp, ast_arguments)
+            ast_command = [str(frontend), f"@{ast_rsp}"]
+            with target.open("w", encoding="utf-8", newline="\n") as stdout_fh:
+                try:
+                    ast_run = subprocess.run(
+                        ast_command,
+                        cwd=str(Path(row["directory"])),
+                        text=True,
+                        stdout=stdout_fh,
+                        stderr=subprocess.PIPE,
+                        errors="replace",
+                        check=False,
+                    )
+                    ast_returncode = ast_run.returncode
+                    ast_stderr = ast_run.stderr or ""
+                except OSError as exc:
+                    ast_launch_error = str(exc)
+        else:
+            ast_rsp.write_text("", encoding="utf-8")
 
         valid_json = False
         node_kind = ""
-        if returncode == 0 and target.stat().st_size:
+        if ast_returncode == 0 and target.stat().st_size:
             try:
                 root = json.loads(target.read_text(
                     encoding="utf-8", errors="replace"
@@ -249,18 +326,30 @@ def _run_clang_ast_probes(
                 node_kind = str(root.get("kind", "")) if valid_json else ""
             except json.JSONDecodeError:
                 valid_json = False
+
         diagnostics.append({
             "kind": "clang_ast_probe",
             "language": language,
             "source_path": row["source_path"],
-            "success": returncode == 0 and valid_json,
-            "exit_code": returncode,
-            "launch_error": launch_error,
-            "command": subprocess.list2cmdline(command),
-            "response_file": rsp.as_posix(),
-            "response_argument_count": len(arguments),
-            "response_file_bytes": rsp.stat().st_size,
-            "stderr_tail": "\n".join(stderr.splitlines()[-120:]),
+            "success": ast_returncode == 0 and valid_json,
+            "semantic_mode_arguments": row.get(
+                "_semantic_mode_arguments", []
+            ),
+            "syntax_exit_code": syntax_returncode,
+            "syntax_launch_error": syntax_launch_error,
+            "syntax_command": subprocess.list2cmdline(syntax_command),
+            "syntax_response_file": syntax_rsp.as_posix(),
+            "syntax_response_argument_count": len(syntax_arguments),
+            "syntax_response_file_bytes": syntax_rsp.stat().st_size,
+            "syntax_stderr_tail": "\n".join(
+                syntax_stderr.splitlines()[-120:]
+            ),
+            "exit_code": ast_returncode,
+            "launch_error": ast_launch_error,
+            "response_file": ast_rsp.as_posix(),
+            "response_argument_count": ast_argument_count,
+            "response_file_bytes": ast_rsp.stat().st_size,
+            "stderr_tail": "\n".join(ast_stderr.splitlines()[-120:]),
             "output": target.as_posix(),
             "output_bytes": target.stat().st_size,
             "valid_json": valid_json,
@@ -354,6 +443,9 @@ def capture(
 
     compile_rows, _ = native_source.load_compile_commands(
         compile_db, project, owned
+    )
+    _attach_semantic_mode_arguments(
+        entries, compile_rows, project.parent
     )
     compiler_paths = sorted({
         str(row.get("compiler", ""))
