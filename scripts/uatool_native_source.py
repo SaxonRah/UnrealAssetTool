@@ -1098,7 +1098,8 @@ def capture(
                 },
                 "size_bytes": len(data),
                 "line_count": (
-                    text.count("\n") + (1 if text else 0)
+                    text.count("\n")
+                    + (1 if text and not text.endswith("\n") else 0)
                 ),
                 "sha256": _sha256_bytes(data),
             }
