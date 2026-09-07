@@ -64,6 +64,43 @@ class NativeASTSchema1Test(unittest.TestCase):
             self.assertIn(owned.resolve(), owned_set)
             self.assertEqual(Path(entries[0]["file"]).resolve(), owned.resolve())
 
+    def test_clang_probe_command_uses_compiler_environment(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            frontend = root / "clang-cl.exe"
+            source = root / "sample.cpp"
+            row = {
+                "include_paths": ["C:/inc one", "C:/inc2"],
+                "definitions": ["FOO=1", "BAR"],
+                "forced_includes": ["C:/defs.h"],
+            }
+            command = native_ast._clang_probe_command(
+                frontend,
+                row,
+                source,
+                "cpp",
+            )
+            self.assertIn("/TP", command)
+            self.assertIn("/IC:/inc one", command)
+            self.assertIn("/DFOO=1", command)
+            self.assertIn("/FIC:/defs.h", command)
+            self.assertIn("-ast-dump=json", command)
+            self.assertEqual(command[-1], str(source))
+
+    def test_vs_llvm_candidates_come_from_vc_root(self) -> None:
+        compiler = (
+            "C:/Program Files/Microsoft Visual Studio/2022/Community/"
+            "VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/cl.exe"
+        )
+        candidates = native_ast._vs_llvm_bin_candidates(compiler)
+        rendered = [path.as_posix() for path in candidates]
+        self.assertTrue(
+            any("/VC/Tools/Llvm/x64/bin" in path for path in rendered)
+        )
+        self.assertTrue(
+            any(path.endswith("/VC/Tools/Llvm/bin") for path in rendered)
+        )
+
     def test_document_counts_cover_symbols_refs_and_relations(self) -> None:
         text = """--- !Symbol
 ID: AAA
@@ -93,6 +130,9 @@ Object: BBB
         self.assertIn('"--format=yaml"', source)
         self.assertIn('"--executor=all-TUs"', source)
         self.assertIn('"clangd_indexer_compiler_resolved"', source)
+        self.assertIn('"clang_frontend_ast_json_probe"', source)
+        self.assertIn("discover_clang_frontend", source)
+        self.assertIn("_run_clang_ast_probes", source)
 
 
 if __name__ == "__main__":
