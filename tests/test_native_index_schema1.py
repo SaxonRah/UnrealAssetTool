@@ -280,8 +280,8 @@ def make_ast(root: Path) -> None:
         "project_owned_translation_units": 2,
         "compiler_resolved_translation_units": 2,
         "failed_translation_units": [],
-        "parameter_owner_mismatches_rejected": 0,
-        "nested_callable_calls_suppressed": 0,
+        "parameter_owner_mismatches_rejected": 7,
+        "nested_callable_calls_suppressed": 95,
         "normalized_counts": {
             "symbols": len(symbols),
             "parameters": len(parameters),
@@ -393,6 +393,24 @@ class NativeIndexSchema1Tests(unittest.TestCase):
                 self.compiler,
                 self.joins,
             )
+
+    def test_compiler_capture_stats_survive_cache_import(self) -> None:
+        native_index.import_database(
+            self.db,
+            self.reflected,
+            self.compiler,
+            self.joins,
+        )
+        stats = native_index.read_compiler_capture_stats(self.db)
+        self.assertEqual(stats["ruleset"], native_ast.RULESET)
+        self.assertEqual(
+            stats["parameter_owner_mismatches_rejected"],
+            7,
+        )
+        self.assertEqual(
+            stats["nested_callable_calls_suppressed"],
+            95,
+        )
 
     def test_import_preserves_authoritative_row_counts(self) -> None:
         counts = native_index.import_database(
@@ -860,6 +878,22 @@ class NativeIndexSchema1Tests(unittest.TestCase):
             conn.close()
 
         self.assertEqual(report["status"], "ok")
+        self.assertEqual(
+            report["compiler_capture"]["ruleset"],
+            native_ast.RULESET,
+        )
+        self.assertEqual(
+            report["compiler_capture"][
+                "parameter_owner_mismatches_rejected"
+            ],
+            7,
+        )
+        self.assertEqual(
+            report["compiler_capture"][
+                "nested_callable_calls_suppressed"
+            ],
+            95,
+        )
         self.assertEqual(report["counts"]["joined_functions"], 1)
         self.assertEqual(report["counts"]["function_diagnostics"], 1)
         self.assertEqual(
