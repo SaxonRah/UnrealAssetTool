@@ -1090,6 +1090,15 @@ def _native_index_cli(argv: list[str]) -> int:
             for key, value in counts.items()
         )
     )
+    target_stats = native_index.read_call_target_stats(database)
+    if target_stats:
+        print(
+            "native call targets: "
+            f"project={target_stats.get('project_target_calls', 0)} "
+            f"symbol_id={target_stats.get('materialized_by_symbol_id', 0)} "
+            f"clang_usr={target_stats.get('materialized_by_clang_usr', 0)} "
+            f"unmaterialized={target_stats.get('unmaterialized_project_targets', 0)}"
+        )
     print(f"database: {database}")
     return 0
 
