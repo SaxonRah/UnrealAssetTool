@@ -644,7 +644,20 @@ def _select_probe_rows(
                 ),
             )
         else:
-            _, row, source, language = min(matches, key=lambda x: x[0])
+            preferred_cpp = {
+                "hrraientitycomponent.cpp": 0,
+                "hrraiinteractablecomponent.cpp": 1,
+                "hrraiplayerinteractorcomponent.cpp": 2,
+                "hrraiworldsubsystem.cpp": 3,
+                "hrraibootstrapactor.cpp": 4,
+            }
+            _, row, source, language = min(
+                matches,
+                key=lambda x: (
+                    preferred_cpp.get(x[2].name.lower(), 10),
+                    x[0],
+                ),
+            )
         result.append((row, source, language))
     return result
 
