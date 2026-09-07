@@ -99,6 +99,23 @@ python scripts\uatool.py native-index "E:\Path\Project\.uatool" `
 
 This command does not recapture Unreal, rerun Clang, or rewrite the authoritative JSONL streams. Creating a missing `uat.db` is only cache initialization; it does not imply that unrelated canonical JSONL tables contain scanned project data. Each explicit import drops and recreates only the disposable `native_*` cache tables before loading, so native cache-schema migrations do not require deleting `uat.db` and do not touch standard project tables.
 
+## Corpus audit
+
+After importing native streams, use the audit command to inspect semantic coverage and the exact edge cases that remain in the cache:
+
+```powershell
+python scripts\uatool.py native-index-audit "E:\Path\Project\.uatool" --limit 100
+```
+
+The audit reports:
+
+- joined reflected functions with exact source identities;
+- unresolved reflected-function diagnostics;
+- repeated numeric compiler parameter-index slots, preserving every authoritative row;
+- compiler-resolved project call targets that carry a stable project target identity but do not materialize as canonical symbols.
+
+This is a diagnostic/read-only view. It does not rewrite native JSONL, synthesize symbols, renumber parameters, or change join decisions.
+
 ## Query surfaces
 
 The normal query command searches the imported native cache alongside the existing UnrealAssetTool tables:
@@ -132,7 +149,7 @@ The report resolves exact identity only. Supported exact starting identities are
 - qualified C/C++ name;
 - unique exact compiler symbol name.
 
-By default the report shows both one-hop callers and callees. Use `--callers` or `--callees` to select a direction, `--limit` to bound rows and `--json` for machine-readable output.
+By default the report shows both one-hop callers and callees. Use `--callers` or `--callees` to select a direction, `--limit` to bound rows and `--json` for machine-readable output. A compiler symbol that has no reflected UFunction counterpart is reported as `source` and explicitly labeled source-only; that status is distinct from an unresolved reflected function.
 
 A joined reflected function reports:
 
