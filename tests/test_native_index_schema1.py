@@ -398,6 +398,164 @@ class NativeIndexSchema1Tests(unittest.TestCase):
         finally:
             conn.close()
 
+    def test_parameter_cache_uses_authoritative_canonical_identity(self) -> None:
+        parameters_path = self.compiler / native_ast.PARAMETERS
+        parameters = native_index._rows(parameters_path)
+        parameters.extend([
+            {
+                "function_symbol_id": "do-symbol",
+                "function_occurrence_id": "do-occurrence",
+                "parameter_index": -1,
+                "name": "GeneratedA",
+                "type_spelling": "int32",
+                "source_path": (
+                    "Plugins/HR_RAI/Source/HRRAI/Private/HRThing.cpp"
+                ),
+                "translation_unit": (
+                    "Plugins/HR_RAI/Source/HRRAI/Private/HRThing.cpp"
+                ),
+                "language": "cpp",
+                "line": 26,
+                "column": 5,
+                "compatibility_overrides": [],
+                "evidence": "libclang_cursor_schema1",
+            },
+            {
+                "function_symbol_id": "do-symbol",
+                "function_occurrence_id": "do-occurrence",
+                "parameter_index": -1,
+                "name": "GeneratedB",
+                "type_spelling": "float",
+                "source_path": (
+                    "Plugins/HR_RAI/Source/HRRAI/Private/HRThing.cpp"
+                ),
+                "translation_unit": (
+                    "Plugins/HR_RAI/Source/HRRAI/Private/HRThing.cpp"
+                ),
+                "language": "cpp",
+                "line": 27,
+                "column": 5,
+                "compatibility_overrides": [],
+                "evidence": "libclang_cursor_schema1",
+            },
+        ])
+        write_jsonl(parameters_path, parameters)
+        manifest_path = self.compiler / native_ast.MANIFEST
+        manifest = json.loads(
+            manifest_path.read_text(encoding="utf-8")
+        )
+        manifest["normalized_counts"]["parameters"] = len(parameters)
+        manifest_path.write_text(
+            json.dumps(manifest) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+
+        # Recreate the exact narrower cache key used by the first field
+        # validation build. Explicit import must migrate this disposable native
+        # table instead of requiring the user to delete uat.db.
+        conn = sqlite3.connect(self.db)
+        try:
+            conn.execute("DROP TABLE native_compiler_parameters")
+            conn.execute(
+                """CREATE TABLE native_compiler_parameters(
+                   function_occurrence_id TEXT NOT NULL,
+                   parameter_index INTEGER NOT NULL,
+                   function_symbol_id TEXT NOT NULL,
+                   name TEXT NOT NULL,
+                   type_spelling TEXT NOT NULL,
+                   source_path TEXT NOT NULL,
+                   translation_unit TEXT NOT NULL,
+                   language TEXT NOT NULL,
+                   line INTEGER NOT NULL,
+                   column INTEGER NOT NULL,
+                   compatibility_overrides_json TEXT NOT NULL,
+                   evidence TEXT NOT NULL,
+                   json TEXT NOT NULL,
+                   PRIMARY KEY(function_occurrence_id,parameter_index)
+                )"""
+            )
+            conn.execute(
+                """CREATE TABLE IF NOT EXISTS standard_sentinel(
+                   value TEXT PRIMARY KEY
+                )"""
+            )
+            conn.execute(
+                "INSERT INTO standard_sentinel(value) VALUES('keep')"
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        counts = native_index.import_database(
+            self.db,
+            self.reflected,
+            self.compiler,
+            self.joins,
+        )
+        self.assertEqual(counts["native_compiler_parameters"], 3)
+
+        conn = sqlite3.connect(self.db)
+        try:
+            rows = conn.execute(
+                """SELECT parameter_index,name,type_spelling
+                   FROM native_compiler_parameters
+                   WHERE function_occurrence_id='do-occurrence'
+                   ORDER BY parameter_index,line,column,name,type_spelling"""
+            ).fetchall()
+            self.assertEqual(
+                rows,
+                [
+                    (-1, "GeneratedA", "int32"),
+                    (-1, "GeneratedB", "float"),
+                    (0, "Value", "int32"),
+                ],
+            )
+            pk_columns = [
+                row[1]
+                for row in sorted(
+                    (
+                        row
+                        for row in conn.execute(
+                            "PRAGMA table_info(native_compiler_parameters)"
+                        ).fetchall()
+                        if row[5]
+                    ),
+                    key=lambda row: row[5],
+                )
+            ]
+            self.assertEqual(
+                pk_columns,
+                [
+                    "function_occurrence_id",
+                    "parameter_index",
+                    "name",
+                    "type_spelling",
+                ],
+            )
+            self.assertEqual(
+                conn.execute(
+                    "SELECT value FROM standard_sentinel"
+                ).fetchone()[0],
+                "keep",
+            )
+            stats = json.loads(
+                conn.execute(
+                    """SELECT value FROM native_index_meta
+                       WHERE key='parameter_identity_stats_json'"""
+                ).fetchone()[0]
+            )
+        finally:
+            conn.close()
+
+        self.assertEqual(stats["rows"], 3)
+        self.assertEqual(stats["negative_index_rows"], 2)
+        self.assertEqual(stats["duplicate_index_slots"], 1)
+        self.assertEqual(
+            stats["rows_beyond_unique_index_slots"],
+            1,
+        )
+
     def test_reflected_function_reaches_source_and_calls(self) -> None:
         native_index.import_database(
             self.db,
