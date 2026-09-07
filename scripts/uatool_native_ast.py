@@ -81,15 +81,34 @@ def _location_file(location: dict | None) -> str | None:
     return None
 
 
+def _flatten_clang_location(location: dict | None) -> dict:
+    if not isinstance(location, dict):
+        return {}
+    expansion = location.get("expansionLoc")
+    if isinstance(expansion, dict):
+        return expansion
+    if any(
+        key in location
+        for key in ("file", "offset", "line", "col", "tokLen")
+    ):
+        return location
+    spelling = location.get("spellingLoc")
+    if isinstance(spelling, dict):
+        return spelling
+    return location
+
+
 def _node_location(node: dict) -> dict:
     location = node.get("loc")
     if isinstance(location, dict):
-        return location
+        flattened = _flatten_clang_location(location)
+        if flattened:
+            return flattened
     source_range = node.get("range")
     if isinstance(source_range, dict):
         begin = source_range.get("begin")
         if isinstance(begin, dict):
-            return begin
+            return _flatten_clang_location(begin)
     return {}
 
 
@@ -165,9 +184,16 @@ def _normalize_ast_probe(
     project_root: Path,
     translation_unit: str,
     language: str,
+    compatibility_overrides: list[str] | None = None,
 ) -> tuple[list[dict], list[dict], list[dict]]:
     root = json.loads(ast_path.read_text(encoding="utf-8", errors="replace"))
     walked = list(_walk_ast(root.get("inner") or []))
+    compatibility_overrides = list(compatibility_overrides or [])
+    evidence = (
+        "clang_frontend_ast_json_compatibility_replay"
+        if compatibility_overrides
+        else "clang_frontend_ast_json"
+    )
 
     symbol_kinds = {
         "FunctionDecl": "function",
@@ -242,7 +268,8 @@ def _normalize_ast_probe(
             "column": int(location.get("col", 0) or 0),
             "offset": int(location.get("offset", 0) or 0),
             "is_definition": bool(is_definition),
-            "evidence": "clang_frontend_ast_json",
+            "compatibility_overrides": compatibility_overrides,
+            "evidence": evidence,
         })
 
         if kind in function_kinds:
@@ -264,7 +291,8 @@ def _normalize_ast_probe(
                     "language": language,
                     "line": int(ploc.get("line", 0) or 0),
                     "column": int(ploc.get("col", 0) or 0),
-                    "evidence": "clang_frontend_ast_json",
+                    "compatibility_overrides": compatibility_overrides,
+                    "evidence": evidence,
                 })
                 parameter_index += 1
 
@@ -301,7 +329,8 @@ def _normalize_ast_probe(
                 (referenced.get("type") or {}).get("qualType", "")
             ),
             "resolution": "compiler_resolved",
-            "evidence": "clang_frontend_ast_json",
+            "compatibility_overrides": compatibility_overrides,
+            "evidence": evidence,
         })
 
     symbols.sort(key=lambda row: (
@@ -343,6 +372,7 @@ def _normalize_successful_probes(
             project.parent,
             str(row.get("source_path", "")),
             str(row.get("language", "")),
+            list(row.get("compatibility_overrides") or []),
         )
         symbols.extend(s)
         parameters.extend(p)
@@ -680,17 +710,20 @@ def _run_clang_ast_probes(
         )
 
         compatibility_overrides: list[str] = []
-        stl_version_gate = (
-            language == "cpp"
-            and syntax_returncode not in {0, None}
-            and frontend_major < 19
-            and "STL1000: Unexpected compiler version" in syntax_stderr
-        )
-        if stl_version_gate:
-            compatibility_overrides = [
-                "/D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH=1",
-                "-Wno-invalid-constexpr",
-            ]
+        if language == "cpp" and syntax_returncode not in {0, None}:
+            if (
+                frontend_major < 19
+                and "STL1000: Unexpected compiler version" in syntax_stderr
+            ):
+                compatibility_overrides.append(
+                    "/D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH=1"
+                )
+            if "[-Winvalid-constexpr]" in syntax_stderr:
+                compatibility_overrides.append(
+                    "-Wno-invalid-constexpr"
+                )
+
+        if compatibility_overrides:
             syntax_arguments = _with_extra_probe_arguments(
                 base_syntax_arguments,
                 compatibility_overrides,
