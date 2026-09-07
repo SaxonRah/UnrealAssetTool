@@ -84,7 +84,7 @@ Important lookup indexes cover:
 - target symbol and target USR;
 - unresolved/ambiguous join status.
 
-The importer validates source manifests and JSONL counts before writing, checks project-owned symbol/call cross-references, rejects excluded build/source leakage, and rechecks SQLite row counts after loading.
+The importer validates source manifests and JSONL counts before writing, requires every caller to resolve to a canonical project symbol, rejects excluded build/source leakage, and rechecks SQLite row counts after loading. A non-empty compiler `target_symbol_id` is preserved even when no canonical symbol row materializes for that referenced cursor. This can occur because call-target identity is assigned from a compiler-resolved project-relative cursor while canonical symbol emission uses stricter authored/traversal filters. Exact Clang USR is used as a navigation fallback when it resolves to a canonical symbol; otherwise the target remains explicitly `unmaterialized_project_cursor` rather than being synthesized.
 
 ## Validation-phase workflow
 
