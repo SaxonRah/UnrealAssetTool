@@ -1295,13 +1295,35 @@ def capture(
 
 
 def print_summary(manifest: dict) -> None:
+    normalized = manifest.get("normalized_counts", {})
+    resolved = manifest.get("compiler_resolved_translation_units")
+    expected = manifest.get("project_owned_translation_units", 0)
+
+    if resolved is not None:
+        print(
+            "native AST capture: "
+            f"success={bool(manifest.get('success'))} "
+            f"tus={resolved}/{expected} "
+            f"symbols={normalized.get('symbols', 0)} "
+            f"parameters={normalized.get('parameters', 0)} "
+            f"calls={normalized.get('calls', 0)}"
+        )
+        print(
+            "compiler backend: "
+            f"{manifest.get('libclang') or manifest.get('clang_frontend') or '<not found>'}"
+        )
+        return
+
     counts = manifest.get("raw_document_counts", {})
     print(
         "native AST capture: "
         f"success={bool(manifest.get('success'))} "
-        f"tus={manifest.get('project_owned_translation_units', 0)} "
+        f"tus={expected} "
         f"symbols={counts.get('symbols', 0)} "
         f"refs={counts.get('refs', 0)} "
         f"relations={counts.get('relations', 0)}"
     )
-    print(f"clangd-indexer: {manifest.get('clangd_indexer') or '<not found>'}")
+    print(
+        f"clangd-indexer: {manifest.get('clangd_indexer') or '<not found>'}"
+    )
+
