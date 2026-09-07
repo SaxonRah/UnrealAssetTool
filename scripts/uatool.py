@@ -1141,6 +1141,44 @@ def _verify_bundle_cli(argv: list[str]) -> int:
 
 
 
+def _native_stage_diff_cli(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="uatool native-stage-diff",
+        description=(
+            "compare current normal reflected native JSONL against the "
+            "staged reflected snapshot by stable reflected identity"
+        ),
+    )
+    parser.add_argument(
+        "output",
+        help="normal .uatool output directory",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=100,
+        help="maximum differing reflected identities to show",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="emit machine-readable JSON",
+    )
+    args = parser.parse_args(argv)
+    if args.limit < 0:
+        parser.error("--limit must be >= 0")
+
+    report = native_stage.reflected_diff(
+        Path(args.output),
+        limit=args.limit,
+    )
+    if args.json:
+        print(json.dumps(report, indent=2, sort_keys=True))
+    else:
+        native_stage.print_reflected_diff(report)
+    return 0 if report.get("status") == "same" else 56
+
+
 def _native_stage_cli(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="uatool native-stage",
@@ -1591,6 +1629,12 @@ def _native_ast_cli(argv: list[str]) -> int:
     return 0 if manifest.get("success") else 49
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "native-stage-diff":
+        try:
+            return _native_stage_diff_cli(sys.argv[2:])
+        except Exception as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 56
     if len(sys.argv) > 1 and sys.argv[1] == "native-stage":
         try:
             return _native_stage_cli(sys.argv[2:])
