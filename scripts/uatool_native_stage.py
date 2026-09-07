@@ -81,6 +81,31 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+# EClassFlags::CLASS_ReplicationDataIsSetUp (0x00000800) is
+# runtime replication setup state, not authored/reflected declaration identity.
+# Preserve the raw class_flags_hex in evidence; mask only this bit when
+# comparing reflection snapshots for compiler/join provenance compatibility.
+CLASS_REPLICATION_DATA_IS_SET_UP = 0x00000800
+
+
+def _project_reflected_semantic_row(
+    filename: str,
+    row: dict,
+) -> dict:
+    projected = dict(row)
+    if filename == "native_types.jsonl":
+        raw_flags = projected.get("class_flags_hex")
+        if isinstance(raw_flags, str) and raw_flags:
+            try:
+                flags = int(raw_flags, 16)
+            except ValueError:
+                pass
+            else:
+                flags &= ~CLASS_REPLICATION_DATA_IS_SET_UP
+                projected["class_flags_hex"] = f"0x{flags:016X}"
+    return projected
+
+
 REFLECTED_IDENTITY_FIELDS = {
     "native_modules.jsonl": ("module_name",),
     "native_types.jsonl": ("type_path",),
@@ -159,8 +184,14 @@ def reflected_diff(
             result["difference_count"] += 1
             continue
 
-        current_rows = _jsonl_objects(current_path)
-        staged_rows = _jsonl_objects(staged_path)
+        current_rows = [
+            _project_reflected_semantic_row(filename, row)
+            for row in _jsonl_objects(current_path)
+        ]
+        staged_rows = [
+            _project_reflected_semantic_row(filename, row)
+            for row in _jsonl_objects(staged_path)
+        ]
 
         current_map: dict[str, list[dict]] = {}
         staged_map: dict[str, list[dict]] = {}
@@ -306,7 +337,11 @@ def print_reflected_diff(report: dict) -> None:
                 )
 
 
-def _canonical_jsonl_rows(path: Path) -> list[str]:
+def _canonical_jsonl_rows(
+    path: Path,
+    *,
+    semantic_projection: bool = False,
+) -> list[str]:
     rows: list[str] = []
     with path.open("r", encoding="utf-8") as handle:
         for line_number, line in enumerate(handle, 1):
@@ -319,6 +354,15 @@ def _canonical_jsonl_rows(path: Path) -> list[str]:
                 raise RuntimeError(
                     f"invalid JSON in {path}:{line_number}: {exc}"
                 ) from exc
+            if semantic_projection:
+                if not isinstance(value, dict):
+                    raise RuntimeError(
+                        f"expected JSON object in {path}:{line_number}"
+                    )
+                value = _project_reflected_semantic_row(
+                    path.name,
+                    value,
+                )
             rows.append(
                 json.dumps(
                     value,
@@ -349,7 +393,10 @@ def _reflected_semantic_records(
             raise RuntimeError(
                 f"reflected semantic file missing: {path}"
             )
-        rows = _canonical_jsonl_rows(path)
+        rows = _canonical_jsonl_rows(
+            path,
+            semantic_projection=True,
+        )
         digest = hashlib.sha256()
         for row in rows:
             digest.update(row.encode("utf-8"))
