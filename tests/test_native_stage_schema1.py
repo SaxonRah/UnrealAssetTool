@@ -225,11 +225,12 @@ class NativeStageSchema1Test(unittest.TestCase):
             )
         )
 
-        with (self.output / "native_functions.jsonl").open(
-            "a",
+        current_functions = self.output / "native_functions.jsonl"
+        current_functions.write_text(
+            " " + current_functions.read_text(encoding="utf-8"),
             encoding="utf-8",
-        ) as handle:
-            handle.write('{"stale":true}\n')
+            newline="\n",
+        )
 
         error = native_stage.validation_error(
             self.output,
