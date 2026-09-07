@@ -32,6 +32,7 @@ import uatool_version as version
 import uatool_beta_rc as beta_rc
 import uatool_native_source as native_source
 import uatool_native_ast as native_ast
+import uatool_native_join as native_join
 
 # Public derived schema 40 distinguishes authored Bind/Assign sites from
 # resolved delegate subscriptions. Zero-input sites remain diagnostic evidence
@@ -1080,6 +1081,52 @@ def _native_source_cli(argv: list[str]) -> int:
     return 0
 
 
+def _native_join_cli(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="uatool native-join",
+        description=(
+            "join reflected native schema 1 to compiler-resolved native "
+            "source schema 1 using exact proof only"
+        ),
+    )
+    parser.add_argument(
+        "reflected_output",
+        help="directory produced by uatool native-capture",
+    )
+    parser.add_argument(
+        "compiler_output",
+        help="directory produced by uatool ast-capture",
+    )
+    parser.add_argument(
+        "--output",
+        help=(
+            "output directory; defaults to "
+            "<reflected-parent>/.uatool-native-join1"
+        ),
+    )
+    args = parser.parse_args(argv)
+
+    reflected_output = Path(args.reflected_output).expanduser().resolve()
+    compiler_output = Path(args.compiler_output).expanduser().resolve()
+    output = (
+        Path(args.output).expanduser().resolve()
+        if args.output
+        else reflected_output.parent / ".uatool-native-join1"
+    )
+
+    manifest = native_join.capture(
+        reflected_output,
+        compiler_output,
+        output,
+    )
+    error = native_join.validation_error(output)
+    if error:
+        raise RuntimeError(error)
+    native_join.print_summary(manifest)
+    print(f"native join output: {output}")
+    return 0
+
+
 def _native_ast_cli(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="uatool ast-capture",
@@ -1140,6 +1187,12 @@ def _native_ast_cli(argv: list[str]) -> int:
     return 0 if manifest.get("success") else 49
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "native-join":
+        try:
+            return _native_join_cli(sys.argv[2:])
+        except Exception as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 50
     if len(sys.argv) > 1 and sys.argv[1] == "ast-capture":
         try:
             return _native_ast_cli(sys.argv[2:])
