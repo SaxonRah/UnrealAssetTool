@@ -110,7 +110,12 @@ CREATE TABLE IF NOT EXISTS native_compiler_parameters(
  compatibility_overrides_json TEXT NOT NULL,
  evidence TEXT NOT NULL,
  json TEXT NOT NULL,
- PRIMARY KEY(function_occurrence_id,parameter_index)
+ PRIMARY KEY(
+   function_occurrence_id,
+   parameter_index,
+   name,
+   type_spelling
+ )
 );
 CREATE INDEX IF NOT EXISTS native_compiler_parameters_symbol_idx
  ON native_compiler_parameters(function_symbol_id,parameter_index);
@@ -418,6 +423,9 @@ def load_authoritative_inputs(
                 f"{row.get('source_path', '')}"
             )
     occurrence_set = set(occurrence_ids)
+    parameter_keys: list[tuple[str, int, str, str]] = []
+    parameter_slots: list[tuple[str, int]] = []
+    negative_parameter_index_rows = 0
     for row in data["compiler_parameters"]:
         occurrence_id = str(
             row.get("function_occurrence_id", "") or ""
@@ -427,6 +435,37 @@ def load_authoritative_inputs(
                 "compiler parameter references unknown function occurrence: "
                 f"{occurrence_id}"
             )
+        parameter_index = int(row.get("parameter_index", 0) or 0)
+        if parameter_index < 0:
+            negative_parameter_index_rows += 1
+        parameter_keys.append((
+            occurrence_id,
+            parameter_index,
+            str(row.get("name", "") or ""),
+            str(row.get("type_spelling", "") or ""),
+        ))
+        parameter_slots.append((occurrence_id, parameter_index))
+
+    if len(parameter_keys) != len(set(parameter_keys)):
+        raise RuntimeError(
+            "native compiler parameter canonical identity is not unique"
+        )
+
+    slot_counts: dict[tuple[str, int], int] = {}
+    for slot in parameter_slots:
+        slot_counts[slot] = slot_counts.get(slot, 0) + 1
+    duplicate_parameter_slots = sum(
+        1 for count in slot_counts.values() if count > 1
+    )
+    duplicate_parameter_slot_rows = sum(
+        count - 1 for count in slot_counts.values() if count > 1
+    )
+    data["parameter_identity_stats"] = {
+        "rows": len(parameter_keys),
+        "negative_index_rows": negative_parameter_index_rows,
+        "duplicate_index_slots": duplicate_parameter_slots,
+        "rows_beyond_unique_index_slots": duplicate_parameter_slot_rows,
+    }
 
     call_ids = [
         str(row.get("call_id", "") or "")
@@ -598,11 +637,14 @@ def load_database(
         compiler_output,
         join_output,
     )
-    create_schema(conn)
 
+    # Native SQLite rows are a disposable projection of authoritative JSONL.
+    # Rebuild only the native cache tables on every explicit import so cache
+    # schema fixes migrate old uat.db files without touching standard tables.
     for table in reversed(_TABLES):
-        conn.execute(f"DELETE FROM {table}")
-    conn.execute("DELETE FROM native_index_meta")
+        conn.execute(f"DROP TABLE IF EXISTS {table}")
+    conn.execute("DROP TABLE IF EXISTS native_index_meta")
+    create_schema(conn)
 
     conn.executemany(
         """INSERT INTO native_reflected_types
@@ -813,6 +855,9 @@ def load_database(
         "compiler_manifest_json": _j(data["manifests"]["compiler"]),
         "join_manifest_json": _j(data["manifests"]["join"]),
         "counts_json": _j(counts),
+        "parameter_identity_stats_json": _j(
+            data["parameter_identity_stats"]
+        ),
         "call_target_stats_json": _j(data["call_target_stats"]),
     }
     conn.executemany(
@@ -849,6 +894,27 @@ def import_database(
     except Exception:
         conn.rollback()
         raise
+    finally:
+        conn.close()
+
+
+def read_parameter_identity_stats(database: Path) -> dict[str, int]:
+    database = Path(database).expanduser().resolve()
+    conn = sqlite3.connect(database)
+    try:
+        row = conn.execute(
+            """SELECT value FROM native_index_meta
+               WHERE key='parameter_identity_stats_json'"""
+        ).fetchone()
+        if row is None:
+            return {}
+        value = _json_value(row[0], {})
+        if not isinstance(value, dict):
+            return {}
+        return {
+            str(key): int(count or 0)
+            for key, count in value.items()
+        }
     finally:
         conn.close()
 
@@ -1494,7 +1560,7 @@ def build_report(
         for row in conn.execute(
             """SELECT json FROM native_compiler_parameters
                WHERE function_occurrence_id=?
-               ORDER BY parameter_index""",
+               ORDER BY parameter_index,line,column,name,type_spelling""",
             (source["occurrence_id"],),
         ).fetchall()
     ]
