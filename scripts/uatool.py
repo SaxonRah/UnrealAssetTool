@@ -34,6 +34,7 @@ import uatool_native_source as native_source
 import uatool_native_ast as native_ast
 import uatool_native_join as native_join
 import uatool_native_index as native_index
+import uatool_native_stage as native_stage
 
 # Public derived schema 40 distinguishes authored Bind/Assign sites from
 # resolved delegate subscriptions. Zero-input sites remain diagnostic evidence
@@ -54,6 +55,7 @@ _base_derive_output = core.derive_output
 _base_build_database = core.build_database
 _base_query = core.query
 _base_scan = core.scan
+_base_create_upload_bundle = core.create_upload_bundle
 
 
 def create_schema(conn) -> None:
@@ -77,6 +79,29 @@ def create_schema(conn) -> None:
     blueprint_statements.create_schema(conn)
     project_graph.create_schema(conn)
     native_index.create_schema(conn)
+
+
+def create_upload_bundle(
+    output: Path,
+    destination: Path | None = None,
+    *,
+    include_raw_rigvm: bool = False,
+) -> Path:
+    output = Path(output).expanduser().resolve()
+    if native_stage.has_stage(output):
+        error = native_stage.validation_error(
+            output,
+            require_current_reflected=True,
+        )
+        if error:
+            raise RuntimeError(
+                f"native semantic stage incomplete: {error}"
+            )
+    return _base_create_upload_bundle(
+        output,
+        destination,
+        include_raw_rigvm=include_raw_rigvm,
+    )
 
 
 def _read_top_manifest(output: Path) -> dict:
@@ -572,6 +597,49 @@ def derive_output(output):
     return counts
 
 
+def _ensure_staged_native_database(
+    output: Path,
+    database: Path | None = None,
+) -> dict[str, int]:
+    output = Path(output).expanduser().resolve()
+    if not native_stage.has_stage(output):
+        return {}
+
+    error = native_stage.validation_error(
+        output,
+        require_current_reflected=True,
+    )
+    if error:
+        raise RuntimeError(
+            f"native semantic stage incomplete: {error}"
+        )
+
+    db = (
+        Path(database).expanduser().resolve()
+        if database is not None
+        else output / core.DB_NAME
+    )
+    if not db.is_file():
+        raise RuntimeError(
+            f"native semantic stage present but database is missing: {db}"
+        )
+
+    conn = sqlite3.connect(db)
+    try:
+        if native_index.has_native_index(conn):
+            return {}
+        counts = native_stage.load_database(conn, output)
+        conn.commit()
+        if not native_index.has_native_index(conn):
+            raise RuntimeError(
+                "native semantic stage import completed without "
+                "materializing native compiler rows"
+            )
+        return counts
+    finally:
+        conn.close()
+
+
 def build_database(output):
     output = Path(output).expanduser().resolve()
     fresh = _derived_is_fresh(output)
@@ -605,12 +673,18 @@ def build_database(output):
         # Readable text is reconstructed only when queried, avoiding another
         # hundreds-of-megabytes copy of neighborhood paths in uat.db.
         project_graph.load_database(conn, output, runtime._rows)
+        native_stage.load_database(conn, output)
         conn.commit()
         conn.execute("PRAGMA optimize")
         conn.execute("PRAGMA journal_mode=DELETE")
         conn.execute("PRAGMA synchronous=NORMAL")
     finally:
         conn.close()
+
+    # Enforce the lifecycle contract even if a lower composed DB builder is
+    # refactored later: a present valid native stage must be queryable from the
+    # disposable database before build_database returns.
+    _ensure_staged_native_database(output, db)
     return db
 
 
@@ -668,6 +742,18 @@ def _combined_summary(args) -> None:
     delegate_summary = delegate_summary if isinstance(delegate_summary, dict) else {}
     statement_summary = top_manifest.get("blueprint_statement_summary", {})
     statement_summary = statement_summary if isinstance(statement_summary, dict) else {}
+
+    native_stage_manifest = (
+        native_stage.read_manifest(output)
+        if native_stage.has_stage(output)
+        else None
+    )
+    native_stage_counts = (
+        native_stage_manifest.get("counts", {})
+        if isinstance(native_stage_manifest, dict)
+        and isinstance(native_stage_manifest.get("counts", {}), dict)
+        else {}
+    )
 
     print(
         "vfx scan complete: "
@@ -739,6 +825,15 @@ def _combined_summary(args) -> None:
             f"with_dependencies={statement_summary.get('dependency_statement_count', 0)} "
             f"with_literals={statement_summary.get('literal_statement_count', 0)}"
         )
+    if native_stage_counts:
+        print(
+            "native staged semantics: "
+            f"symbols={native_stage_counts.get('compiler_symbols', 0)} "
+            f"parameters={native_stage_counts.get('compiler_parameters', 0)} "
+            f"calls={native_stage_counts.get('compiler_calls', 0)} "
+            f"function_joins={native_stage_counts.get('function_joins', 0)} "
+            f"diagnostics={native_stage_counts.get('join_diagnostics', 0)}"
+        )
     print(
         "final derived complete: "
         + " ".join(
@@ -807,11 +902,27 @@ def scan(args):
         if "Mover behavior derived incomplete:" in message:
             print(f"ERROR: {exc}", file=sys.stderr)
             return 36
+        if "native semantic stage incomplete:" in message:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 55
         raise
     if result != 0:
         return result
 
     output = runtime._output(args)
+    try:
+        imported = _ensure_staged_native_database(output)
+    except RuntimeError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 55
+    if imported:
+        print(
+            "native staged semantics imported after normal scan: "
+            + " ".join(
+                f"{key.removeprefix('native_')}={value}"
+                for key, value in imported.items()
+            )
+        )
     if not _derived_is_fresh(output):
         # This should be rare: the composed derive writes the stamp only after
         # all raw/derived validators pass. Keep a conservative diagnostic path
@@ -866,6 +977,7 @@ core.derive_output = derive_output
 core.build_database = build_database
 core.query = query
 core.scan = scan
+core.create_upload_bundle = create_upload_bundle
 core.DERIVED_SCHEMA_VERSION = FINAL_DERIVED_SCHEMA_VERSION
 core.DEFAULT_BUNDLE_FILES = tuple(dict.fromkeys((
     *core.DEFAULT_BUNDLE_FILES,
@@ -878,6 +990,7 @@ core.DEFAULT_BUNDLE_FILES = tuple(dict.fromkeys((
     *blueprint_statements.DERIVED_FILES,
     *mover_behavior.DERIVED_FILES,
     *project_graph.DERIVED_FILES,
+    *native_stage.BUNDLE_FILES,
 )))
 
 
@@ -1026,6 +1139,97 @@ def _verify_bundle_cli(argv: list[str]) -> int:
     bundle_verify.print_report(result)
     return 0
 
+
+
+def _native_stage_diff_cli(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="uatool native-stage-diff",
+        description=(
+            "compare current normal reflected native JSONL against the "
+            "staged reflected snapshot by stable reflected identity"
+        ),
+    )
+    parser.add_argument(
+        "output",
+        help="normal .uatool output directory",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=100,
+        help="maximum differing reflected identities to show",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="emit machine-readable JSON",
+    )
+    args = parser.parse_args(argv)
+    if args.limit < 0:
+        parser.error("--limit must be >= 0")
+
+    report = native_stage.reflected_diff(
+        Path(args.output),
+        limit=args.limit,
+    )
+    if args.json:
+        print(json.dumps(report, indent=2, sort_keys=True))
+    else:
+        native_stage.print_reflected_diff(report)
+    return 0 if report.get("status") == "same" else 56
+
+
+def _native_stage_cli(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="uatool native-stage",
+        description=(
+            "atomically stage validated reflected/compiler/join native "
+            "evidence inside a portable .uatool output"
+        ),
+    )
+    parser.add_argument(
+        "output",
+        help="normal .uatool output directory",
+    )
+    parser.add_argument(
+        "--reflected",
+        required=True,
+        help="directory produced by uatool native-capture",
+    )
+    parser.add_argument(
+        "--compiler",
+        required=True,
+        help="directory produced by uatool ast-capture",
+    )
+    parser.add_argument(
+        "--joins",
+        required=True,
+        help="directory produced by uatool native-join",
+    )
+    args = parser.parse_args(argv)
+
+    output = Path(args.output).expanduser().resolve()
+    manifest = native_stage.stage(
+        output,
+        Path(args.reflected),
+        Path(args.compiler),
+        Path(args.joins),
+    )
+    counts = manifest.get("counts", {})
+    print(
+        "native semantics staged: "
+        + " ".join(
+            f"{key}={value}"
+            for key, value in counts.items()
+        )
+    )
+    print(
+        "native stage rulesets: "
+        f"compiler={manifest.get('rulesets', {}).get('compiler', '')} "
+        f"joins={manifest.get('rulesets', {}).get('joins', '')}"
+    )
+    print(f"native stage: {native_stage.root(output)}")
+    return 0
 
 
 def _native_index_cli(argv: list[str]) -> int:
@@ -1425,6 +1629,18 @@ def _native_ast_cli(argv: list[str]) -> int:
     return 0 if manifest.get("success") else 49
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "native-stage-diff":
+        try:
+            return _native_stage_diff_cli(sys.argv[2:])
+        except Exception as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 56
+    if len(sys.argv) > 1 and sys.argv[1] == "native-stage":
+        try:
+            return _native_stage_cli(sys.argv[2:])
+        except Exception as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 55
     if len(sys.argv) > 1 and sys.argv[1] == "native-index":
         try:
             return _native_index_cli(sys.argv[2:])
