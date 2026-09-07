@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -55,6 +56,13 @@ class NativeStageSchema1Test(unittest.TestCase):
             self.compiler,
             self.joins,
         )
+
+    def install_current_reflection(self) -> None:
+        for name in native_stage.REFLECTED_FILES:
+            shutil.copyfile(
+                self.reflected / name,
+                self.output / name,
+            )
 
     def run_composed_bundle(
         self,
@@ -116,6 +124,7 @@ class NativeStageSchema1Test(unittest.TestCase):
 
     def test_tampered_staged_file_is_rejected(self) -> None:
         self.stage()
+        self.install_current_reflection()
         _, compiler, _ = native_stage.roots(self.output)
         with (compiler / native_ast.SYMBOLS).open(
             "a",
@@ -173,6 +182,7 @@ class NativeStageSchema1Test(unittest.TestCase):
 
     def test_stage_loads_native_tables_without_touching_standard_table(self) -> None:
         manifest = self.stage()
+        self.install_current_reflection()
         db = self.output / "uat.db"
         conn = sqlite3.connect(db)
         try:
@@ -205,8 +215,48 @@ class NativeStageSchema1Test(unittest.TestCase):
         finally:
             conn.close()
 
+    def test_current_reflection_must_match_staged_snapshot(self) -> None:
+        self.stage()
+        self.install_current_reflection()
+        self.assertIsNone(
+            native_stage.validation_error(
+                self.output,
+                require_current_reflected=True,
+            )
+        )
+
+        with (self.output / "native_functions.jsonl").open(
+            "a",
+            encoding="utf-8",
+        ) as handle:
+            handle.write('{"stale":true}\n')
+
+        error = native_stage.validation_error(
+            self.output,
+            require_current_reflected=True,
+        )
+        self.assertIsNotNone(error)
+        self.assertIn(
+            "current reflected native evidence differs",
+            error,
+        )
+
+    def test_current_reflection_is_required_for_normal_db_load(self) -> None:
+        self.stage()
+        conn = sqlite3.connect(":memory:")
+        try:
+            native_index.create_schema(conn)
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "current normal reflected native manifest is missing",
+            ):
+                native_stage.load_database(conn, self.output)
+        finally:
+            conn.close()
+
     def test_normal_bundle_contains_complete_native_stage(self) -> None:
         self.stage()
+        self.install_current_reflection()
         destination = self.root / "portable.zip"
         result = self.run_composed_bundle(destination)
         self.assertEqual(result.returncode, 0, result.stderr)
