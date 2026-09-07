@@ -213,6 +213,47 @@ int sample_tick(int value)
             self.assertIn("free", callees)
             self.assertIn("memset", callees)
 
+    def test_nested_call_is_not_a_function_declaration(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            build_cs = write(
+                root / "Source" / "Sample" / "Sample.Build.cs",
+                "public class Sample {}\n",
+            )
+            source = write(
+                build_cs.parent / "sample.cpp",
+                """void SampleLog()
+{
+    UE_LOG(LogTemp, Display, TEXT("hello"));
+    SetActorEditorLabel(nullptr, FString::Printf(TEXT("x")));
+}
+""",
+            )
+            module = native_source.ModuleRoot(
+                name="Sample",
+                root=build_cs.parent,
+                build_cs=build_cs,
+                owner_kind="project",
+                owner_name="Sample",
+            )
+            _, _, symbols, _, calls = native_source.scan_lexical_file(
+                source,
+                module,
+                root,
+            )
+            functions = [
+                row for row in symbols if row["kind"] == "function"
+            ]
+            self.assertEqual(
+                [row["qualified_name"] for row in functions],
+                ["SampleLog"],
+            )
+            callees = [row["callee_spelling"] for row in calls]
+            self.assertIn("UE_LOG", callees)
+            self.assertIn("TEXT", callees)
+            self.assertIn("SetActorEditorLabel", callees)
+            self.assertIn("FString::Printf", callees)
+
     def test_compile_database_filters_owned_tu_and_expands_rsp(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -363,6 +404,13 @@ int sample_tick(int value)
         self.assertIn('"-NoExecCodeGenActions"', source)
         self.assertIn('"-Compiler=VisualStudio2022"', source)
         self.assertNotIn('f"-Target={target} Win64 {configuration}"', source)
+        self.assertIn('engine_root.parent / "compile_commands.json"', source)
+        self.assertIn('ClangDatabase written to\\s+(.+?)\\s*
+
+if __name__ == "__main__":
+    unittest.main()
+, source)
+        self.assertIn('if "(" in prefix or ")" in prefix:', source)
         self.assertIn('"lexical_unresolved"', source)
         self.assertIn('"ubt_generate_clang_database"', source)
         self.assertIn("_CTOR_RE = re.compile(", source)
