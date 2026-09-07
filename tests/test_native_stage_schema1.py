@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -17,7 +18,6 @@ for path in (SCRIPTS, TESTS):
         sys.path.insert(0, str(path))
 
 import test_native_index_schema1 as fixture
-import uatool as launcher
 import uatool_native_ast as native_ast
 import uatool_native_index as native_index
 import uatool_native_join as native_join
@@ -54,6 +54,26 @@ class NativeStageSchema1Test(unittest.TestCase):
             self.reflected,
             self.compiler,
             self.joins,
+        )
+
+    def run_composed_bundle(
+        self,
+        destination: Path,
+    ) -> subprocess.CompletedProcess[str]:
+        code = (
+            "import sys; "
+            f"sys.path.insert(0, {str(SCRIPTS)!r}); "
+            "from pathlib import Path; "
+            "import uatool; "
+            f"uatool.create_upload_bundle(Path({str(self.output)!r}), "
+            f"Path({str(destination)!r}))"
+        )
+        return subprocess.run(
+            [sys.executable, "-c", code],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
         )
 
     def test_stage_preserves_authoritative_bytes_and_validates(self) -> None:
@@ -188,10 +208,8 @@ class NativeStageSchema1Test(unittest.TestCase):
     def test_normal_bundle_contains_complete_native_stage(self) -> None:
         self.stage()
         destination = self.root / "portable.zip"
-        launcher.create_upload_bundle(
-            self.output,
-            destination,
-        )
+        result = self.run_composed_bundle(destination)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
         with zipfile.ZipFile(destination, "r") as archive:
             names = set(archive.namelist())
@@ -204,14 +222,14 @@ class NativeStageSchema1Test(unittest.TestCase):
         _, compiler, _ = native_stage.roots(self.output)
         (compiler / native_ast.CALLS).unlink()
 
-        with self.assertRaisesRegex(
-            RuntimeError,
+        result = self.run_composed_bundle(
+            self.root / "bad.zip"
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
             "native semantic stage incomplete",
-        ):
-            launcher.create_upload_bundle(
-                self.output,
-                self.root / "bad.zip",
-            )
+            result.stderr,
+        )
 
     def test_projects_without_native_stage_remain_optional(self) -> None:
         conn = sqlite3.connect(":memory:")
@@ -225,7 +243,8 @@ class NativeStageSchema1Test(unittest.TestCase):
             conn.close()
 
         destination = self.root / "empty.zip"
-        launcher.create_upload_bundle(self.output, destination)
+        result = self.run_composed_bundle(destination)
+        self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(destination.is_file())
 
     def test_canonical_launcher_wires_stage_to_db_and_bundle(self) -> None:
