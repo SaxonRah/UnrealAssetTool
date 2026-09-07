@@ -720,7 +720,7 @@ Object: BBB
         self.assertIn('"--format=yaml"', source)
         self.assertIn('"--executor=all-TUs"', source)
         self.assertIn('"clangd_indexer_compiler_resolved"', source)
-        self.assertIn('"clang_frontend_ast_json_probe"', source)
+        self.assertIn('"libclang_cursor_all_translation_units"', source)
         self.assertIn("discover_clang_frontend", source)
         self.assertIn("_run_clang_ast_probes", source)
         self.assertIn("_write_response_file", source)
