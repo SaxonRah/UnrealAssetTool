@@ -53,7 +53,7 @@ native_function_joins.jsonl
 native_join_diagnostics.jsonl
 ```
 
-Join schema 1 uses exact proof only. Ambiguity and legitimate missing authored counterparts remain diagnostics; they are never promoted by fuzzy name similarity.
+Join schema 1 uses exact proof only. Ambiguity and legitimate missing authored counterparts remain diagnostics; they are never promoted by fuzzy name similarity. Current outputs also declare ruleset `reflection_parameter_projection_v1`; validation rejects earlier schema-1 join directories that predate the reflected-to-source passing-mode projection fix and tells the caller to regenerate only the cheap join layer from retained reflected/compiler inputs.
 
 ## SQLite cache schema 1
 
