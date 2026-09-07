@@ -503,6 +503,35 @@ class NativeASTSchema1Test(unittest.TestCase):
                 2,
             )
 
+    def test_exact_uworld_incomplete_error_adds_labeled_forced_include(self) -> None:
+        stderr = (
+            "HRRAIEntityComponent.cpp(563,44): error: "
+            "member access into incomplete type 'UWorld'\n"
+            "NameTypes.h(377,25): error: constexpr function never "
+            "produces a constant expression [-Winvalid-constexpr]\n"
+        )
+        self.assertEqual(
+            native_ast._compatibility_overrides_from_stderr(
+                stderr,
+                language="cpp",
+                frontend_major=19,
+            ),
+            [
+                "-Wno-invalid-constexpr",
+                "/FIEngine/World.h",
+            ],
+        )
+
+    def test_uworld_override_is_not_added_without_exact_error(self) -> None:
+        self.assertEqual(
+            native_ast._compatibility_overrides_from_stderr(
+                "warning: forward declaration of 'UWorld'\n",
+                language="cpp",
+                frontend_major=19,
+            ),
+            [],
+        )
+
     def test_compatibility_overrides_are_inserted_before_source(self) -> None:
         arguments = [
             "/nologo",
@@ -650,6 +679,8 @@ Object: BBB
         self.assertIn("syntax_exit_code", source)
         self.assertIn("syntax_error_lines", source)
         self.assertIn("compatibility_overrides", source)
+        self.assertIn("_compatibility_overrides_from_stderr", source)
+        self.assertIn("/FIEngine/World.h", source)
         self.assertIn("clang_frontend_ast_json_compatibility_replay", source)
         self.assertIn("[-Winvalid-constexpr]", source)
         self.assertIn("STL1000: Unexpected compiler version", source)
