@@ -22,6 +22,10 @@ Additional independently versioned semantic/canonical companions include:
 Blueprint user-defined enum schema: 1
 Chooser decision schema:            1
 Gameplay Camera behavior schema:    2
+Reflected native schema:            1
+Compiler native AST schema:         1
+Reflected/source native join:       1
+Native SQLite cache schema:         1
 Mass/ZoneGraph graph expectation:   1
 Mass/ZoneGraph graph verification:  1
 GAS graph expectation:              1
@@ -51,6 +55,8 @@ Canonical and derived streams use JSON Lines: one JSON object per physical line.
 When parsing JSONL, split on physical `\n` records. Do not use Unicode `str.splitlines()` because serialized Unreal text can contain control characters that Python treats as additional line separators.
 
 `uat.db` is a regenerable retrieval cache; canonical/derived JSON and their manifests are authoritative.
+
+Native schema 1 follows the same authority rule. Reflected native JSONL, compiler-resolved AST JSONL and exact join JSONL remain authoritative; the `native_*` SQLite tables are only indexed projections. During validation they are populated explicitly with `uatool native-index` and are intentionally not part of the automatic scan/bundle pipeline. See [native-semantics-schema1.md](native-semantics-schema1.md).
 
 ---
 
