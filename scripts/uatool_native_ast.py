@@ -164,13 +164,11 @@ def _clang_probe_arguments(
 
 
 def _write_response_file(path: Path, arguments: list[str]) -> None:
-    # LLVM response files use normal command-line tokenization. Writing one
-    # independently quoted argument per line keeps CreateProcess command
-    # length tiny while preserving spaces/backslashes in UE include paths.
-    text = "\n".join(
-        subprocess.list2cmdline([argument])
-        for argument in arguments
-    )
+    # clang-cl expands response files with Windows command-line tokenization
+    # and preserves physical end-of-line markers. Keep the full argument
+    # vector on one logical line so options such as "-Xclang <value>" are
+    # never split by an EOL marker.
+    text = subprocess.list2cmdline(arguments)
     path.write_text(
         text + ("\n" if text else ""),
         encoding="utf-8",
