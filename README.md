@@ -267,7 +267,7 @@ python scripts\uatool.py native-program-report `
     --callees
 ```
 
-The report resolver is exact-only. It can start from an exact reflected function path, compiler symbol ID, Clang USR or qualified C/C++ name. An unresolved reflected function remains visible with its exact join diagnostic instead of being silently dropped or guessed.
+The report resolver is exact-only. It can start from an exact reflected function path, compiler symbol ID, Clang USR or qualified C/C++ name. An unresolved reflected function remains visible with its exact join diagnostic instead of being silently dropped or guessed. Compiler-resolved call targets that have a stable project target ID but no first-class canonical symbol row are retained and labeled unmaterialized; exact Clang USR is used to reach a canonical symbol when available.
 
 See [docs/native-semantics-schema1.md](docs/native-semantics-schema1.md).
 
