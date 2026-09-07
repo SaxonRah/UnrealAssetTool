@@ -858,6 +858,37 @@ def query(
         ("type_path", "module_name", "kind", "cpp_name"),
     )
 
+    print("\n[native type joins]")
+    print_rows(
+        conn.execute(
+            """SELECT reflected_type_path,reflected_cpp_name,
+                      source_qualified_name,source_path,source_line,
+                      source_clang_usr,proof
+               FROM native_type_joins
+               WHERE reflected_type_path LIKE ?
+                  OR reflected_module_name LIKE ?
+                  OR reflected_cpp_name LIKE ?
+                  OR source_symbol_id LIKE ?
+                  OR source_clang_usr LIKE ?
+                  OR source_qualified_name LIKE ?
+                  OR source_path LIKE ?
+               LIMIT ?""",
+            (
+                pattern, pattern, pattern, pattern,
+                pattern, pattern, pattern, limit,
+            ),
+        ),
+        (
+            "reflected_type_path",
+            "reflected_cpp_name",
+            "source_qualified_name",
+            "source_path",
+            "source_line",
+            "source_clang_usr",
+            "proof",
+        ),
+    )
+
     print("\n[native reflected functions]")
     print_rows(
         conn.execute(
