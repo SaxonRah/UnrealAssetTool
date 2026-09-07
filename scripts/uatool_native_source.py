@@ -308,6 +308,57 @@ def _resolve_compile_file(entry: dict) -> Path | None:
         return None
 
 
+def _split_windows_args(text: str) -> list[str]:
+    """Split an MSVC/UBT command or response-file line.
+
+    This follows the CommandLineToArgvW backslash/quote rules closely enough
+    for compiler response files, including /I"C:\\Program Files\\..." where
+    the quote begins in the middle of an argument.
+    """
+    result: list[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        while i < n and text[i].isspace():
+            i += 1
+        if i >= n:
+            break
+
+        chars: list[str] = []
+        in_quotes = False
+        while i < n:
+            c = text[i]
+            if c == "\\\\":
+                start = i
+                while i < n and text[i] == "\\\\":
+                    i += 1
+                count = i - start
+                if i < n and text[i] == '"':
+                    chars.extend("\\\\" for _ in range(count // 2))
+                    if count % 2:
+                        chars.append('"')
+                        i += 1
+                    else:
+                        in_quotes = not in_quotes
+                        i += 1
+                    continue
+                chars.extend("\\\\" for _ in range(count))
+                continue
+            if c == '"':
+                in_quotes = not in_quotes
+                i += 1
+                continue
+            if c.isspace() and not in_quotes:
+                break
+            chars.append(c)
+            i += 1
+
+        result.append("".join(chars))
+        while i < n and text[i].isspace():
+            i += 1
+    return result
+
+
 def _command_tokens(entry: dict) -> list[str]:
     arguments = entry.get("arguments")
     if isinstance(arguments, list):
@@ -315,6 +366,9 @@ def _command_tokens(entry: dict) -> list[str]:
     command = str(entry.get("command", "") or "")
     if not command:
         return []
+    tokens = _split_windows_args(command)
+    if tokens:
+        return tokens
     try:
         return shlex.split(command, posix=False)
     except ValueError:
@@ -348,6 +402,9 @@ def _read_rsp_tokens(path: Path) -> list[str]:
         text = path.read_text(encoding="utf-8-sig", errors="replace")
     except OSError:
         return []
+    tokens = _split_windows_args(text)
+    if tokens:
+        return tokens
     try:
         return shlex.split(text, posix=False)
     except ValueError:
@@ -648,7 +705,7 @@ _FUNCTION_RE = re.compile(
     [ \t]*\(
     (?P<params>[^;{}]*)
     \)
-    (?P<suffix>[ \t]*(?:const\b|noexcept\b(?:\s*\([^)]*\))?|override\b|final\b|requires\b[^{;]*)*)[ \t]*
+    (?P<suffix>[ \t]*(?:const\b|noexcept\b(?:\s*\([^)]*\))?|override\b|final\b|requires\b[^{;]*)*)[ \t\r\n]*
     (?P<term>[{;])
     """
 )
