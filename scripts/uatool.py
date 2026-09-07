@@ -31,6 +31,7 @@ import uatool_verify_bundle as bundle_verify
 import uatool_version as version
 import uatool_beta_rc as beta_rc
 import uatool_native_source as native_source
+import uatool_native_ast as native_ast
 
 # Public derived schema 40 distinguishes authored Bind/Assign sites from
 # resolved delegate subscriptions. Zero-input sites remain diagnostic evidence
@@ -1078,7 +1079,73 @@ def _native_source_cli(argv: list[str]) -> int:
     print(f"native source output: {output}")
     return 0
 
+
+def _native_ast_cli(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="uatool ast-capture",
+        description=(
+            "capture compiler-resolved project-owned native C/C++ index "
+            "evidence with clangd-indexer"
+        ),
+    )
+    parser.add_argument("project", help="target .uproject")
+    parser.add_argument(
+        "--editor",
+        required=True,
+        help="UnrealEditor-*-Cmd.exe used to resolve the Engine/UBT installation",
+    )
+    parser.add_argument(
+        "--output",
+        help="output directory; defaults to <project>/.uatool-native-ast1",
+    )
+    parser.add_argument(
+        "--configuration",
+        default="DebugGame",
+        choices=("DebugGame", "Development"),
+        help="Editor target configuration used by GenerateClangDatabase",
+    )
+    parser.add_argument(
+        "--clangd-indexer",
+        help="explicit clangd-indexer.exe path; otherwise auto-discover",
+    )
+    parser.add_argument(
+        "--no-generate-compile-db",
+        action="store_true",
+        help="reuse an existing compile_commands.json",
+    )
+    args = parser.parse_args(argv)
+
+    project = Path(args.project).expanduser().resolve()
+    editor = Path(args.editor).expanduser().resolve()
+    output = (
+        Path(args.output).expanduser().resolve()
+        if args.output
+        else project.parent / ".uatool-native-ast1"
+    )
+    indexer = (
+        Path(args.clangd_indexer).expanduser().resolve()
+        if args.clangd_indexer
+        else None
+    )
+    manifest = native_ast.capture(
+        project,
+        editor,
+        output,
+        configuration=args.configuration,
+        clangd_indexer=indexer,
+        generate_compile_database=not args.no_generate_compile_db,
+    )
+    native_ast.print_summary(manifest)
+    print(f"native AST output: {output}")
+    return 0 if manifest.get("success") else 49
+
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "ast-capture":
+        try:
+            return _native_ast_cli(sys.argv[2:])
+        except Exception as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 49
     if len(sys.argv) > 1 and sys.argv[1] == "source-capture":
         try:
             return _native_source_cli(sys.argv[2:])
