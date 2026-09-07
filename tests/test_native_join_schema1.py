@@ -189,11 +189,14 @@ def make_ast(
     write_jsonl(root / native_ast.CALLS, [])
     (root / native_ast.MANIFEST).write_text(
         json.dumps({
-            "schema_version": 1,
+            "schema_version": native_ast.SCHEMA_VERSION,
+            "ruleset": native_ast.RULESET,
+            "parameter_owner_policy": native_ast.PARAMETER_OWNER_POLICY,
             "pass": "UnrealAssetToolNativeAST",
             "success": True,
             "error": "",
             "evidence": "libclang_cursor_all_translation_units",
+            "parameter_owner_mismatches_rejected": 0,
             "normalized_counts": {
                 "symbols": len(symbols),
                 "parameters": len(parameters),
