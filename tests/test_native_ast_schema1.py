@@ -532,6 +532,37 @@ class NativeASTSchema1Test(unittest.TestCase):
             [],
         )
 
+    def test_exact_ustaticmesh_incomplete_error_adds_labeled_forced_include(self) -> None:
+        stderr = (
+            "ConstructorHelpers.h(33,19): error: "
+            "incomplete type 'UStaticMesh' named in nested name specifier\n"
+            "ConstructorHelpers.h(38,13): error: "
+            "member access into incomplete type 'UStaticMesh'\n"
+            "NameTypes.h(377,25): error: constexpr function never "
+            "produces a constant expression [-Winvalid-constexpr]\n"
+        )
+        self.assertEqual(
+            native_ast._compatibility_overrides_from_stderr(
+                stderr,
+                language="cpp",
+                frontend_major=19,
+            ),
+            [
+                "-Wno-invalid-constexpr",
+                "/FIEngine/StaticMesh.h",
+            ],
+        )
+
+    def test_ustaticmesh_override_is_not_added_for_forward_declaration_note(self) -> None:
+        self.assertEqual(
+            native_ast._compatibility_overrides_from_stderr(
+                "note: forward declaration of 'UStaticMesh'\n",
+                language="cpp",
+                frontend_major=19,
+            ),
+            [],
+        )
+
     def test_compatibility_overrides_are_inserted_before_source(self) -> None:
         arguments = [
             "/nologo",
