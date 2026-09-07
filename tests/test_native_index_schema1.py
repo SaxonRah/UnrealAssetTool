@@ -444,6 +444,172 @@ class NativeIndexSchema1Tests(unittest.TestCase):
             "UHRThing::Caller",
         )
 
+    def test_project_target_without_materialized_symbol_is_preserved(self) -> None:
+        calls_path = self.compiler / native_ast.CALLS
+        calls = native_index._rows(calls_path)
+        calls.append({
+            "call_id": "call-dangling",
+            "caller_symbol_id": "do-symbol",
+            "caller_occurrence_id": "do-occurrence",
+            "source_path": (
+                "Plugins/HR_RAI/Source/HRRAI/Private/HRThing.cpp"
+            ),
+            "translation_unit": (
+                "Plugins/HR_RAI/Source/HRRAI/Private/HRThing.cpp"
+            ),
+            "language": "cpp",
+            "line": 32,
+            "column": 5,
+            "offset": 320,
+            "target_symbol_id": "nonmaterialized-target",
+            "target_usr": "c:@F@GeneratedThunk#",
+            "target_kind": "FunctionDecl",
+            "target_name": "GeneratedThunk",
+            "target_type_spelling": "void ()",
+            "resolution": "compiler_resolved",
+            "compatibility_overrides": [],
+            "evidence": "libclang_cursor_schema1",
+        })
+        write_jsonl(calls_path, calls)
+        manifest_path = self.compiler / native_ast.MANIFEST
+        manifest = json.loads(
+            manifest_path.read_text(encoding="utf-8")
+        )
+        manifest["normalized_counts"]["calls"] = len(calls)
+        manifest_path.write_text(
+            json.dumps(manifest) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+
+        native_index.import_database(
+            self.db,
+            self.reflected,
+            self.compiler,
+            self.joins,
+        )
+        conn = sqlite3.connect(self.db)
+        try:
+            report = native_index.build_report(
+                conn,
+                "/Script/HRRAI.HRThing.DoThing",
+                include_callers=False,
+                include_callees=True,
+                limit=20,
+            )
+            meta = json.loads(
+                conn.execute(
+                    """SELECT value FROM native_index_meta
+                       WHERE key='call_target_stats_json'"""
+                ).fetchone()[0]
+            )
+        finally:
+            conn.close()
+
+        dangling = [
+            edge
+            for edge in report["callees"]
+            if edge["call_id"] == "call-dangling"
+        ]
+        self.assertEqual(len(dangling), 1)
+        self.assertTrue(dangling[0]["project_owned_target"])
+        self.assertFalse(dangling[0]["target_materialized"])
+        self.assertEqual(
+            dangling[0]["target_resolution_basis"],
+            "unmaterialized_project_cursor",
+        )
+        self.assertEqual(
+            dangling[0]["target_name"],
+            "GeneratedThunk",
+        )
+        self.assertEqual(
+            meta["unmaterialized_project_targets"],
+            1,
+        )
+
+    def test_mismatched_project_target_id_resolves_by_exact_usr(self) -> None:
+        calls_path = self.compiler / native_ast.CALLS
+        calls = native_index._rows(calls_path)
+        calls.append({
+            "call_id": "call-usr-fallback",
+            "caller_symbol_id": "do-symbol",
+            "caller_occurrence_id": "do-occurrence",
+            "source_path": (
+                "Plugins/HR_RAI/Source/HRRAI/Private/HRThing.cpp"
+            ),
+            "translation_unit": (
+                "Plugins/HR_RAI/Source/HRRAI/Private/HRThing.cpp"
+            ),
+            "language": "cpp",
+            "line": 33,
+            "column": 5,
+            "offset": 330,
+            "target_symbol_id": "different-cursor-kind-id",
+            "target_usr": "c:@F@hrsim_helper#I#",
+            "target_kind": "FunctionDecl",
+            "target_name": "hrsim_helper",
+            "target_type_spelling": "void (int)",
+            "resolution": "compiler_resolved",
+            "compatibility_overrides": [],
+            "evidence": "libclang_cursor_schema1",
+        })
+        write_jsonl(calls_path, calls)
+        manifest_path = self.compiler / native_ast.MANIFEST
+        manifest = json.loads(
+            manifest_path.read_text(encoding="utf-8")
+        )
+        manifest["normalized_counts"]["calls"] = len(calls)
+        manifest_path.write_text(
+            json.dumps(manifest) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+
+        native_index.import_database(
+            self.db,
+            self.reflected,
+            self.compiler,
+            self.joins,
+        )
+        conn = sqlite3.connect(self.db)
+        try:
+            report = native_index.build_report(
+                conn,
+                "/Script/HRRAI.HRThing.DoThing",
+                include_callers=False,
+                include_callees=True,
+                limit=20,
+            )
+            meta = json.loads(
+                conn.execute(
+                    """SELECT value FROM native_index_meta
+                       WHERE key='call_target_stats_json'"""
+                ).fetchone()[0]
+            )
+        finally:
+            conn.close()
+
+        fallback = [
+            edge
+            for edge in report["callees"]
+            if edge["call_id"] == "call-usr-fallback"
+        ]
+        self.assertEqual(len(fallback), 1)
+        self.assertTrue(fallback[0]["project_owned_target"])
+        self.assertTrue(fallback[0]["target_materialized"])
+        self.assertEqual(
+            fallback[0]["target_resolution_basis"],
+            "clang_usr",
+        )
+        self.assertEqual(
+            fallback[0]["target_source_path"],
+            "Plugins/HR_RAI/Source/HRRAI/Private/hrsim_test.c",
+        )
+        self.assertEqual(
+            meta["materialized_by_clang_usr"],
+            1,
+        )
+
     def test_delegate_signature_remains_visibly_unresolved(self) -> None:
         native_index.import_database(
             self.db,
