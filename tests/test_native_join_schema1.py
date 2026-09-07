@@ -192,11 +192,13 @@ def make_ast(
             "schema_version": native_ast.SCHEMA_VERSION,
             "ruleset": native_ast.RULESET,
             "parameter_owner_policy": native_ast.PARAMETER_OWNER_POLICY,
+            "call_owner_policy": native_ast.CALL_OWNER_POLICY,
             "pass": "UnrealAssetToolNativeAST",
             "success": True,
             "error": "",
             "evidence": "libclang_cursor_all_translation_units",
             "parameter_owner_mismatches_rejected": 0,
+            "nested_callable_calls_suppressed": 0,
             "normalized_counts": {
                 "symbols": len(symbols),
                 "parameters": len(parameters),
