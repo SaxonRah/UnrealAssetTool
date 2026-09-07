@@ -254,7 +254,7 @@ def stage(
         joins,
     )
 
-    temp_root = Path(
+    temp_root: Path | None = Path(
         tempfile.mkdtemp(
             prefix=f".{ROOT_DIR}.stage-",
             dir=output,
@@ -340,9 +340,9 @@ def stage(
                 raise RuntimeError(error)
 
         _atomic_replace_directory(temp_root, root(output))
-        temp_root = Path()
+        temp_root = None
     finally:
-        if temp_root and temp_root.exists():
+        if temp_root is not None and temp_root.exists():
             shutil.rmtree(temp_root)
 
     error = validation_error(output)
