@@ -18,6 +18,8 @@ import zipfile
 from pathlib import Path
 from typing import Iterable, Iterator
 
+import uatool_native as native_cpp
+
 DB_NAME = "uat.db"
 MODULE_NAME = "UnrealAssetTool"
 BLUEPRINT_CALL_BINDING_SCHEMA_VERSION = 2
@@ -5558,6 +5560,15 @@ DEFAULT_BUNDLE_FILES = (
     "world_partition_actor_descs.jsonl",
     "files.jsonl",
     "source_chunks.jsonl",
+    "native_manifest.json",
+    "native_modules.jsonl",
+    "native_types.jsonl",
+    "native_interfaces.jsonl",
+    "native_functions.jsonl",
+    "native_function_parameters.jsonl",
+    "native_properties.jsonl",
+    "native_enums.jsonl",
+    "native_enum_values.jsonl",
     "assets.jsonl",
     "asset_dependencies.jsonl",
     "behavior_trees.jsonl",
@@ -5666,6 +5677,88 @@ def create_upload_bundle(
     return destination
 
 
+
+def native_capture(args: argparse.Namespace) -> int:
+    project = Path(args.project).expanduser().resolve()
+    if not project.is_file() or project.suffix.lower() != ".uproject":
+        raise FileNotFoundError(f"Not a .uproject file: {project}")
+
+    output = (
+        Path(args.output).expanduser()
+        if args.output
+        else project.parent / ".uatool-native"
+    )
+    if not output.is_absolute():
+        output = (project.parent / output).resolve()
+    output.mkdir(parents=True, exist_ok=True)
+
+    native_manifest_path = output / native_cpp.MANIFEST_FILE
+    native_manifest_path.unlink(missing_ok=True)
+
+    editor = require_editor(args.editor)
+    command = [
+        str(editor),
+        str(project),
+        "-run=UnrealAssetTool",
+        f"-Output={output}",
+        f"-EnablePlugins={MODULE_NAME}",
+        "-NativeOnly",
+        "-unattended",
+        "-RUNNINGUNATTENDEDSCRIPT",
+        "-nop4",
+        "-nosplash",
+        "-NoShaderCompile",
+        "-stdout",
+        "-FullStdOutLogOutput",
+        "-forcelogflush",
+    ]
+
+    with stage_invoking_plugin_checkout(project) as active_plugin_root:
+        ensure_plugin_binary(
+            project,
+            editor,
+            args.build_script,
+            args.no_build,
+            active_plugin_root,
+        )
+        print("running native C++ capture:", subprocess.list2cmdline(command))
+        result = subprocess.run(command, check=False)
+        if result.returncode != 0:
+            report_editor_failure(project, result.returncode)
+            return result.returncode
+
+    error = native_cpp.validation_error(output)
+    if error:
+        print(f"ERROR: native C++ capture incomplete: {error}", file=sys.stderr)
+        latest_log = newest_project_log(project)
+        if latest_log is not None:
+            print(f"latest Unreal log: {latest_log}", file=sys.stderr)
+        return 24
+
+    manifest = native_cpp.read_manifest(output) or {}
+    counts = manifest.get("counts", {}) if isinstance(manifest, dict) else {}
+    print(
+        "native C++ capture complete: "
+        + " ".join(
+            f"{name}={counts.get(name, 0)}"
+            for name in (
+                "modules",
+                "loaded_modules",
+                "classes",
+                "structs",
+                "functions",
+                "function_parameters",
+                "properties",
+                "enums",
+                "enum_values",
+            )
+        )
+    )
+    print(f"native schema: {manifest.get('schema_version', 0)}")
+    print(f"output: {output}")
+    return 0
+
+
 def scan(args: argparse.Namespace) -> int:
     project = Path(args.project).expanduser().resolve()
     if not project.is_file() or project.suffix.lower() != ".uproject":
@@ -5682,11 +5775,13 @@ def scan(args: argparse.Namespace) -> int:
     world_manifest_path = output / "world_manifest.json"
     vfx_manifest_path = output / "vfx_manifest.json"
     systems_manifest_path = output / "systems_manifest.json"
+    native_manifest_path = output / "native_manifest.json"
     for stale_manifest in (
         manifest_path,
         world_manifest_path,
         vfx_manifest_path,
         systems_manifest_path,
+        native_manifest_path,
     ):
         if stale_manifest.exists():
             stale_manifest.unlink()
@@ -5748,6 +5843,14 @@ def scan(args: argparse.Namespace) -> int:
         if result.returncode != 0:
             report_editor_failure(project, result.returncode)
             return result.returncode
+
+        native_error = native_cpp.validation_error(output)
+        if native_error:
+            print(f"ERROR: native C++ pass incomplete: {native_error}", file=sys.stderr)
+            latest_log = newest_project_log(project)
+            if latest_log is not None:
+                print(f"latest Unreal log: {latest_log}", file=sys.stderr)
+            return 24
 
         print("running world pass:", subprocess.list2cmdline(world_command))
         world_result = subprocess.run(world_command, check=False)
@@ -5812,6 +5915,14 @@ def scan(args: argparse.Namespace) -> int:
         )
         return 23
 
+    native_manifest = native_cpp.read_manifest(output) or {}
+    manifest["native_schema_version"] = int(
+        native_manifest.get("schema_version", 0) or 0
+    )
+    manifest["native_counts"] = native_manifest.get("counts", {})
+    manifest["native_files"] = native_manifest.get("files", [])
+    manifest["native_pass"] = native_manifest.get("pass", native_cpp.PASS_NAME)
+
     manifest["world_schema_version"] = world_schema
     manifest["world_counts"] = world_manifest.get("counts", {})
     manifest["world_files"] = world_manifest.get("files", [])
@@ -5837,6 +5948,7 @@ def scan(args: argparse.Namespace) -> int:
 
     structural_counts = manifest.get("counts", {}) if isinstance(manifest, dict) else {}
     world_counts = world_manifest.get("counts", {}) if isinstance(world_manifest, dict) else {}
+    native_counts = native_manifest.get("counts", {}) if isinstance(native_manifest, dict) else {}
 
     def count_line(counts: dict, names: tuple[str, ...]) -> str:
         return " ".join(f"{name}={counts.get(name, 0)}" for name in names)
@@ -5845,8 +5957,9 @@ def scan(args: argparse.Namespace) -> int:
     print("=== UATOOL FINAL SUMMARY ===")
     print("structural scan complete: " + count_line(structural_counts, ("files", "assets", "blueprints", "blueprint_graphs", "blueprint_nodes", "blueprint_pins", "blueprint_edges")))
     print("world scan complete: " + count_line(world_counts, ("worlds", "levels", "streaming_relationships", "actors", "components", "instance_overrides", "references", "data_layers", "world_partition_worlds", "world_partition_initialized_for_scan", "world_partition_actor_descs")))
+    print("native C++ scan complete: " + count_line(native_counts, ("modules", "loaded_modules", "classes", "structs", "functions", "function_parameters", "properties", "enums", "enum_values")))
     print("derived complete: " + count_line(derived_counts, ("blueprint_call_bindings", "blueprint_data_dependencies", "blueprint_relations", "ai_relations", "visual_relations")))
-    print(f"schemas: structural={manifest.get('schema_version', 0)} world={world_manifest.get('schema_version', 0)} derived={manifest.get('derived_schema_version', 0)}")
+    print(f"schemas: structural={manifest.get('schema_version', 0)} native={manifest.get('native_schema_version', 0)} world={world_manifest.get('schema_version', 0)} derived={manifest.get('derived_schema_version', 0)}")
     print(f"database: {db_path}")
     if bundle_path is not None:
         print(f"upload bundle: {bundle_path}")
@@ -6553,6 +6666,18 @@ def query(args: argparse.Namespace) -> int:
 def make_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="uatool", description="UnrealAssetTool project indexer")
     sub = parser.add_subparsers(dest="command", required=True)
+
+
+    p_native = sub.add_parser(
+        "native-capture",
+        help="build if needed and capture project-owned reflected native C++ only",
+    )
+    p_native.add_argument("project", help="path to .uproject")
+    p_native.add_argument("--editor", required=True, help="exact path to UnrealEditor-Cmd.exe")
+    p_native.add_argument("--build-script", help="optional exact path to Engine/Build/BatchFiles/Build.bat")
+    p_native.add_argument("--no-build", action="store_true", help="do not build automatically when the plugin DLL is missing")
+    p_native.add_argument("--output", help="output directory; default: <project>/.uatool-native")
+    p_native.set_defaults(func=native_capture)
 
     p_scan = sub.add_parser("scan", help="build if needed, run the Unreal commandlet, and build uat.db")
     p_scan.add_argument("project", help="path to .uproject")
