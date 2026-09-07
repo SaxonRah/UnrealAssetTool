@@ -323,6 +323,10 @@ def _validate_ast(output: Path) -> dict:
         raise RuntimeError(
             "native AST parameter ownership policy mismatch"
         )
+    if manifest.get("call_owner_policy") != native_ast.CALL_OWNER_POLICY:
+        raise RuntimeError(
+            "native AST call ownership policy mismatch"
+        )
     if not manifest.get("success"):
         raise RuntimeError(
             f"native AST capture failed: {manifest.get('error', '')}"
@@ -344,6 +348,17 @@ def _validate_ast(output: Path) -> dict:
     if int(owner_mismatch_count or 0) < 0:
         raise RuntimeError(
             "native AST parameter ownership rejection count invalid"
+        )
+    suppressed_calls = manifest.get(
+        "nested_callable_calls_suppressed"
+    )
+    if suppressed_calls is None:
+        raise RuntimeError(
+            "native AST nested callable call suppression count missing"
+        )
+    if int(suppressed_calls or 0) < 0:
+        raise RuntimeError(
+            "native AST nested callable call suppression count invalid"
         )
 
     normalized = manifest.get("normalized_counts")
