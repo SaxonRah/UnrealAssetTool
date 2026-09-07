@@ -99,6 +99,8 @@ python scripts\uatool.py native-index "E:\Path\Project\.uatool" `
 
 This command does not recapture Unreal, rerun Clang, or rewrite the authoritative JSONL streams. Creating a missing `uat.db` is only cache initialization; it does not imply that unrelated canonical JSONL tables contain scanned project data. Each explicit import drops and recreates only the disposable `native_*` cache tables before loading, so native cache-schema migrations do not require deleting `uat.db` and do not touch standard project tables.
 
+For portable normal-scan integration, `uatool native-stage` copies a validated reflected/compiler/join triple into `.uatool/native_semantics` with per-file SHA-256 and size records, then swaps the complete stage atomically. Normal database rebuilds and bundles automatically consume that stage. When a normal reflected-native manifest exists at the `.uatool` root, its reflected files must match the staged reflected snapshot exactly; otherwise the staged compiler/join evidence is rejected as stale and must be regenerated/restaged against the current reflection. This prevents a later normal scan from silently pairing changed reflected C++ declarations with an older compiler graph.
+
 ## Corpus audit
 
 After importing native streams, use the audit command to inspect semantic coverage and the exact edge cases that remain in the cache:
