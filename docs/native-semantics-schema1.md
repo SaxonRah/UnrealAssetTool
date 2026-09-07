@@ -57,7 +57,7 @@ Join schema 1 uses exact proof only. Ambiguity and legitimate missing authored c
 
 ## SQLite cache schema 1
 
-`uatool native-index` imports the three validated roots into an existing standard `uat.db`.
+`uatool native-index` imports the three validated roots into the standard `uat.db`. If the database is missing, the command initializes the full canonical UnrealAssetTool SQLite schema first, then imports the native rows.
 
 ```text
 native_index_meta
@@ -97,7 +97,7 @@ python scripts\uatool.py native-index "E:\Path\Project\.uatool" `
     --joins "E:\Path\Project\.uatool-native-join"
 ```
 
-This command does not recapture Unreal, rerun Clang, or rewrite the authoritative JSONL streams.
+This command does not recapture Unreal, rerun Clang, or rewrite the authoritative JSONL streams. Creating a missing `uat.db` is only cache initialization; it does not imply that unrelated canonical JSONL tables contain scanned project data.
 
 ## Query surfaces
 
