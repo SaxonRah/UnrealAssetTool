@@ -64,6 +64,26 @@ class NativeStageSchema1Test(unittest.TestCase):
                 self.output / name,
             )
 
+    def run_composed_ensure(
+        self,
+    ) -> subprocess.CompletedProcess[str]:
+        code = (
+            "import sys; "
+            f"sys.path.insert(0, {str(SCRIPTS)!r}); "
+            "from pathlib import Path; "
+            "import uatool; "
+            f"counts=uatool._ensure_staged_native_database("
+            f"Path({str(self.output)!r})); "
+            "print(counts)"
+        )
+        return subprocess.run(
+            [sys.executable, "-c", code],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+
     def run_composed_bundle(
         self,
         destination: Path,
@@ -255,6 +275,55 @@ class NativeStageSchema1Test(unittest.TestCase):
         finally:
             conn.close()
 
+    def test_scan_postcondition_repairs_empty_native_cache(self) -> None:
+        manifest = self.stage()
+        self.install_current_reflection()
+        db = self.output / "uat.db"
+        conn = sqlite3.connect(db)
+        try:
+            native_index.create_schema(conn)
+            conn.commit()
+            self.assertFalse(native_index.has_native_index(conn))
+        finally:
+            conn.close()
+
+        result = self.run_composed_ensure()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        conn = sqlite3.connect(db)
+        try:
+            self.assertTrue(native_index.has_native_index(conn))
+            self.assertEqual(
+                conn.execute(
+                    "SELECT COUNT(*) FROM native_compiler_symbols"
+                ).fetchone()[0],
+                manifest["counts"]["compiler_symbols"],
+            )
+            self.assertEqual(
+                conn.execute(
+                    "SELECT COUNT(*) FROM native_function_joins"
+                ).fetchone()[0],
+                manifest["counts"]["function_joins"],
+            )
+        finally:
+            conn.close()
+
+    def test_scan_postcondition_is_idempotent_when_native_cache_exists(self) -> None:
+        self.stage()
+        self.install_current_reflection()
+        db = self.output / "uat.db"
+        conn = sqlite3.connect(db)
+        try:
+            native_index.create_schema(conn)
+        finally:
+            conn.close()
+
+        first = self.run_composed_ensure()
+        self.assertEqual(first.returncode, 0, first.stderr)
+        second = self.run_composed_ensure()
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertIn("{}", second.stdout)
+
     def test_normal_bundle_contains_complete_native_stage(self) -> None:
         self.stage()
         self.install_current_reflection()
@@ -307,6 +376,14 @@ class NativeStageSchema1Test(unittest.TestCase):
         self.assertIn("*native_stage.BUNDLE_FILES", source)
         self.assertIn(
             "core.create_upload_bundle = create_upload_bundle",
+            source,
+        )
+        self.assertIn(
+            "_ensure_staged_native_database(output)",
+            source,
+        )
+        self.assertIn(
+            "_ensure_staged_native_database(output, db)",
             source,
         )
 
