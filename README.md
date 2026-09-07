@@ -249,7 +249,7 @@ When a validated native semantic index has been imported, the same query command
 
 ### Native compiler semantics (validation-phase import)
 
-Native reflection, compiler AST and join captures remain independently authoritative in schema 1. During the current validation phase they are imported explicitly into an existing standard `uat.db`; normal `scan` / `bundle` does **not** include them automatically yet.
+Native reflection, compiler AST and join captures remain independently authoritative in schema 1. During the current validation phase they are imported explicitly into the standard `uat.db`; if that cache does not exist yet, `native-index` initializes the full canonical SQLite schema before importing native rows. Normal `scan` / `bundle` does **not** include native captures automatically yet.
 
 ```powershell
 python scripts\uatool.py native-index "E:\Path\Project\.uatool" `
