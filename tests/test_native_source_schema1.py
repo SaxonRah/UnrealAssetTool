@@ -254,6 +254,53 @@ int sample_tick(int value)
             self.assertIn("SetActorEditorLabel", callees)
             self.assertIn("FString::Printf", callees)
 
+    def test_initializer_expressions_and_function_typedefs_are_not_functions(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            build_cs = write(
+                root / "Source" / "Sample" / "Sample.Build.cs",
+                "public class Sample {}\n",
+            )
+            source = write(
+                build_cs.parent / "sample.cpp",
+                """typedef void (*SampleCallback)(int value);
+
+static FString MakeText(const FString& DefaultValue = FString());
+
+void Run()
+{
+    const FName Name(*SourceName);
+    const FTransform Transform(FRotator::ZeroRotator, MakeLocation(Index++));
+    FCollisionQueryParams Params(SCENE_QUERY_STAT(SampleTrace), bTraceComplex);
+    static ConstructorHelpers::FObjectFinder<UStaticMesh> CubeMesh(TEXT("/Engine/BasicShapes/Cube.Cube"));
+}
+""",
+            )
+            module = native_source.ModuleRoot(
+                name="Sample",
+                root=build_cs.parent,
+                build_cs=build_cs,
+                owner_kind="project",
+                owner_name="Sample",
+            )
+            _, _, symbols, _, _ = native_source.scan_lexical_file(
+                source,
+                module,
+                root,
+            )
+            functions = [
+                row for row in symbols if row["kind"] == "function"
+            ]
+            names = [row["name"] for row in functions]
+
+            self.assertIn("MakeText", names)
+            self.assertIn("Run", names)
+            self.assertNotIn("Name", names)
+            self.assertNotIn("Transform", names)
+            self.assertNotIn("Params", names)
+            self.assertNotIn("CubeMesh", names)
+            self.assertNotIn("void", names)
+
     def test_compile_database_filters_owned_tu_and_expands_rsp(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -407,6 +454,8 @@ int sample_tick(int value)
         self.assertIn('engine_root.parent / "compile_commands.json"', source)
         self.assertIn("ClangDatabase written to", source)
         self.assertIn('if "(" in prefix or ")" in prefix:', source)
+        self.assertIn("_lexical_parameter_list_is_plausible", source)
+        self.assertIn('prefix_words[0] == "typedef"', source)
         self.assertIn('"lexical_unresolved"', source)
         self.assertIn('"ubt_generate_clang_database"', source)
         self.assertIn("_CTOR_RE = re.compile(", source)
