@@ -247,19 +247,23 @@ The query surface searches canonical/derived specialist tables plus typed projec
 
 When a validated native semantic index has been imported, the same query command also searches reflected native types/functions, exact reflected↔source joins, compiler symbols, compiler-resolved calls and unresolved join diagnostics.
 
-### Native compiler semantics (validation-phase import)
+### Native compiler semantics
 
-Native reflection, compiler AST and join captures remain independently authoritative in schema 1. During the current validation phase they are imported explicitly into the standard `uat.db`; if that cache does not exist yet, `native-index` initializes the full canonical SQLite schema before importing native rows. Normal `scan` / `bundle` does **not** include native captures automatically yet.
+Native reflection, compiler AST and exact reflected/source joins remain independently authoritative in schema 1. The explicit `native-index` import into standard `uat.db` has been validated against a full Hyperreality project corpus. Normal `scan` / `bundle` does **not** include native captures automatically yet; that automation is a separate integration phase.
 
 ```powershell
 python scripts\uatool.py native-index "E:\Path\Project\.uatool" `
-    --reflected "E:\Path\Project\.uatool-native-reflected2" `
-    --compiler "E:\Path\Project\.uatool-native-ast14" `
-    --joins "E:\Path\Project\.uatool-native-join1"
+    --reflected "E:\Path\Project\.uatool-native-reflected" `
+    --compiler "E:\Path\Project\.uatool-native-ast" `
+    --joins "E:\Path\Project\.uatool-native-join"
+
+python scripts\uatool.py native-index-audit `
+    "E:\Path\Project\.uatool" `
+    --limit 100
 
 python scripts\uatool.py native-program-report `
     "E:\Path\Project\.uatool" `
-    "/Script/HRRAI.HRRAIEntityComponent.BeginPlay"
+    "/Script/HRRAI.HRRAIEntityComponent:ApplyJsonConfig"
 
 python scripts\uatool.py native-program-report `
     "E:\Path\Project\.uatool" `
@@ -267,7 +271,7 @@ python scripts\uatool.py native-program-report `
     --callees
 ```
 
-The report resolver is exact-only. It can start from an exact reflected function path, compiler symbol ID, Clang USR or qualified C/C++ name. An unresolved reflected function remains visible with its exact join diagnostic instead of being silently dropped or guessed. Compiler-resolved call targets that have a stable project target ID but no first-class canonical symbol row are retained and labeled unmaterialized; exact Clang USR is used to reach a canonical symbol when available.
+The report resolver is exact-only. It can start from an exact reflected function path, compiler symbol ID, Clang USR or qualified C/C++ name. An unresolved reflected function remains visible with its exact join diagnostic instead of being silently dropped or guessed. A compiler symbol without a reflected UFunction counterpart remains explicitly source-only. Compiler-resolved call targets that have a stable project target ID but no first-class canonical symbol row are retained and labeled unmaterialized; exact Clang USR is used to reach a canonical symbol when available.
 
 See [docs/native-semantics-schema1.md](docs/native-semantics-schema1.md).
 
