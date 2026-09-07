@@ -86,9 +86,9 @@ Important lookup indexes cover:
 
 The importer validates source manifests and JSONL counts before writing, requires every caller to resolve to a canonical project symbol, rejects excluded build/source leakage, and rechecks SQLite row counts after loading. Compiler parameter cache identity mirrors the authoritative AST canonical key exactly: `(function_occurrence_id, parameter_index, name, type_spelling)`. A repeated numeric parameter index is therefore preserved when the authoritative stream distinguishes the rows by name/type; the cache does not collapse or renumber them. A non-empty compiler `target_symbol_id` is preserved even when no canonical symbol row materializes for that referenced cursor. This can occur because call-target identity is assigned from a compiler-resolved project-relative cursor while canonical symbol emission uses stricter authored/traversal filters. Exact Clang USR is used as a navigation fallback when it resolves to a canonical symbol; otherwise the target remains explicitly `unmaterialized_project_cursor` rather than being synthesized.
 
-## Validation-phase workflow
+## Validated explicit-import workflow
 
-Automatic scan/bundle integration is intentionally deferred until the native query layer is validated on a real corpus.
+The explicit native query/index layer has been validated on the Hyperreality corpus. Automatic scan/bundle integration remains intentionally deferred to a separate phase so capture provenance and cache behavior stay independently testable.
 
 ```powershell
 python scripts\uatool.py native-index "E:\Path\Project\.uatool" `
@@ -109,6 +109,7 @@ python scripts\uatool.py native-index-audit "E:\Path\Project\.uatool" --limit 10
 
 The audit reports:
 
+- compiler capture ruleset plus parameter-owner rejection and nested-callable suppression counts;
 - joined reflected functions with exact source identities;
 - unresolved reflected-function diagnostics;
 - repeated numeric compiler parameter-index slots, preserving every authoritative row;
