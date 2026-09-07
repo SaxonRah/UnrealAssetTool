@@ -477,18 +477,22 @@ def _compiler_environment(
     i = 0
     while i < len(tokens):
         token = _strip_quotes(tokens[i])
-        upper = token.upper()
         value = None
         kind = None
 
+        # UBT emits these canonical spellings. Keep /D and /FI
+        # case-sensitive here: MSVC also has unrelated lowercase /d*
+        # switches such as /diagnostics and /d2..., which must not be
+        # reclassified as macro definitions.
         for prefix, label in (
+            ("/external:I", "include"),
             ("/I", "include"),
             ("-I", "include"),
             ("/D", "define"),
             ("-D", "define"),
             ("/FI", "forced"),
         ):
-            if upper.startswith(prefix.upper()):
+            if token.startswith(prefix):
                 kind = label
                 value = _strip_quotes(token[len(prefix):])
                 if not value and i + 1 < len(tokens):
