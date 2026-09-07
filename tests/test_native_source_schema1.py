@@ -133,6 +133,86 @@ int hrsim_tick(int value)
                 [row["name"] for row in functions],
             )
 
+            self.assertNotIn(
+                "f",
+                [row["name"] for row in functions],
+            )
+            self.assertNotIn(
+                "ree",
+                [row["name"] for row in functions],
+            )
+            self.assertNotIn(
+                "emset",
+                [row["name"] for row in functions],
+            )
+
+    def test_lexical_fallback_does_not_turn_statements_into_functions(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            build_cs = write(
+                root / "Source" / "Sample" / "Sample.Build.cs",
+                "public class Sample {}\n",
+            )
+            source = write(
+                build_cs.parent / "sample.cpp",
+                """#include <cstdlib>
+#include <cstring>
+
+struct Thing
+{
+    Thing();
+    void Run();
+};
+
+Thing::Thing()
+{
+}
+
+void Thing::Run()
+{
+    if (true)
+    {
+        free(nullptr);
+    }
+    memset(nullptr, 0, 0);
+}
+
+int sample_tick(int value)
+{
+    return value + 1;
+}
+""",
+            )
+            module = native_source.ModuleRoot(
+                name="Sample",
+                root=build_cs.parent,
+                build_cs=build_cs,
+                owner_kind="project",
+                owner_name="Sample",
+            )
+
+            _, _, symbols, _, calls = native_source.scan_lexical_file(
+                source,
+                module,
+                root,
+            )
+            functions = [
+                row for row in symbols if row["kind"] == "function"
+            ]
+            names = [row["qualified_name"] for row in functions]
+
+            self.assertIn("Thing::Thing", names)
+            self.assertIn("Thing::Run", names)
+            self.assertIn("sample_tick", names)
+            self.assertNotIn("if", names)
+            self.assertNotIn("f", [row["name"] for row in functions])
+            self.assertNotIn("ree", [row["name"] for row in functions])
+            self.assertNotIn("emset", [row["name"] for row in functions])
+
+            callees = [row["callee_spelling"] for row in calls]
+            self.assertIn("free", callees)
+            self.assertIn("memset", callees)
+
     def test_compile_database_filters_owned_tu_and_expands_rsp(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -281,8 +361,11 @@ int hrsim_tick(int value)
         )
         self.assertIn('"-Mode=GenerateClangDatabase"', source)
         self.assertIn('"-NoExecCodeGenActions"', source)
+        self.assertIn('"-Compiler=VisualStudio2022"', source)
+        self.assertNotIn('f"-Target={target} Win64 {configuration}"', source)
         self.assertIn('"lexical_unresolved"', source)
         self.assertIn('"ubt_generate_clang_database"', source)
+        self.assertIn("_CTOR_RE = re.compile(", source)
 
 
 if __name__ == "__main__":
