@@ -2,7 +2,9 @@
 """libclang cursor orchestration for native compiler semantic capture."""
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -41,7 +43,10 @@ def run_cursor_probe(
     project_root: Path,
     output: Path,
 ) -> dict:
-    stem = f"native_ast_libclang_{language}"
+    source_key = str(row.get("source_path", ""))
+    digest = hashlib.sha256(source_key.encode("utf-8")).hexdigest()[:12]
+    base = re.sub(r"[^A-Za-z0-9_.-]+", "_", source.stem)[:48] or "tu"
+    stem = f"native_ast_libclang_{language}_{base}_{digest}"
     config_path = output / f"{stem}_config.json"
     result_path = output / f"{stem}_result.json"
     worker = Path(__file__).with_name("uatool_libclang_worker.py")
