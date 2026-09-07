@@ -278,9 +278,12 @@ class NativeStageSchema1Test(unittest.TestCase):
             ).splitlines()
             if line.strip()
         ]
-        self.assertTrue(rows)
-        original = int(rows[0]["class_flags_hex"], 16)
-        rows[0]["class_flags_hex"] = (
+        class_row = next(
+            row for row in rows
+            if isinstance(row.get("class_flags_hex"), str)
+        )
+        original = int(class_row["class_flags_hex"], 16)
+        class_row["class_flags_hex"] = (
             f"0x{(original ^ native_stage.CLASS_REPLICATION_DATA_IS_SET_UP):016X}"
         )
         current_types.write_text(
@@ -317,9 +320,14 @@ class NativeStageSchema1Test(unittest.TestCase):
             ).splitlines()
             if line.strip()
         ]
-        self.assertTrue(rows)
-        original = int(rows[0]["class_flags_hex"], 16)
-        rows[0]["class_flags_hex"] = f"0x{(original ^ 0x00000001):016X}"
+        class_row = next(
+            row for row in rows
+            if isinstance(row.get("class_flags_hex"), str)
+        )
+        original = int(class_row["class_flags_hex"], 16)
+        class_row["class_flags_hex"] = (
+            f"0x{(original ^ 0x00000001):016X}"
+        )
         current_types.write_text(
             "".join(
                 json.dumps(row, separators=(",", ":")) + "\n"
