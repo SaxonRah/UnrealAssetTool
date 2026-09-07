@@ -11,6 +11,12 @@ import uatool_native as reflected_native
 import uatool_native_ast as native_ast
 
 SCHEMA_VERSION = 1
+RULESET = "reflection_parameter_projection_v1"
+FUNCTION_PROOF = (
+    "proven_owner_type+exact_qualified_name+"
+    "reflection_projection_parameter_match+"
+    "single_libclang_usr_identity"
+)
 PASS_NAME = "UnrealAssetToolNativeJoin"
 MANIFEST = "native_join_manifest.json"
 TYPE_JOINS = "native_type_joins.jsonl"
@@ -489,11 +495,7 @@ def capture(
             "compatibility_overrides": _proof_compatibility(
                 occurrence_rows
             ),
-            "proof": (
-                "proven_owner_type+exact_qualified_name+"
-                "reflection_projection_parameter_match+"
-                "single_libclang_usr_identity"
-            ),
+            "proof": FUNCTION_PROOF,
             "evidence": "reflected_native_schema1+libclang_cursor_schema1",
         }
         function_joins.append(join)
@@ -546,6 +548,7 @@ def capture(
             "exact joins between reflected native schema 1 and "
             "compiler-resolved project-owned libclang source schema 1"
         ),
+        "ruleset": RULESET,
         "reflected_input": reflected_output.as_posix(),
         "reflected_schema_version": reflected_manifest.get(
             "schema_version", 0
@@ -603,6 +606,41 @@ def validation_error(output: Path) -> str | None:
         return f"unexpected native join pass {manifest.get('pass')!r}"
     if not manifest.get("success"):
         return f"native join failed: {manifest.get('error', '')}"
+    if manifest.get("ruleset") != RULESET:
+        return (
+            "native join ruleset is stale or missing; regenerate with "
+            "the current uatool native-join from the retained reflected "
+            "and compiler inputs"
+        )
+
+    proof_policy = manifest.get("proof_policy", {})
+    expected_function_policy = (
+        "proven owner type + exact qualified function name + "
+        "exact reflected-to-source parameter projection + "
+        "single libclang USR-backed semantic identity"
+    )
+    if not isinstance(proof_policy, dict):
+        return "native join proof_policy missing or invalid"
+    if proof_policy.get("functions") != expected_function_policy:
+        return "native join function proof policy mismatch"
+    if proof_policy.get("fuzzy_matching") is not False:
+        return "native join fuzzy matching policy must be false"
+
+    function_rows = _rows(output / FUNCTION_JOINS) if (
+        output / FUNCTION_JOINS
+    ).is_file() else []
+    for row in function_rows:
+        if row.get("proof") != FUNCTION_PROOF:
+            return (
+                "native function join proof predates the current "
+                "reflection projection ruleset"
+            )
+        accepted = row.get("accepted_source_parameter_types")
+        if not isinstance(accepted, list):
+            return (
+                "native function join missing "
+                "accepted_source_parameter_types"
+            )
 
     counts = manifest.get("counts", {})
     expected = {
