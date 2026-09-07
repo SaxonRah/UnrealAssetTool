@@ -4,6 +4,7 @@ import contextlib
 import io
 import json
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -316,6 +317,54 @@ class NativeIndexSchema1Tests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.temp.cleanup()
+
+    def test_cli_initializes_missing_standard_database(self) -> None:
+        self.db.unlink()
+        output = self.root / "standard"
+        run = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPTS / "uatool.py"),
+                "native-index",
+                str(output),
+                "--reflected",
+                str(self.reflected),
+                "--compiler",
+                str(self.compiler),
+                "--joins",
+                str(self.joins),
+            ],
+            cwd=str(ROOT),
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            check=False,
+        )
+        self.assertEqual(run.returncode, 0, run.stdout)
+        database = output / "uat.db"
+        self.assertTrue(database.is_file())
+        self.assertIn(
+            "initialized standard database cache:",
+            run.stdout,
+        )
+        self.assertIn("native index imported:", run.stdout)
+
+        conn = sqlite3.connect(database)
+        try:
+            self.assertIsNotNone(
+                conn.execute(
+                    """SELECT 1 FROM sqlite_master
+                       WHERE type='table' AND name='assets'"""
+                ).fetchone()
+            )
+            self.assertEqual(
+                conn.execute(
+                    "SELECT COUNT(*) FROM native_compiler_symbols"
+                ).fetchone()[0],
+                4,
+            )
+        finally:
+            conn.close()
 
     def test_import_preserves_authoritative_row_counts(self) -> None:
         counts = native_index.import_database(
