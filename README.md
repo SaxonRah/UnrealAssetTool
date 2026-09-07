@@ -245,6 +245,32 @@ python scripts\uatool.py query `
 
 The query surface searches canonical/derived specialist tables plus typed project nodes/edges. Human-readable project-neighborhood text is reconstructed on demand from compact edge references.
 
+When a validated native semantic index has been imported, the same query command also searches reflected native types/functions, exact reflected↔source joins, compiler symbols, compiler-resolved calls and unresolved join diagnostics.
+
+### Native compiler semantics (validation-phase import)
+
+Native reflection, compiler AST and join captures remain independently authoritative in schema 1. During the current validation phase they are imported explicitly into an existing standard `uat.db`; normal `scan` / `bundle` does **not** include them automatically yet.
+
+```powershell
+python scripts\uatool.py native-index "E:\Path\Project\.uatool" `
+    --reflected "E:\Path\Project\.uatool-native-reflected2" `
+    --compiler "E:\Path\Project\.uatool-native-ast14" `
+    --joins "E:\Path\Project\.uatool-native-join1"
+
+python scripts\uatool.py native-program-report `
+    "E:\Path\Project\.uatool" `
+    "/Script/HRRAI.HRRAIEntityComponent.BeginPlay"
+
+python scripts\uatool.py native-program-report `
+    "E:\Path\Project\.uatool" `
+    "UHRRAIEntityComponent::BeginPlay" `
+    --callees
+```
+
+The report resolver is exact-only. It can start from an exact reflected function path, compiler symbol ID, Clang USR or qualified C/C++ name. An unresolved reflected function remains visible with its exact join diagnostic instead of being silently dropped or guessed.
+
+See [docs/native-semantics-schema1.md](docs/native-semantics-schema1.md).
+
 ### Inspect one asset or object
 
 ```powershell
