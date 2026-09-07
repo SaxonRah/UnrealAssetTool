@@ -68,6 +68,164 @@ def _vs_indexer_from_compiler(compiler: str) -> Path | None:
     return None
 
 
+
+def _vs_llvm_bin_candidates(compiler: str) -> list[Path]:
+    if not compiler:
+        return []
+    path = _norm(Path(compiler))
+    parts = list(path.parts)
+    lowered = [part.lower() for part in parts]
+    try:
+        vc = lowered.index("vc")
+    except ValueError:
+        return []
+    vc_root = Path(*parts[: vc + 1])
+    return [
+        vc_root / "Tools" / "Llvm" / "x64" / "bin",
+        vc_root / "Tools" / "Llvm" / "bin",
+    ]
+
+
+def discover_clang_frontend(
+    editor: Path,
+    compiler_paths: list[str],
+    override: Path | None = None,
+) -> tuple[Path | None, list[str]]:
+    checked: list[str] = []
+    if override is not None:
+        candidate = _norm(override)
+        checked.append(candidate.as_posix())
+        return (candidate if candidate.is_file() else None), checked
+
+    for name in ("clang-cl.exe", "clang-cl", "clang.exe", "clang"):
+        found = shutil.which(name)
+        if found:
+            candidate = _norm(Path(found))
+            checked.append(candidate.as_posix())
+            return candidate, checked
+
+    for compiler in compiler_paths:
+        for bindir in _vs_llvm_bin_candidates(compiler):
+            for exe in ("clang-cl.exe", "clang.exe"):
+                candidate = bindir / exe
+                checked.append(candidate.as_posix())
+                if candidate.is_file():
+                    return _norm(candidate), checked
+
+    engine_root = native_source._engine_root_from_editor(editor)
+    ue_root = engine_root.parent
+    for bindir in (
+        ue_root / "Engine" / "Extras" / "ThirdPartyNotUE" / "SDKs" /
+        "HostWin64" / "Win64" / "LLVM" / "bin",
+        ue_root / "Engine" / "Binaries" / "ThirdParty" / "LLVM" /
+        "Win64" / "bin",
+    ):
+        for exe in ("clang-cl.exe", "clang.exe"):
+            candidate = bindir / exe
+            checked.append(candidate.as_posix())
+            if candidate.is_file():
+                return _norm(candidate), checked
+    return None, checked
+
+
+def _clang_probe_command(
+    frontend: Path,
+    compile_row: dict,
+    source: Path,
+    language: str,
+) -> list[str]:
+    command = [str(frontend), "/nologo"]
+    command.append("/TC" if language == "c" else "/TP")
+    for include in compile_row.get("include_paths", []):
+        command.append(f"/I{include}")
+    for definition in compile_row.get("definitions", []):
+        command.append(f"/D{definition}")
+    for forced in compile_row.get("forced_includes", []):
+        command.append(f"/FI{forced}")
+    command.extend([
+        "-fsyntax-only",
+        "-Xclang",
+        "-ast-dump=json",
+        str(source),
+    ])
+    return command
+
+
+def _select_probe_rows(
+    compile_rows: list[dict],
+    project_root: Path,
+) -> list[tuple[dict, Path, str]]:
+    candidates: list[tuple[int, dict, Path, str]] = []
+    for row in compile_rows:
+        source = project_root / row["source_path"]
+        if not source.is_file():
+            continue
+        suffix = source.suffix.lower()
+        language = "c" if suffix == ".c" else "cpp"
+        if suffix not in {".c", ".cc", ".cpp", ".cxx"}:
+            continue
+        candidates.append((source.stat().st_size, row, source, language))
+
+    result: list[tuple[dict, Path, str]] = []
+    for wanted in ("c", "cpp"):
+        matches = [item for item in candidates if item[3] == wanted]
+        if matches:
+            _, row, source, language = min(matches, key=lambda x: x[0])
+            result.append((row, source, language))
+    return result
+
+
+def _run_clang_ast_probes(
+    frontend: Path,
+    compile_rows: list[dict],
+    project: Path,
+    output: Path,
+) -> tuple[list[dict], dict[str, str]]:
+    diagnostics: list[dict] = []
+    outputs: dict[str, str] = {}
+    for row, source, language in _select_probe_rows(
+        compile_rows, project.parent
+    ):
+        command = _clang_probe_command(frontend, row, source, language)
+        target = output / f"native_ast_probe_{language}.json"
+        with target.open("w", encoding="utf-8", newline="\n") as stdout_fh:
+            run = subprocess.run(
+                command,
+                cwd=str(Path(row["directory"])),
+                text=True,
+                stdout=stdout_fh,
+                stderr=subprocess.PIPE,
+                errors="replace",
+                check=False,
+            )
+        valid_json = False
+        node_kind = ""
+        if run.returncode == 0 and target.stat().st_size:
+            try:
+                root = json.loads(target.read_text(
+                    encoding="utf-8", errors="replace"
+                ))
+                valid_json = isinstance(root, dict)
+                node_kind = str(root.get("kind", "")) if valid_json else ""
+            except json.JSONDecodeError:
+                valid_json = False
+        diagnostics.append({
+            "kind": "clang_ast_probe",
+            "language": language,
+            "source_path": row["source_path"],
+            "success": run.returncode == 0 and valid_json,
+            "exit_code": run.returncode,
+            "command": subprocess.list2cmdline(command),
+            "stderr_tail": "\n".join((run.stderr or "").splitlines()[-120:]),
+            "output": target.as_posix(),
+            "output_bytes": target.stat().st_size,
+            "valid_json": valid_json,
+            "root_kind": node_kind,
+        })
+        outputs[language] = target.as_posix()
+    return diagnostics, outputs
+
+
 def discover_clangd_indexer(
     editor: Path,
     compiler_paths: list[str],
@@ -86,10 +244,11 @@ def discover_clangd_indexer(
         return candidate, checked
 
     for compiler in compiler_paths:
-        candidate = _vs_indexer_from_compiler(compiler)
-        if candidate is not None:
+        for bindir in _vs_llvm_bin_candidates(compiler):
+            candidate = bindir / "clangd-indexer.exe"
             checked.append(candidate.as_posix())
-            return candidate, checked
+            if candidate.is_file():
+                return _norm(candidate), checked
 
     engine_root = native_source._engine_root_from_editor(editor)
     ue_root = engine_root.parent
@@ -165,22 +324,84 @@ def capture(
             "kind": "clangd_indexer_discovery",
             "success": False,
             "checked": checked,
-            "message": "clangd-indexer executable not found",
+            "message": "clangd-indexer executable not found; trying clang frontend",
+        })
+        frontend, frontend_checked = discover_clang_frontend(
+            editor, compiler_paths
+        )
+        if frontend is None:
+            diagnostics.append({
+                "kind": "clang_frontend_discovery",
+                "success": False,
+                "checked": frontend_checked,
+                "message": "clang-cl/clang executable not found",
+            })
+            _write_jsonl(output / DIAGNOSTICS, diagnostics)
+            manifest = {
+                "schema_version": SCHEMA_VERSION,
+                "pass": "UnrealAssetToolNativeAST",
+                "success": False,
+                "error": "no clangd-indexer or clang frontend found",
+                "project": project.as_posix(),
+                "compile_database": compile_db.as_posix(),
+                "filtered_compile_database": filtered_db.as_posix(),
+                "project_owned_translation_units": len(entries),
+                "compiler_paths": compiler_paths,
+                "clangd_indexer": "",
+                "clang_frontend": "",
+                "checked_indexer_paths": checked,
+                "checked_frontend_paths": frontend_checked,
+                "raw_document_counts": {"symbols": 0, "refs": 0, "relations": 0},
+                "ast_probe_outputs": {},
+            }
+            (output / MANIFEST).write_text(
+                json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+                newline="\n",
+            )
+            return manifest
+
+        version = subprocess.run(
+            [str(frontend), "--version"],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            errors="replace",
+            check=False,
+        )
+        probe_diagnostics, probe_outputs = _run_clang_ast_probes(
+            frontend, compile_rows, project, output
+        )
+        diagnostics.extend(probe_diagnostics)
+        probe_success = bool(probe_diagnostics) and all(
+            row.get("success") for row in probe_diagnostics
+        )
+        diagnostics.append({
+            "kind": "clang_frontend_discovery",
+            "success": True,
+            "checked": frontend_checked,
+            "selected": frontend.as_posix(),
+            "version": version.stdout.strip(),
         })
         _write_jsonl(output / DIAGNOSTICS, diagnostics)
         manifest = {
             "schema_version": SCHEMA_VERSION,
             "pass": "UnrealAssetToolNativeAST",
-            "success": False,
-            "error": "clangd-indexer executable not found",
+            "success": probe_success,
+            "error": "" if probe_success else "clang frontend AST probe failed",
             "project": project.as_posix(),
             "compile_database": compile_db.as_posix(),
             "filtered_compile_database": filtered_db.as_posix(),
             "project_owned_translation_units": len(entries),
             "compiler_paths": compiler_paths,
             "clangd_indexer": "",
+            "clang_frontend": frontend.as_posix(),
+            "clang_frontend_version": version.stdout.strip(),
             "checked_indexer_paths": checked,
+            "checked_frontend_paths": frontend_checked,
             "raw_document_counts": {"symbols": 0, "refs": 0, "relations": 0},
+            "ast_probe_outputs": probe_outputs,
+            "evidence": "clang_frontend_ast_json_probe",
         }
         (output / MANIFEST).write_text(
             json.dumps(manifest, indent=2, sort_keys=True) + "\n",
