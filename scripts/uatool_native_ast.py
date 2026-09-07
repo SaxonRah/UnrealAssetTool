@@ -359,35 +359,87 @@ def _normalize_successful_probes(
     diagnostics: list[dict],
     project: Path,
 ) -> dict[str, int]:
-    symbols: list[dict] = []
-    parameters: list[dict] = []
-    calls: list[dict] = []
+    observed_symbols: list[dict] = []
+    observed_parameters: list[dict] = []
+    observed_calls: list[dict] = []
+
     for row in diagnostics:
-        if not row.get("success"):
+        if (
+            row.get("kind") != "libclang_cursor_probe"
+            or not row.get("success")
+        ):
+            continue
+        symbols, parameters, calls = native_libclang.read_probe_rows(row)
+        observed_symbols.extend(symbols)
+        observed_parameters.extend(parameters)
+        observed_calls.extend(calls)
+
+    symbol_map: dict[str, dict] = {}
+    for source_row in observed_symbols:
+        row = dict(source_row)
+        key = row["occurrence_id"]
+        existing = symbol_map.get(key)
+        if existing is None:
+            row["translation_units"] = [row["translation_unit"]]
+            symbol_map[key] = row
             continue
 
-        if row.get("kind") == "libclang_cursor_probe":
-            s, p, c = native_libclang.read_probe_rows(row)
-            symbols.extend(s)
-            parameters.extend(p)
-            calls.extend(c)
-            continue
+        units = set(existing.get("translation_units", []))
+        units.add(row["translation_unit"])
+        existing["translation_units"] = sorted(units)
 
-        if row.get("kind") != "clang_ast_probe":
-            continue
-        ast_path = Path(str(row.get("output", "")))
-        if not ast_path.is_file():
-            continue
-        s, p, c = _normalize_ast_probe(
-            ast_path,
-            project.parent,
-            str(row.get("source_path", "")),
-            str(row.get("language", "")),
-            list(row.get("compatibility_overrides") or []),
+        # Same language-aware physical occurrence should resolve to the same
+        # libclang USR. Prefer a row with a USR if one observation lacks it.
+        if (
+            not existing.get("clang_usr")
+            and row.get("clang_usr")
+        ):
+            row["translation_units"] = existing["translation_units"]
+            symbol_map[key] = row
+
+    parameter_map: dict[tuple, dict] = {}
+    for source_row in observed_parameters:
+        row = dict(source_row)
+        key = (
+            row["function_occurrence_id"],
+            row["parameter_index"],
+            row.get("name", ""),
+            row.get("type_spelling", ""),
         )
-        symbols.extend(s)
-        parameters.extend(p)
-        calls.extend(c)
+        existing = parameter_map.get(key)
+        if existing is None:
+            row["translation_units"] = [row["translation_unit"]]
+            parameter_map[key] = row
+            continue
+        units = set(existing.get("translation_units", []))
+        units.add(row["translation_unit"])
+        existing["translation_units"] = sorted(units)
+
+    call_map: dict[str, dict] = {}
+    for row in observed_calls:
+        call_map.setdefault(row["call_id"], row)
+
+    symbols = list(symbol_map.values())
+    parameters = list(parameter_map.values())
+    calls = list(call_map.values())
+
+    symbols.sort(key=lambda row: (
+        row["source_path"].lower(),
+        row["language"],
+        row["offset"],
+        row["kind"],
+        row["name"],
+    ))
+    parameters.sort(key=lambda row: (
+        row["function_occurrence_id"],
+        row["parameter_index"],
+    ))
+    calls.sort(key=lambda row: (
+        row["translation_unit"].lower(),
+        row["source_path"].lower(),
+        row["offset"],
+        row["call_id"],
+    ))
 
     _write_jsonl(output / SYMBOLS, symbols)
     _write_jsonl(output / PARAMETERS, parameters)
@@ -396,7 +448,11 @@ def _normalize_successful_probes(
         "symbols": len(symbols),
         "parameters": len(parameters),
         "calls": len(calls),
+        "observed_symbols": len(observed_symbols),
+        "observed_parameters": len(observed_parameters),
+        "observed_calls": len(observed_calls),
     }
+
 
 
 def _vs_indexer_from_compiler(compiler: str) -> Path | None:
@@ -642,55 +698,57 @@ def _write_response_file(path: Path, arguments: list[str]) -> None:
     )
 
 
+def _translation_unit_rows(
+    compile_rows: list[dict],
+    project_root: Path,
+) -> list[tuple[dict, Path, str]]:
+    result: list[tuple[dict, Path, str]] = []
+    for row in compile_rows:
+        source = _norm(project_root / row["source_path"])
+        if not source.is_file():
+            continue
+        suffix = source.suffix.lower()
+        if suffix not in {".c", ".cc", ".cpp", ".cxx"}:
+            continue
+        language = "c" if suffix == ".c" else "cpp"
+        result.append((row, source, language))
+    result.sort(key=lambda item: item[0]["source_path"].lower())
+    return result
+
+
 def _select_probe_rows(
     compile_rows: list[dict],
     project_root: Path,
 ) -> list[tuple[dict, Path, str]]:
-    candidates: list[tuple[int, dict, Path, str]] = []
-    for row in compile_rows:
-        source = project_root / row["source_path"]
-        if not source.is_file():
-            continue
-        suffix = source.suffix.lower()
-        language = "c" if suffix == ".c" else "cpp"
-        if suffix not in {".c", ".cc", ".cpp", ".cxx"}:
-            continue
-        candidates.append((source.stat().st_size, row, source, language))
-
+    """Legacy representative selector retained for smoke-test compatibility."""
+    rows = _translation_unit_rows(compile_rows, project_root)
     result: list[tuple[dict, Path, str]] = []
     for wanted in ("c", "cpp"):
-        matches = [item for item in candidates if item[3] == wanted]
+        matches = [item for item in rows if item[2] == wanted]
         if not matches:
             continue
-        if wanted == "c":
-            preferred = {
+        preferred = (
+            {
                 "radiant.c": 0,
                 "hrsim_world.c": 1,
                 "hrsim_action.c": 2,
             }
-            _, row, source, language = min(
-                matches,
-                key=lambda x: (
-                    preferred.get(x[2].name.lower(), 10),
-                    x[0],
-                ),
-            )
-        else:
-            preferred_cpp = {
+            if wanted == "c"
+            else {
                 "hrraientitycomponent.cpp": 0,
                 "hrraiinteractablecomponent.cpp": 1,
                 "hrraiplayerinteractorcomponent.cpp": 2,
                 "hrraiworldsubsystem.cpp": 3,
                 "hrraibootstrapactor.cpp": 4,
             }
-            _, row, source, language = min(
-                matches,
-                key=lambda x: (
-                    preferred_cpp.get(x[2].name.lower(), 10),
-                    x[0],
-                ),
-            )
-        result.append((row, source, language))
+        )
+        result.append(min(
+            matches,
+            key=lambda item: (
+                preferred.get(item[1].name.lower(), 10),
+                item[0]["source_path"].lower(),
+            ),
+        ))
     return result
 
 
@@ -741,6 +799,15 @@ def _with_extra_probe_arguments(
     return list(arguments[:-1]) + list(extra) + [arguments[-1]]
 
 
+def _tu_output_prefix(source_path: str, language: str) -> str:
+    base = re.sub(
+        r"[^A-Za-z0-9_.-]+",
+        "_",
+        Path(source_path).stem,
+    )[:48] or "tu"
+    return f"native_ast_tu_{language}_{base}_{_stable_id(source_path)[:12]}"
+
+
 def _run_clang_ast_probes(
     frontend: Path,
     libclang: Path | None,
@@ -748,49 +815,54 @@ def _run_clang_ast_probes(
     project: Path,
     output: Path,
 ) -> tuple[list[dict], dict[str, str]]:
+    """Capture every project-owned TU through bounded libclang cursors."""
     diagnostics: list[dict] = []
     outputs: dict[str, str] = {}
     frontend_major = _clang_version_major(frontend)
 
-    for row, source, language in _select_probe_rows(
+    for row, source, language in _translation_unit_rows(
         compile_rows, project.parent
     ):
+        prefix = _tu_output_prefix(row["source_path"], language)
         base_syntax_arguments = _clang_probe_arguments(
             frontend, row, source, language, dump_ast=False
         )
+
+        initial_syntax_returncode = 0 if language == "c" else None
+        initial_syntax_stderr = ""
+        syntax_launch_error = ""
+        syntax_returncode = initial_syntax_returncode
+        syntax_stderr = ""
         syntax_arguments = list(base_syntax_arguments)
-        syntax_rsp = output / f"native_ast_probe_{language}_syntax.rsp"
+        syntax_rsp = output / f"{prefix}_syntax.rsp"
         _write_response_file(syntax_rsp, syntax_arguments)
         syntax_command = [str(frontend), f"@{syntax_rsp}"]
 
-        syntax_launch_error = ""
-        syntax_returncode = None
-        syntax_stderr = ""
-        try:
-            syntax_run = subprocess.run(
-                syntax_command,
-                cwd=str(Path(row["directory"])),
-                text=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                errors="replace",
-                check=False,
-            )
-            syntax_returncode = syntax_run.returncode
-            syntax_stderr = syntax_run.stderr or ""
-        except OSError as exc:
-            syntax_launch_error = str(exc)
+        if language == "cpp":
+            try:
+                syntax_run = subprocess.run(
+                    syntax_command,
+                    cwd=str(Path(row["directory"])),
+                    text=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                    errors="replace",
+                    check=False,
+                )
+                syntax_returncode = syntax_run.returncode
+                initial_syntax_returncode = syntax_run.returncode
+                syntax_stderr = syntax_run.stderr or ""
+                initial_syntax_stderr = syntax_stderr
+            except OSError as exc:
+                syntax_launch_error = str(exc)
+                syntax_returncode = None
+                initial_syntax_returncode = None
 
-        initial_syntax_returncode = syntax_returncode
-        initial_syntax_stderr = syntax_stderr
         initial_syntax_error_lines = _diagnostic_error_lines(
             initial_syntax_stderr
         )
-        initial_syntax_stderr_path = (
-            output
-            / f"native_ast_probe_{language}_syntax_initial.stderr.txt"
-        )
-        initial_syntax_stderr_path.write_text(
+        initial_stderr_path = output / f"{prefix}_syntax_initial.stderr.txt"
+        initial_stderr_path.write_text(
             initial_syntax_stderr,
             encoding="utf-8",
             newline="\n",
@@ -811,10 +883,7 @@ def _run_clang_ast_probes(
                 base_syntax_arguments,
                 compatibility_overrides,
             )
-            syntax_rsp = (
-                output
-                / f"native_ast_probe_{language}_syntax_compat.rsp"
-            )
+            syntax_rsp = output / f"{prefix}_syntax_compat.rsp"
             _write_response_file(syntax_rsp, syntax_arguments)
             syntax_command = [str(frontend), f"@{syntax_rsp}"]
             syntax_launch_error = ""
@@ -835,9 +904,7 @@ def _run_clang_ast_probes(
             except OSError as exc:
                 syntax_launch_error = str(exc)
 
-        syntax_stderr_path = (
-            output / f"native_ast_probe_{language}_syntax.stderr.txt"
-        )
+        syntax_stderr_path = output / f"{prefix}_syntax.stderr.txt"
         syntax_stderr_path.write_text(
             syntax_stderr,
             encoding="utf-8",
@@ -845,126 +912,11 @@ def _run_clang_ast_probes(
         )
         syntax_error_lines = _diagnostic_error_lines(syntax_stderr)
 
-        # UE C++ TUs can exceed a gigabyte when dumped through
-        # -ast-dump=json. Once syntax is proven, use libclang cursors instead
-        # so only project-owned semantics are materialized.
-        if language == "cpp":
-            base_diag = {
-                "kind": "clang_ast_probe",
-                "language": language,
-                "source_path": row["source_path"],
-                "success": False,
-                "frontend_major": frontend_major,
-                "semantic_mode_arguments": row.get(
-                    "_semantic_mode_arguments", []
-                ),
-                "compatibility_overrides": compatibility_overrides,
-                "initial_syntax_exit_code": initial_syntax_returncode,
-                "initial_syntax_stderr_file": (
-                    initial_syntax_stderr_path.as_posix()
-                ),
-                "initial_syntax_error_lines": initial_syntax_error_lines,
-                "syntax_exit_code": syntax_returncode,
-                "syntax_launch_error": syntax_launch_error,
-                "syntax_command": subprocess.list2cmdline(syntax_command),
-                "syntax_response_file": syntax_rsp.as_posix(),
-                "syntax_response_argument_count": len(syntax_arguments),
-                "syntax_response_file_bytes": syntax_rsp.stat().st_size,
-                "syntax_stderr_file": syntax_stderr_path.as_posix(),
-                "syntax_error_lines": syntax_error_lines,
-                "syntax_stderr_tail": "\n".join(
-                    syntax_stderr.splitlines()[-120:]
-                ),
-                "extraction_backend": "libclang_cursor",
-                "output": "",
-                "output_bytes": 0,
-                "valid_json": False,
-                "root_kind": "",
-            }
-            diagnostics.append(base_diag)
-
-            if syntax_returncode == 0 and libclang is not None:
-                libclang_diag = native_libclang.run_cursor_probe(
-                    frontend=frontend,
-                    libclang=libclang,
-                    row=row,
-                    source=source,
-                    language=language,
-                    compatibility_overrides=compatibility_overrides,
-                    syntax_arguments=syntax_arguments,
-                    project_root=project.parent,
-                    output=output,
-                )
-                diagnostics.append(libclang_diag)
-                outputs[language] = str(
-                    libclang_diag.get("result_file", "")
-                )
-            else:
-                outputs[language] = ""
-            continue
-
-        target = output / f"native_ast_probe_{language}.json"
-        target.write_text("", encoding="utf-8")
-        ast_rsp = output / f"native_ast_probe_{language}.rsp"
-        ast_returncode = None
-        ast_stderr = ""
-        ast_launch_error = ""
-        ast_argument_count = 0
-
-        if syntax_returncode == 0:
-            ast_arguments = _clang_probe_arguments(
-                frontend, row, source, language, dump_ast=True
-            )
-            ast_arguments = _with_extra_probe_arguments(
-                ast_arguments,
-                compatibility_overrides,
-            )
-            ast_argument_count = len(ast_arguments)
-            _write_response_file(ast_rsp, ast_arguments)
-            ast_command = [str(frontend), f"@{ast_rsp}"]
-            with target.open("w", encoding="utf-8", newline="\n") as stdout_fh:
-                try:
-                    ast_run = subprocess.run(
-                        ast_command,
-                        cwd=str(Path(row["directory"])),
-                        text=True,
-                        stdout=stdout_fh,
-                        stderr=subprocess.PIPE,
-                        errors="replace",
-                        check=False,
-                    )
-                    ast_returncode = ast_run.returncode
-                    ast_stderr = ast_run.stderr or ""
-                except OSError as exc:
-                    ast_launch_error = str(exc)
-        else:
-            ast_rsp.write_text("", encoding="utf-8")
-
-        ast_stderr_path = output / f"native_ast_probe_{language}.stderr.txt"
-        ast_stderr_path.write_text(
-            ast_stderr,
-            encoding="utf-8",
-            newline="\n",
-        )
-        ast_error_lines = _diagnostic_error_lines(ast_stderr)
-
-        valid_json = False
-        node_kind = ""
-        if ast_returncode == 0 and target.stat().st_size:
-            try:
-                root = json.loads(target.read_text(
-                    encoding="utf-8", errors="replace"
-                ))
-                valid_json = isinstance(root, dict)
-                node_kind = str(root.get("kind", "")) if valid_json else ""
-            except json.JSONDecodeError:
-                valid_json = False
-
         diagnostics.append({
-            "kind": "clang_ast_probe",
+            "kind": "clang_syntax_tu",
             "language": language,
             "source_path": row["source_path"],
-            "success": ast_returncode == 0 and valid_json,
+            "success": syntax_returncode == 0,
             "frontend_major": frontend_major,
             "semantic_mode_arguments": row.get(
                 "_semantic_mode_arguments", []
@@ -977,9 +929,7 @@ def _run_clang_ast_probes(
             ),
             "compatibility_overrides": compatibility_overrides,
             "initial_syntax_exit_code": initial_syntax_returncode,
-            "initial_syntax_stderr_file": (
-                initial_syntax_stderr_path.as_posix()
-            ),
+            "initial_syntax_stderr_file": initial_stderr_path.as_posix(),
             "initial_syntax_error_lines": initial_syntax_error_lines,
             "syntax_exit_code": syntax_returncode,
             "syntax_launch_error": syntax_launch_error,
@@ -992,22 +942,43 @@ def _run_clang_ast_probes(
             "syntax_stderr_tail": "\n".join(
                 syntax_stderr.splitlines()[-120:]
             ),
-            "exit_code": ast_returncode,
-            "launch_error": ast_launch_error,
-            "response_file": ast_rsp.as_posix(),
-            "response_argument_count": ast_argument_count,
-            "response_file_bytes": ast_rsp.stat().st_size,
-            "stderr_file": ast_stderr_path.as_posix(),
-            "error_lines": ast_error_lines,
-            "stderr_tail": "\n".join(ast_stderr.splitlines()[-120:]),
-            "output": target.as_posix(),
-            "output_bytes": target.stat().st_size,
-            "valid_json": valid_json,
-            "root_kind": node_kind,
-            "extraction_backend": "clang_ast_json",
+            "extraction_backend": "libclang_cursor",
         })
-        outputs[language] = target.as_posix()
+
+        if syntax_returncode == 0 and libclang is not None:
+            libclang_diag = native_libclang.run_cursor_probe(
+                frontend=frontend,
+                libclang=libclang,
+                row=row,
+                source=source,
+                language=language,
+                compatibility_overrides=compatibility_overrides,
+                syntax_arguments=syntax_arguments,
+                project_root=project.parent,
+                output=output,
+            )
+            diagnostics.append(libclang_diag)
+            outputs[row["source_path"]] = str(
+                libclang_diag.get("result_file", "")
+            )
+        else:
+            outputs[row["source_path"]] = ""
+
     return diagnostics, outputs
+
+
+def _translation_units_successful(
+    diagnostics: list[dict],
+    expected_rows: list[tuple[dict, Path, str]],
+) -> bool:
+    successful = {
+        str(row.get("source_path", ""))
+        for row in diagnostics
+        if row.get("kind") == "libclang_cursor_probe"
+        and row.get("success")
+    }
+    expected = {row[0]["source_path"] for row in expected_rows}
+    return bool(expected) and successful == expected
 
 
 
