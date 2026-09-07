@@ -43,6 +43,31 @@ class NativeASTSchema1Test(unittest.TestCase):
             self.assertIn(ext.resolve().as_posix(), includes)
             self.assertEqual(forced, [])
 
+    def test_capture_manifest_paths_all_persist_freshness_provenance(self) -> None:
+        source = (
+            SCRIPTS / "uatool_native_ast.py"
+        ).read_text(encoding="utf-8")
+        self.assertEqual(
+            source.count(
+                '"compiler_input_snapshot": compiler_input_snapshot'
+            ),
+            3,
+        )
+        self.assertEqual(
+            source.count(
+                '"compiler_inputs_unchanged": compiler_inputs_unchanged'
+            ),
+            2,
+        )
+        self.assertIn(
+            "final_compiler_input_snapshot =",
+            source,
+        )
+        self.assertIn(
+            "project-owned compiler inputs changed during AST capture",
+            source,
+        )
+
     def test_owned_compile_entries_exclude_foreign_translation_units(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
