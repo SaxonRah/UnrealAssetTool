@@ -215,6 +215,7 @@ def _run_generate_clang_database(
         return None, diagnostics
 
     candidates = [
+        engine_root.parent / "compile_commands.json",
         engine_root / "compile_commands.json",
         project.parent / "compile_commands.json",
     ]
@@ -260,28 +261,41 @@ def _run_generate_clang_database(
         diagnostics["message"] = "UnrealBuildTool GenerateClangDatabase failed"
         return None, diagnostics
 
+    reported = None
+    for line in completed.stdout.splitlines():
+        match = re.search(r"ClangDatabase written to\s+(.+?)\s*$", line)
+        if not match:
+            continue
+        candidate = Path(match.group(1).strip().strip('"'))
+        if candidate.is_file():
+            reported = _norm(candidate)
+            break
+
     existing = [p for p in candidates if p.is_file()]
-    if not existing:
-        for root in (engine_root, project.parent):
-            for candidate in root.glob("**/compile_commands.json"):
-                if candidate.is_file():
-                    existing.append(candidate)
+    if reported is not None:
+        chosen = reported
+    else:
+        if not existing:
+            for root in (engine_root.parent, engine_root, project.parent):
+                for candidate in root.glob("**/compile_commands.json"):
+                    if candidate.is_file():
+                        existing.append(candidate)
 
-    if not existing:
-        diagnostics["message"] = (
-            "GenerateClangDatabase succeeded but compile_commands.json was not found"
+        if not existing:
+            diagnostics["message"] = (
+                "GenerateClangDatabase succeeded but compile_commands.json was not found"
+            )
+            return None, diagnostics
+
+        existing.sort(
+            key=lambda p: (
+                p.stat().st_mtime_ns > previous.get(p, -1),
+                p.stat().st_mtime_ns,
+                -len(p.as_posix()),
+            ),
+            reverse=True,
         )
-        return None, diagnostics
-
-    existing.sort(
-        key=lambda p: (
-            p.stat().st_mtime_ns > previous.get(p, -1),
-            p.stat().st_mtime_ns,
-            -len(p.as_posix()),
-        ),
-        reverse=True,
-    )
-    chosen = _norm(existing[0])
+        chosen = _norm(existing[0])
     diagnostics["success"] = True
     diagnostics["compile_commands"] = chosen.as_posix()
     diagnostics["message"] = "compile database generated"
@@ -863,6 +877,13 @@ def scan_lexical_file(
         if prefix_words and prefix_words[0] in _CONTROL_NAMES:
             continue
         if any(op in prefix for op in ("=", "->")):
+            continue
+        # A declaration prefix may contain templates, pointers, references,
+        # qualifiers, and namespaces, but an open/close parenthesis here means
+        # we matched a nested call expression (for example UE_LOG(..., TEXT(...))).
+        # Be conservative: lexical evidence should under-report rather than
+        # manufacture declaration identity.
+        if "(" in prefix or ")" in prefix:
             continue
         if not is_constructor and not prefix:
             continue
