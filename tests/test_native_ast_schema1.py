@@ -14,6 +14,7 @@ if str(SCRIPTS) not in sys.path:
 import uatool_native_ast as native_ast
 import uatool_native_source as native_source
 import uatool_native_libclang as native_libclang
+import uatool_libclang_worker as libclang_worker
 
 
 def write(path: Path, text: str) -> Path:
@@ -513,6 +514,48 @@ class NativeASTSchema1Test(unittest.TestCase):
         self.assertIn("clang_getCursorReferenced", worker)
         self.assertIn("clang_getCursorUSR", worker)
         self.assertIn("libclang_cursor_compatibility_replay", worker)
+
+    def test_libclang_worker_excludes_intermediate_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "Source" / "Sample" / "Sample.h"
+            generated = (
+                root / "Plugins" / "Sample" / "Intermediate" /
+                "Build" / "Generated.h"
+            )
+            source.parent.mkdir(parents=True)
+            generated.parent.mkdir(parents=True)
+            self.assertEqual(
+                libclang_worker._project_relative(
+                    source.as_posix(), root
+                ),
+                "Source/Sample/Sample.h",
+            )
+            self.assertIsNone(
+                libclang_worker._project_relative(
+                    generated.as_posix(), root
+                )
+            )
+            self.assertTrue(
+                libclang_worker._is_excluded_physical_path(
+                    generated.as_posix()
+                )
+            )
+
+    def test_libclang_worker_call_identity_uses_caller_occurrence(self) -> None:
+        worker = (
+            SCRIPTS / "uatool_libclang_worker.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn('"caller_occurrence_id": function_context[1]', worker)
+        self.assertIn('f"{function_context[1]}|{target_usr}|"', worker)
+        self.assertIn("unique_calls.setdefault", worker)
+
+    def test_cpp_probe_prefers_gameplay_component(self) -> None:
+        source = (SCRIPTS / "uatool_native_ast.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('"hrraientitycomponent.cpp": 0', source)
+        self.assertIn('"hrraiinteractablecomponent.cpp": 1', source)
 
     def test_document_counts_cover_symbols_refs_and_relations(self) -> None:
         text = """--- !Symbol
