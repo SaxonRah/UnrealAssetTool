@@ -1063,6 +1063,20 @@ def _native_index_cli(argv: list[str]) -> int:
         if root.suffix.lower() == ".db"
         else root / core.DB_NAME
     )
+    if not database.is_file():
+        database.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(database)
+        try:
+            create_schema(conn)
+            conn.commit()
+        except Exception:
+            conn.close()
+            database.unlink(missing_ok=True)
+            raise
+        else:
+            conn.close()
+        print(f"initialized standard database cache: {database}")
+
     counts = native_index.import_database(
         database,
         Path(args.reflected),
