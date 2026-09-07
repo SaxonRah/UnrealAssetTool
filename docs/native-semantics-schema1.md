@@ -84,7 +84,7 @@ Important lookup indexes cover:
 - target symbol and target USR;
 - unresolved/ambiguous join status.
 
-The importer validates source manifests and JSONL counts before writing, requires every caller to resolve to a canonical project symbol, rejects excluded build/source leakage, and rechecks SQLite row counts after loading. A non-empty compiler `target_symbol_id` is preserved even when no canonical symbol row materializes for that referenced cursor. This can occur because call-target identity is assigned from a compiler-resolved project-relative cursor while canonical symbol emission uses stricter authored/traversal filters. Exact Clang USR is used as a navigation fallback when it resolves to a canonical symbol; otherwise the target remains explicitly `unmaterialized_project_cursor` rather than being synthesized.
+The importer validates source manifests and JSONL counts before writing, requires every caller to resolve to a canonical project symbol, rejects excluded build/source leakage, and rechecks SQLite row counts after loading. Compiler parameter cache identity mirrors the authoritative AST canonical key exactly: `(function_occurrence_id, parameter_index, name, type_spelling)`. A repeated numeric parameter index is therefore preserved when the authoritative stream distinguishes the rows by name/type; the cache does not collapse or renumber them. A non-empty compiler `target_symbol_id` is preserved even when no canonical symbol row materializes for that referenced cursor. This can occur because call-target identity is assigned from a compiler-resolved project-relative cursor while canonical symbol emission uses stricter authored/traversal filters. Exact Clang USR is used as a navigation fallback when it resolves to a canonical symbol; otherwise the target remains explicitly `unmaterialized_project_cursor` rather than being synthesized.
 
 ## Validation-phase workflow
 
@@ -97,7 +97,7 @@ python scripts\uatool.py native-index "E:\Path\Project\.uatool" `
     --joins "E:\Path\Project\.uatool-native-join"
 ```
 
-This command does not recapture Unreal, rerun Clang, or rewrite the authoritative JSONL streams. Creating a missing `uat.db` is only cache initialization; it does not imply that unrelated canonical JSONL tables contain scanned project data.
+This command does not recapture Unreal, rerun Clang, or rewrite the authoritative JSONL streams. Creating a missing `uat.db` is only cache initialization; it does not imply that unrelated canonical JSONL tables contain scanned project data. Each explicit import drops and recreates only the disposable `native_*` cache tables before loading, so native cache-schema migrations do not require deleting `uat.db` and do not touch standard project tables.
 
 ## Query surfaces
 
