@@ -983,18 +983,52 @@ def read_parameter_identity_stats(database: Path) -> dict[str, int]:
         conn.close()
 
 
+def _compiler_capture_stats_from_conn(
+    conn: sqlite3.Connection,
+) -> dict:
+    row = conn.execute(
+        """SELECT value FROM native_index_meta
+           WHERE key='compiler_capture_stats_json'"""
+    ).fetchone()
+    if row is not None:
+        value = _json_value(row[0], {})
+        if isinstance(value, dict):
+            return value
+
+    # Compatibility with a cache imported immediately before this derived
+    # convenience key existed: the full authoritative compiler manifest was
+    # already retained in native_index_meta.
+    row = conn.execute(
+        """SELECT value FROM native_index_meta
+           WHERE key='compiler_manifest_json'"""
+    ).fetchone()
+    if row is None:
+        return {}
+    manifest = _json_value(row[0], {})
+    if not isinstance(manifest, dict):
+        return {}
+    return {
+        "ruleset": str(manifest.get("ruleset", "") or ""),
+        "parameter_owner_policy": str(
+            manifest.get("parameter_owner_policy", "") or ""
+        ),
+        "call_owner_policy": str(
+            manifest.get("call_owner_policy", "") or ""
+        ),
+        "parameter_owner_mismatches_rejected": int(
+            manifest.get("parameter_owner_mismatches_rejected", 0) or 0
+        ),
+        "nested_callable_calls_suppressed": int(
+            manifest.get("nested_callable_calls_suppressed", 0) or 0
+        ),
+    }
+
+
 def read_compiler_capture_stats(database: Path) -> dict:
     database = Path(database).expanduser().resolve()
     conn = sqlite3.connect(database)
     try:
-        row = conn.execute(
-            """SELECT value FROM native_index_meta
-               WHERE key='compiler_capture_stats_json'"""
-        ).fetchone()
-        if row is None:
-            return {}
-        value = _json_value(row[0], {})
-        return value if isinstance(value, dict) else {}
+        return _compiler_capture_stats_from_conn(conn)
     finally:
         conn.close()
 
@@ -1724,17 +1758,7 @@ def build_audit(
             "message": "uat.db has no imported native semantic rows",
         }
 
-    capture_row = conn.execute(
-        """SELECT value FROM native_index_meta
-           WHERE key='compiler_capture_stats_json'"""
-    ).fetchone()
-    compiler_capture = (
-        _json_value(capture_row["value"], {})
-        if capture_row is not None
-        else {}
-    )
-    if not isinstance(compiler_capture, dict):
-        compiler_capture = {}
+    compiler_capture = _compiler_capture_stats_from_conn(conn)
 
     joined_rows = conn.execute(
         """SELECT reflected_function_path,source_symbol_id,
