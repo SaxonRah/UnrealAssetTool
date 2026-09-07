@@ -33,6 +33,7 @@ import uatool_beta_rc as beta_rc
 import uatool_native_source as native_source
 import uatool_native_ast as native_ast
 import uatool_native_join as native_join
+import uatool_native_index as native_index
 
 # Public derived schema 40 distinguishes authored Bind/Assign sites from
 # resolved delegate subscriptions. Zero-input sites remain diagnostic evidence
@@ -75,6 +76,7 @@ def create_schema(conn) -> None:
     blueprint_delegates.create_schema(conn)
     blueprint_statements.create_schema(conn)
     project_graph.create_schema(conn)
+    native_index.create_schema(conn)
 
 
 def _read_top_manifest(output: Path) -> dict:
@@ -632,6 +634,7 @@ def query(args):
             blueprint_interprocedural.query(conn, core._print_rows, pattern, args.limit)
             blueprint_delegates.query(conn, core._print_rows, pattern, args.limit)
             blueprint_semantics.query(conn, core._print_rows, pattern, args.limit)
+            native_index.query(conn, core._print_rows, pattern, args.limit)
             systems.query(conn, core._print_rows, pattern, args.limit)
             vfx_stitch.query(conn, core._print_rows, pattern, args.limit)
             vfx.query(conn, core._print_rows, pattern, args.limit)
@@ -1025,6 +1028,241 @@ def _verify_bundle_cli(argv: list[str]) -> int:
 
 
 
+def _native_index_cli(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="uatool native-index",
+        description=(
+            "import validated reflected/native AST/join schema 1 streams "
+            "into an existing standard uat.db cache"
+        ),
+    )
+    parser.add_argument(
+        "output",
+        help="existing standard .uatool directory or uat.db path",
+    )
+    parser.add_argument(
+        "--reflected",
+        required=True,
+        help="directory produced by uatool native-capture",
+    )
+    parser.add_argument(
+        "--compiler",
+        required=True,
+        help="directory produced by uatool ast-capture",
+    )
+    parser.add_argument(
+        "--joins",
+        required=True,
+        help="directory produced by uatool native-join",
+    )
+    args = parser.parse_args(argv)
+
+    root = Path(args.output).expanduser().resolve()
+    database = (
+        root
+        if root.suffix.lower() == ".db"
+        else root / core.DB_NAME
+    )
+    if not database.is_file():
+        database.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(database)
+        try:
+            create_schema(conn)
+            conn.commit()
+        except Exception:
+            conn.close()
+            database.unlink(missing_ok=True)
+            raise
+        else:
+            conn.close()
+        print(f"initialized standard database cache: {database}")
+
+    counts = native_index.import_database(
+        database,
+        Path(args.reflected),
+        Path(args.compiler),
+        Path(args.joins),
+    )
+    print(
+        "native index imported: "
+        + " ".join(
+            f"{key.removeprefix('native_')}={value}"
+            for key, value in counts.items()
+        )
+    )
+    capture_stats = native_index.read_compiler_capture_stats(
+        database
+    )
+    if capture_stats:
+        print(
+            "native compiler capture: "
+            f"ruleset={capture_stats.get('ruleset', '')} "
+            "parameter_owner_mismatches_rejected="
+            f"{capture_stats.get('parameter_owner_mismatches_rejected', 0)} "
+            "nested_callable_calls_suppressed="
+            f"{capture_stats.get('nested_callable_calls_suppressed', 0)}"
+        )
+    parameter_stats = native_index.read_parameter_identity_stats(
+        database
+    )
+    if parameter_stats:
+        print(
+            "native compiler parameters: "
+            f"rows={parameter_stats.get('rows', 0)} "
+            f"negative_index={parameter_stats.get('negative_index_rows', 0)} "
+            f"duplicate_index_slots={parameter_stats.get('duplicate_index_slots', 0)} "
+            "rows_beyond_unique_slots="
+            f"{parameter_stats.get('rows_beyond_unique_index_slots', 0)}"
+        )
+    target_stats = native_index.read_call_target_stats(database)
+    if target_stats:
+        print(
+            "native call targets: "
+            f"project={target_stats.get('project_target_calls', 0)} "
+            f"symbol_id={target_stats.get('materialized_by_symbol_id', 0)} "
+            f"clang_usr={target_stats.get('materialized_by_clang_usr', 0)} "
+            f"unmaterialized={target_stats.get('unmaterialized_project_targets', 0)}"
+        )
+    print(f"database: {database}")
+    return 0
+
+
+def _native_index_audit_cli(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="uatool native-index-audit",
+        description=(
+            "audit joined reflected functions, duplicate compiler parameter "
+            "slots, and unmaterialized project call targets in uat.db"
+        ),
+    )
+    parser.add_argument(
+        "output",
+        help="standard .uatool directory or uat.db path",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=100,
+        help="maximum rows shown per audit section",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="emit the complete audit as JSON",
+    )
+    args = parser.parse_args(argv)
+    if args.limit < 0:
+        parser.error("--limit must be >= 0")
+
+    root = Path(args.output).expanduser().resolve()
+    database = (
+        root
+        if root.suffix.lower() == ".db"
+        else root / core.DB_NAME
+    )
+    if not database.is_file():
+        raise RuntimeError(f"uat.db not found: {database}")
+
+    conn = sqlite3.connect(database)
+    conn.row_factory = sqlite3.Row
+    try:
+        report = native_index.build_audit(
+            conn,
+            limit=args.limit,
+        )
+    finally:
+        conn.close()
+
+    if args.json:
+        print(json.dumps(report, indent=2, sort_keys=True))
+    else:
+        native_index.print_audit(report)
+    return 0 if report.get("status") == "ok" else 54
+
+
+def _native_program_report_cli(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="uatool native-program-report",
+        description=(
+            "follow one exact reflected UFunction or compiler symbol "
+            "through its proven native join and one-hop call neighborhood"
+        ),
+    )
+    parser.add_argument(
+        "output",
+        help="standard .uatool directory or uat.db path",
+    )
+    parser.add_argument(
+        "symbol",
+        help=(
+            "exact reflected function path, compiler symbol id, clang USR, "
+            "qualified C/C++ name, or uniquely matching exact function name"
+        ),
+    )
+    parser.add_argument(
+        "--callers",
+        action="store_true",
+        help="show callers only when a direction is explicitly selected",
+    )
+    parser.add_argument(
+        "--callees",
+        action="store_true",
+        help="show callees only when a direction is explicitly selected",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=80,
+        help="maximum call edges shown per selected direction",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="emit the complete report as JSON",
+    )
+    args = parser.parse_args(argv)
+    if args.limit < 0:
+        parser.error("--limit must be >= 0")
+
+    root = Path(args.output).expanduser().resolve()
+    database = (
+        root
+        if root.suffix.lower() == ".db"
+        else root / core.DB_NAME
+    )
+    if not database.is_file():
+        raise RuntimeError(f"uat.db not found: {database}")
+
+    any_direction = args.callers or args.callees
+    include_callers = args.callers if any_direction else True
+    include_callees = args.callees if any_direction else True
+
+    conn = sqlite3.connect(database)
+    conn.row_factory = sqlite3.Row
+    try:
+        report = native_index.build_report(
+            conn,
+            args.symbol,
+            include_callers=include_callers,
+            include_callees=include_callees,
+            limit=args.limit,
+        )
+    finally:
+        conn.close()
+
+    if args.json:
+        print(json.dumps(report, indent=2, sort_keys=True))
+    else:
+        native_index.print_report(report)
+
+    return (
+        0
+        if report.get("status") in {"joined", "source", "unresolved"}
+        else 53
+    )
+
+
+
 def _native_source_cli(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="uatool source-capture",
@@ -1187,6 +1425,24 @@ def _native_ast_cli(argv: list[str]) -> int:
     return 0 if manifest.get("success") else 49
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "native-index":
+        try:
+            return _native_index_cli(sys.argv[2:])
+        except Exception as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 51
+    if len(sys.argv) > 1 and sys.argv[1] == "native-index-audit":
+        try:
+            return _native_index_audit_cli(sys.argv[2:])
+        except Exception as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 54
+    if len(sys.argv) > 1 and sys.argv[1] == "native-program-report":
+        try:
+            return _native_program_report_cli(sys.argv[2:])
+        except Exception as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 52
     if len(sys.argv) > 1 and sys.argv[1] == "native-join":
         try:
             return _native_join_cli(sys.argv[2:])

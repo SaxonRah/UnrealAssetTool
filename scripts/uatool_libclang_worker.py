@@ -301,6 +301,8 @@ class Capture:
         self.symbols: list[dict] = []
         self.parameters: list[dict] = []
         self.calls: list[dict] = []
+        self.parameter_owner_mismatches = 0
+        self.nested_callable_calls_suppressed = 0
 
     def location(self, cursor: CXCursor) -> tuple[str | None, int, int, int]:
         file_name, line, column, offset = self.clang.location(cursor)
@@ -368,6 +370,38 @@ class Capture:
         self.clang.dll.clang_visitChildren(cursor, visitor, None)
         return found[0] if found else CXCursor()
 
+    def callable_context_for_cursor(
+        self,
+        cursor: CXCursor,
+    ) -> tuple[str, str] | None:
+        if self.clang.is_null(cursor):
+            return None
+        kind = self.clang.kind(cursor)
+        if kind not in FUNCTION_KINDS:
+            return None
+        source_path, line, column, offset = self.location(cursor)
+        if not source_path:
+            return None
+        return self.identity(
+            cursor,
+            kind,
+            source_path,
+            line,
+            column,
+            offset,
+        )
+
+    def parameter_belongs_to_context(
+        self,
+        cursor: CXCursor,
+        function_context: tuple[str, str] | None,
+    ) -> bool:
+        if not function_context:
+            return False
+        parent = self.clang.dll.clang_getCursorSemanticParent(cursor)
+        parent_context = self.callable_context_for_cursor(parent)
+        return parent_context == function_context
+
     def target_identity(self, cursor: CXCursor) -> tuple[str, str, str, str]:
         if self.clang.is_null(cursor):
             return "", "", "", ""
@@ -388,6 +422,7 @@ class Capture:
         cursor: CXCursor,
         inherited_project_path: str | None,
         function_context: tuple[str, str] | None,
+        inside_unmaterialized_local_callable: bool = False,
     ) -> None:
         kind = self.clang.kind(cursor)
         source_path, line, column, offset = self.location(cursor)
@@ -408,6 +443,10 @@ class Capture:
             return
 
         next_function_context = function_context
+        next_inside_local_callable = (
+            inside_unmaterialized_local_callable
+            or kind == "LambdaExpr"
+        )
         if kind in SYMBOL_KIND:
             semantic, occurrence = self.identity(
                 cursor, kind, source_path, line, column, offset
@@ -439,59 +478,69 @@ class Capture:
             self.symbols.append(symbol)
             if kind in FUNCTION_KINDS:
                 next_function_context = (semantic, occurrence)
+                next_inside_local_callable = False
 
         if kind == "ParmDecl" and function_context:
-            self.parameters.append({
-                "function_symbol_id": function_context[0],
-                "function_occurrence_id": function_context[1],
-                "parameter_index": -1,
-                "name": self.clang.spelling(cursor),
-                "type_spelling": self.clang.type_spelling(cursor),
-                "source_path": source_path,
-                "translation_unit": self.translation_unit,
-                "language": self.language,
-                "line": line,
-                "column": column,
-                "compatibility_overrides": self.compatibility_overrides,
-                "evidence": self.evidence,
-            })
+            if self.parameter_belongs_to_context(
+                cursor,
+                function_context,
+            ):
+                self.parameters.append({
+                    "function_symbol_id": function_context[0],
+                    "function_occurrence_id": function_context[1],
+                    "parameter_index": -1,
+                    "name": self.clang.spelling(cursor),
+                    "type_spelling": self.clang.type_spelling(cursor),
+                    "source_path": source_path,
+                    "translation_unit": self.translation_unit,
+                    "language": self.language,
+                    "line": line,
+                    "column": column,
+                    "compatibility_overrides": self.compatibility_overrides,
+                    "evidence": self.evidence,
+                })
+            else:
+                self.parameter_owner_mismatches += 1
 
         if kind in CALL_KINDS and function_context:
-            referenced = self.referenced_for_call(cursor)
-            target_id, target_usr, target_kind, target_name = (
-                self.target_identity(referenced)
-            )
-            self.calls.append({
-                "call_id": _stable_id(
-                    f"{self.translation_unit}|{source_path}|{offset}|"
-                    f"{function_context[1]}|{target_usr}|"
-                    f"{target_kind}|{target_name}"
-                ),
-                "caller_symbol_id": function_context[0],
-                "caller_occurrence_id": function_context[1],
-                "source_path": source_path,
-                "translation_unit": self.translation_unit,
-                "language": self.language,
-                "line": line,
-                "column": column,
-                "offset": offset,
-                "target_symbol_id": target_id,
-                "target_clang_node_id": "",
-                "target_usr": target_usr,
-                "target_kind": target_kind,
-                "target_name": target_name,
-                "target_type_spelling": (
-                    self.clang.type_spelling(referenced)
-                    if not self.clang.is_null(referenced) else ""
-                ),
-                "resolution": (
-                    "compiler_resolved"
-                    if not self.clang.is_null(referenced)
-                    else "compiler_unresolved"
-                ),
-                "compatibility_overrides": self.compatibility_overrides,
-                "evidence": self.evidence,
-            })
+            if inside_unmaterialized_local_callable:
+                self.nested_callable_calls_suppressed += 1
+            else:
+                referenced = self.referenced_for_call(cursor)
+                target_id, target_usr, target_kind, target_name = (
+                    self.target_identity(referenced)
+                )
+                self.calls.append({
+                    "call_id": _stable_id(
+                        f"{self.translation_unit}|{source_path}|{offset}|"
+                        f"{function_context[1]}|{target_usr}|"
+                        f"{target_kind}|{target_name}"
+                    ),
+                    "caller_symbol_id": function_context[0],
+                    "caller_occurrence_id": function_context[1],
+                    "source_path": source_path,
+                    "translation_unit": self.translation_unit,
+                    "language": self.language,
+                    "line": line,
+                    "column": column,
+                    "offset": offset,
+                    "target_symbol_id": target_id,
+                    "target_clang_node_id": "",
+                    "target_usr": target_usr,
+                    "target_kind": target_kind,
+                    "target_name": target_name,
+                    "target_type_spelling": (
+                        self.clang.type_spelling(referenced)
+                        if not self.clang.is_null(referenced) else ""
+                    ),
+                    "resolution": (
+                        "compiler_resolved"
+                        if not self.clang.is_null(referenced)
+                        else "compiler_unresolved"
+                    ),
+                    "compatibility_overrides": self.compatibility_overrides,
+                    "evidence": self.evidence,
+                })
 
         children: list[CXCursor] = []
 
@@ -506,7 +555,12 @@ class Capture:
         for child in children:
             child_kind = self.clang.kind(child)
             before = len(self.parameters)
-            self.visit(child, source_path, next_function_context)
+            self.visit(
+                child,
+                source_path,
+                next_function_context,
+                next_inside_local_callable,
+            )
             if (
                 child_kind == "ParmDecl"
                 and len(self.parameters) > before
@@ -539,7 +593,13 @@ def run(config_path: Path) -> int:
         ),
         "parse_error_code": None,
         "diagnostics": [],
-        "counts": {"symbols": 0, "parameters": 0, "calls": 0},
+        "counts": {
+            "symbols": 0,
+            "parameters": 0,
+            "calls": 0,
+            "parameter_owner_mismatches": 0,
+            "nested_callable_calls_suppressed": 0,
+        },
         "files": {},
     }
 
@@ -650,6 +710,12 @@ def run(config_path: Path) -> int:
             "symbols": len(capture.symbols),
             "parameters": len(capture.parameters),
             "calls": len(capture.calls),
+            "parameter_owner_mismatches": (
+                capture.parameter_owner_mismatches
+            ),
+            "nested_callable_calls_suppressed": (
+                capture.nested_callable_calls_suppressed
+            ),
         }
         result["success"] = True
         result_path.write_text(

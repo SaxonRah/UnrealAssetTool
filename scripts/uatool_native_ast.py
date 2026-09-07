@@ -14,6 +14,13 @@ import uatool_native_source as native_source
 import uatool_native_libclang as native_libclang
 
 SCHEMA_VERSION = 1
+RULESET = "libclang_semantic_callable_owner_v1"
+PARAMETER_OWNER_POLICY = (
+    "exact_libclang_semantic_parent_callable_identity"
+)
+CALL_OWNER_POLICY = (
+    "do_not_attribute_unmaterialized_lambda_body_calls_to_enclosing_callable"
+)
 RAW_INDEX = "native_ast_index.yaml"
 FILTERED_DB = "native_ast_compile_commands.json"
 MANIFEST = "native_ast_manifest.json"
@@ -21,6 +28,34 @@ DIAGNOSTICS = "native_ast_diagnostics.jsonl"
 SYMBOLS = "native_ast_symbols.jsonl"
 PARAMETERS = "native_ast_parameters.jsonl"
 CALLS = "native_ast_calls.jsonl"
+
+
+def _nested_callable_call_suppression_count(
+    diagnostics: list[dict],
+) -> int:
+    total = 0
+    for row in diagnostics:
+        if row.get("kind") != "libclang_cursor_probe":
+            continue
+        counts = row.get("counts") or {}
+        total += int(
+            counts.get("nested_callable_calls_suppressed", 0) or 0
+        )
+    return total
+
+
+def _parameter_owner_mismatch_count(
+    diagnostics: list[dict],
+) -> int:
+    total = 0
+    for row in diagnostics:
+        if row.get("kind") != "libclang_cursor_probe":
+            continue
+        counts = row.get("counts") or {}
+        total += int(
+            counts.get("parameter_owner_mismatches", 0) or 0
+        )
+    return total
 
 
 def _norm(path: Path) -> Path:
@@ -1123,6 +1158,9 @@ def capture(
             _write_jsonl(output / DIAGNOSTICS, diagnostics)
             manifest = {
                 "schema_version": SCHEMA_VERSION,
+                "ruleset": RULESET,
+                "parameter_owner_policy": PARAMETER_OWNER_POLICY,
+                "call_owner_policy": CALL_OWNER_POLICY,
                 "pass": "UnrealAssetToolNativeAST",
                 "success": False,
                 "error": "no clangd-indexer or clang frontend found",
@@ -1200,6 +1238,9 @@ def capture(
         _write_jsonl(output / DIAGNOSTICS, diagnostics)
         manifest = {
             "schema_version": SCHEMA_VERSION,
+            "ruleset": RULESET,
+            "parameter_owner_policy": PARAMETER_OWNER_POLICY,
+            "call_owner_policy": CALL_OWNER_POLICY,
             "pass": "UnrealAssetToolNativeAST",
             "success": probe_success,
             "error": (
@@ -1231,6 +1272,14 @@ def capture(
                 "calls": (output / CALLS).as_posix(),
             },
             "normalized_counts": normalized_counts,
+            "parameter_owner_mismatches_rejected": (
+                _parameter_owner_mismatch_count(probe_diagnostics)
+            ),
+            "nested_callable_calls_suppressed": (
+                _nested_callable_call_suppression_count(
+                    probe_diagnostics
+                )
+            ),
             "evidence": "libclang_cursor_all_translation_units",
         }
         (output / MANIFEST).write_text(
@@ -1281,6 +1330,9 @@ def capture(
     success = run.returncode == 0 and sum(counts.values()) > 0
     manifest = {
         "schema_version": SCHEMA_VERSION,
+        "ruleset": RULESET,
+        "parameter_owner_policy": PARAMETER_OWNER_POLICY,
+        "call_owner_policy": CALL_OWNER_POLICY,
         "pass": "UnrealAssetToolNativeAST",
         "success": success,
         "error": "" if success else "clangd-indexer failed or emitted no index documents",
@@ -1317,7 +1369,11 @@ def print_summary(manifest: dict) -> None:
             f"tus={resolved}/{expected} "
             f"symbols={normalized.get('symbols', 0)} "
             f"parameters={normalized.get('parameters', 0)} "
-            f"calls={normalized.get('calls', 0)}"
+            f"calls={normalized.get('calls', 0)} "
+            "parameter_owner_mismatches_rejected="
+            f"{manifest.get('parameter_owner_mismatches_rejected', 0)} "
+            "nested_callable_calls_suppressed="
+            f"{manifest.get('nested_callable_calls_suppressed', 0)}"
         )
         print(
             "compiler backend: "

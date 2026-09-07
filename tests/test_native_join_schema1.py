@@ -189,11 +189,16 @@ def make_ast(
     write_jsonl(root / native_ast.CALLS, [])
     (root / native_ast.MANIFEST).write_text(
         json.dumps({
-            "schema_version": 1,
+            "schema_version": native_ast.SCHEMA_VERSION,
+            "ruleset": native_ast.RULESET,
+            "parameter_owner_policy": native_ast.PARAMETER_OWNER_POLICY,
+            "call_owner_policy": native_ast.CALL_OWNER_POLICY,
             "pass": "UnrealAssetToolNativeAST",
             "success": True,
             "error": "",
             "evidence": "libclang_cursor_all_translation_units",
+            "parameter_owner_mismatches_rejected": 0,
+            "nested_callable_calls_suppressed": 0,
             "normalized_counts": {
                 "symbols": len(symbols),
                 "parameters": len(parameters),
@@ -243,6 +248,43 @@ class NativeJoinSchema1Test(unittest.TestCase):
             self.assertEqual(
                 function_rows[0]["compatibility_overrides"],
                 ["-Wno-invalid-constexpr"],
+            )
+
+    def test_validation_rejects_pre_projection_ruleset_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            reflected = root / "reflected"
+            ast = root / "ast"
+            output = root / "join"
+            reflected.mkdir()
+            ast.mkdir()
+            make_reflected(reflected)
+            make_ast(ast)
+
+            native_join.capture(reflected, ast, output)
+            manifest_path = output / native_join.MANIFEST
+            manifest = json.loads(
+                manifest_path.read_text(encoding="utf-8")
+            )
+            manifest.pop("ruleset", None)
+            manifest["proof_policy"]["functions"] = (
+                "proven owner type + exact qualified function name + "
+                "exact parameter signature + "
+                "single libclang USR-backed semantic identity"
+            )
+            manifest_path.write_text(
+                json.dumps(manifest) + "\n",
+                encoding="utf-8",
+                newline="\n",
+            )
+
+            self.assertEqual(
+                native_join.validation_error(output),
+                (
+                    "native join ruleset is stale or missing; regenerate "
+                    "with the current uatool native-join from the retained "
+                    "reflected and compiler inputs"
+                ),
             )
 
     def test_module_scope_prevents_same_name_join(self) -> None:

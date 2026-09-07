@@ -656,6 +656,167 @@ class NativeASTSchema1Test(unittest.TestCase):
                 )
             )
 
+    def test_libclang_parameter_owner_uses_semantic_callable_parent(self) -> None:
+        class FakeDLL:
+            def __init__(self, parents):
+                self.parents = parents
+
+            def clang_getCursorSemanticParent(self, cursor):
+                return self.parents.get(cursor)
+
+        class FakeClang:
+            def __init__(self, root: Path):
+                self.root = root
+                self.outer = object()
+                self.lambda_call = object()
+                self.outer_param = object()
+                self.lambda_param = object()
+                self.dll = FakeDLL({
+                    self.outer_param: self.outer,
+                    self.lambda_param: self.lambda_call,
+                })
+
+            def is_null(self, cursor):
+                return cursor is None
+
+            def kind(self, cursor):
+                if cursor in {self.outer, self.lambda_call}:
+                    return "CXXMethod"
+                return "ParmDecl"
+
+            def location(self, cursor):
+                if cursor is self.outer:
+                    return (
+                        (self.root / "Source" / "Outer.cpp").as_posix(),
+                        10,
+                        1,
+                        100,
+                    )
+                if cursor is self.lambda_call:
+                    return (
+                        (self.root / "Source" / "Outer.cpp").as_posix(),
+                        20,
+                        5,
+                        200,
+                    )
+                return (
+                    (self.root / "Source" / "Outer.cpp").as_posix(),
+                    11,
+                    5,
+                    110,
+                )
+
+            def usr(self, cursor):
+                if cursor is self.outer:
+                    return "c:@S@Outer@F@Run#"
+                if cursor is self.lambda_call:
+                    return "c:Outer.cpp@lambda@F@operator()#I#"
+                return ""
+
+            def spelling(self, cursor):
+                if cursor is self.outer:
+                    return "Run"
+                if cursor is self.lambda_call:
+                    return "operator()"
+                return "Value"
+
+            def type_spelling(self, cursor):
+                return "void ()"
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "Source").mkdir()
+            clang = FakeClang(root)
+            capture = libclang_worker.Capture(
+                clang,
+                {
+                    "project_root": root.as_posix(),
+                    "translation_unit": "Source/Outer.cpp",
+                    "language": "cpp",
+                    "compatibility_overrides": [],
+                },
+            )
+            outer_context = capture.callable_context_for_cursor(
+                clang.outer
+            )
+            self.assertIsNotNone(outer_context)
+            self.assertTrue(
+                capture.parameter_belongs_to_context(
+                    clang.outer_param,
+                    outer_context,
+                )
+            )
+            self.assertFalse(
+                capture.parameter_belongs_to_context(
+                    clang.lambda_param,
+                    outer_context,
+                )
+            )
+
+    def test_native_ast_manifest_declares_parameter_owner_ruleset(self) -> None:
+        source = (SCRIPTS / "uatool_native_ast.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            'RULESET = "libclang_semantic_callable_owner_v1"',
+            source,
+        )
+        self.assertIn(
+            '"parameter_owner_mismatches_rejected"',
+            source,
+        )
+        self.assertIn(
+            '"nested_callable_calls_suppressed"',
+            source,
+        )
+        self.assertIn(
+            "inside_unmaterialized_local_callable",
+            (
+                SCRIPTS / "uatool_libclang_worker.py"
+            ).read_text(encoding="utf-8"),
+        )
+        self.assertIn(
+            "parameter_belongs_to_context",
+            (
+                SCRIPTS / "uatool_libclang_worker.py"
+            ).read_text(encoding="utf-8"),
+        )
+
+    def test_callable_ownership_metrics_sum_probe_counts(self) -> None:
+        diagnostics = [
+            {
+                "kind": "libclang_cursor_probe",
+                "counts": {
+                    "parameter_owner_mismatches": 2,
+                    "nested_callable_calls_suppressed": 5,
+                },
+            },
+            {
+                "kind": "other",
+                "counts": {
+                    "parameter_owner_mismatches": 99,
+                    "nested_callable_calls_suppressed": 99,
+                },
+            },
+            {
+                "kind": "libclang_cursor_probe",
+                "counts": {
+                    "parameter_owner_mismatches": 3,
+                    "nested_callable_calls_suppressed": 7,
+                },
+            },
+        ]
+        self.assertEqual(
+            native_ast._parameter_owner_mismatch_count(diagnostics),
+            5,
+        )
+        self.assertEqual(
+            native_ast._nested_callable_call_suppression_count(
+                diagnostics
+            ),
+            12,
+        )
+
     def test_libclang_worker_call_identity_uses_caller_occurrence(self) -> None:
         worker = (
             SCRIPTS / "uatool_libclang_worker.py"
