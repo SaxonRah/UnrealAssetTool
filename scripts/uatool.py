@@ -833,6 +833,9 @@ def scan(args):
         if "Mover behavior derived incomplete:" in message:
             print(f"ERROR: {exc}", file=sys.stderr)
             return 36
+        if "native semantic stage incomplete:" in message:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 55
         raise
     if result != 0:
         return result
