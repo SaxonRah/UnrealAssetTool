@@ -93,6 +93,18 @@ class NativeFreshnessSchema1Test(unittest.TestCase):
                 any(path.startswith("Saved/") for path in paths)
             )
 
+    def test_snapshot_aggregate_detects_record_tampering(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            project = self.make_project(root)
+            snapshot = native_freshness.capture_snapshot(project)
+            snapshot["files"][0]["bytes"] += 1
+            error = native_freshness.validation_error(snapshot)
+            self.assertEqual(
+                error,
+                "compiler input snapshot aggregate SHA-256 mismatch",
+            )
+
     def test_unchanged_snapshot_is_same(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
