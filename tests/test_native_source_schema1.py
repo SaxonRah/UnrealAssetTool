@@ -405,7 +405,10 @@ int sample_tick(int value)
         self.assertIn('"-Compiler=VisualStudio2022"', source)
         self.assertNotIn('f"-Target={target} Win64 {configuration}"', source)
         self.assertIn('engine_root.parent / "compile_commands.json"', source)
-        self.assertIn('ClangDatabase written to\\s+(.+?)\\s*
+        self.assertIn('ClangDatabase written to\\\\s+(.+?)\\\\s*        self.assertIn('"lexical_unresolved"', source)
+        self.assertIn('"ubt_generate_clang_database"', source)
+        self.assertIn("_CTOR_RE = re.compile(", source)
+
 
 if __name__ == "__main__":
     unittest.main()
