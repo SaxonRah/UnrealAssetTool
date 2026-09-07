@@ -608,6 +608,23 @@ def _select_probe_rows(
     return result
 
 
+def _diagnostic_error_lines(stderr: str) -> list[str]:
+    return [
+        line
+        for line in stderr.splitlines()
+        if " error:" in line.lower() or "fatal error:" in line.lower()
+    ][:80]
+
+
+def _with_extra_probe_arguments(
+    arguments: list[str],
+    extra: list[str],
+) -> list[str]:
+    if not arguments or not extra:
+        return list(arguments)
+    return list(arguments[:-1]) + list(extra) + [arguments[-1]]
+
+
 def _run_clang_ast_probes(
     frontend: Path,
     compile_rows: list[dict],
@@ -616,12 +633,15 @@ def _run_clang_ast_probes(
 ) -> tuple[list[dict], dict[str, str]]:
     diagnostics: list[dict] = []
     outputs: dict[str, str] = {}
+    frontend_major = _clang_version_major(frontend)
+
     for row, source, language in _select_probe_rows(
         compile_rows, project.parent
     ):
-        syntax_arguments = _clang_probe_arguments(
+        base_syntax_arguments = _clang_probe_arguments(
             frontend, row, source, language, dump_ast=False
         )
+        syntax_arguments = list(base_syntax_arguments)
         syntax_rsp = output / f"native_ast_probe_{language}_syntax.rsp"
         _write_response_file(syntax_rsp, syntax_arguments)
         syntax_command = [str(frontend), f"@{syntax_rsp}"]
@@ -644,6 +664,61 @@ def _run_clang_ast_probes(
         except OSError as exc:
             syntax_launch_error = str(exc)
 
+        initial_syntax_returncode = syntax_returncode
+        initial_syntax_stderr = syntax_stderr
+        initial_syntax_error_lines = _diagnostic_error_lines(
+            initial_syntax_stderr
+        )
+        initial_syntax_stderr_path = (
+            output
+            / f"native_ast_probe_{language}_syntax_initial.stderr.txt"
+        )
+        initial_syntax_stderr_path.write_text(
+            initial_syntax_stderr,
+            encoding="utf-8",
+            newline="\n",
+        )
+
+        compatibility_overrides: list[str] = []
+        stl_version_gate = (
+            language == "cpp"
+            and syntax_returncode not in {0, None}
+            and frontend_major < 19
+            and "STL1000: Unexpected compiler version" in syntax_stderr
+        )
+        if stl_version_gate:
+            compatibility_overrides = [
+                "/D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH=1",
+                "-Wno-invalid-constexpr",
+            ]
+            syntax_arguments = _with_extra_probe_arguments(
+                base_syntax_arguments,
+                compatibility_overrides,
+            )
+            syntax_rsp = (
+                output
+                / f"native_ast_probe_{language}_syntax_compat.rsp"
+            )
+            _write_response_file(syntax_rsp, syntax_arguments)
+            syntax_command = [str(frontend), f"@{syntax_rsp}"]
+            syntax_launch_error = ""
+            syntax_returncode = None
+            syntax_stderr = ""
+            try:
+                syntax_run = subprocess.run(
+                    syntax_command,
+                    cwd=str(Path(row["directory"])),
+                    text=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                    errors="replace",
+                    check=False,
+                )
+                syntax_returncode = syntax_run.returncode
+                syntax_stderr = syntax_run.stderr or ""
+            except OSError as exc:
+                syntax_launch_error = str(exc)
+
         syntax_stderr_path = (
             output / f"native_ast_probe_{language}_syntax.stderr.txt"
         )
@@ -652,11 +727,7 @@ def _run_clang_ast_probes(
             encoding="utf-8",
             newline="\n",
         )
-        syntax_error_lines = [
-            line
-            for line in syntax_stderr.splitlines()
-            if " error:" in line.lower() or "fatal error:" in line.lower()
-        ][:80]
+        syntax_error_lines = _diagnostic_error_lines(syntax_stderr)
 
         target = output / f"native_ast_probe_{language}.json"
         target.write_text("", encoding="utf-8")
@@ -669,6 +740,10 @@ def _run_clang_ast_probes(
         if syntax_returncode == 0:
             ast_arguments = _clang_probe_arguments(
                 frontend, row, source, language, dump_ast=True
+            )
+            ast_arguments = _with_extra_probe_arguments(
+                ast_arguments,
+                compatibility_overrides,
             )
             ast_argument_count = len(ast_arguments)
             _write_response_file(ast_rsp, ast_arguments)
@@ -697,11 +772,7 @@ def _run_clang_ast_probes(
             encoding="utf-8",
             newline="\n",
         )
-        ast_error_lines = [
-            line
-            for line in ast_stderr.splitlines()
-            if " error:" in line.lower() or "fatal error:" in line.lower()
-        ][:80]
+        ast_error_lines = _diagnostic_error_lines(ast_stderr)
 
         valid_json = False
         node_kind = ""
@@ -720,9 +791,16 @@ def _run_clang_ast_probes(
             "language": language,
             "source_path": row["source_path"],
             "success": ast_returncode == 0 and valid_json,
+            "frontend_major": frontend_major,
             "semantic_mode_arguments": row.get(
                 "_semantic_mode_arguments", []
             ),
+            "compatibility_overrides": compatibility_overrides,
+            "initial_syntax_exit_code": initial_syntax_returncode,
+            "initial_syntax_stderr_file": (
+                initial_syntax_stderr_path.as_posix()
+            ),
+            "initial_syntax_error_lines": initial_syntax_error_lines,
             "syntax_exit_code": syntax_returncode,
             "syntax_launch_error": syntax_launch_error,
             "syntax_command": subprocess.list2cmdline(syntax_command),
