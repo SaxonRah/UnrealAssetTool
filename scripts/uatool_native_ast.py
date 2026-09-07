@@ -128,27 +128,54 @@ def discover_clang_frontend(
     return None, checked
 
 
-def _clang_probe_command(
+def _clang_probe_arguments(
     frontend: Path,
     compile_row: dict,
     source: Path,
     language: str,
 ) -> list[str]:
-    command = [str(frontend), "/nologo"]
-    command.append("/TC" if language == "c" else "/TP")
-    for include in compile_row.get("include_paths", []):
-        command.append(f"/I{include}")
-    for definition in compile_row.get("definitions", []):
-        command.append(f"/D{definition}")
-    for forced in compile_row.get("forced_includes", []):
-        command.append(f"/FI{forced}")
-    command.extend([
+    is_clang_cl = "clang-cl" in frontend.name.lower()
+    args: list[str] = []
+
+    if is_clang_cl:
+        args.extend(["/nologo", "/TC" if language == "c" else "/TP"])
+        for include in compile_row.get("include_paths", []):
+            args.append(f"/I{include}")
+        for definition in compile_row.get("definitions", []):
+            args.append(f"/D{definition}")
+        for forced in compile_row.get("forced_includes", []):
+            args.append(f"/FI{forced}")
+    else:
+        args.extend(["-x", "c" if language == "c" else "c++"])
+        for include in compile_row.get("include_paths", []):
+            args.extend(["-I", include])
+        for definition in compile_row.get("definitions", []):
+            args.append(f"-D{definition}")
+        for forced in compile_row.get("forced_includes", []):
+            args.extend(["-include", forced])
+
+    args.extend([
         "-fsyntax-only",
         "-Xclang",
         "-ast-dump=json",
         str(source),
     ])
-    return command
+    return args
+
+
+def _write_response_file(path: Path, arguments: list[str]) -> None:
+    # LLVM response files use normal command-line tokenization. Writing one
+    # independently quoted argument per line keeps CreateProcess command
+    # length tiny while preserving spaces/backslashes in UE include paths.
+    text = "\n".join(
+        subprocess.list2cmdline([argument])
+        for argument in arguments
+    )
+    path.write_text(
+        text + ("\n" if text else ""),
+        encoding="utf-8",
+        newline="\n",
+    )
 
 
 def _select_probe_rows(
@@ -186,21 +213,36 @@ def _run_clang_ast_probes(
     for row, source, language in _select_probe_rows(
         compile_rows, project.parent
     ):
-        command = _clang_probe_command(frontend, row, source, language)
+        arguments = _clang_probe_arguments(
+            frontend, row, source, language
+        )
+        rsp = output / f"native_ast_probe_{language}.rsp"
+        _write_response_file(rsp, arguments)
+        command = [str(frontend), f"@{rsp}"]
         target = output / f"native_ast_probe_{language}.json"
+
+        launch_error = ""
+        returncode = None
+        stderr = ""
         with target.open("w", encoding="utf-8", newline="\n") as stdout_fh:
-            run = subprocess.run(
-                command,
-                cwd=str(Path(row["directory"])),
-                text=True,
-                stdout=stdout_fh,
-                stderr=subprocess.PIPE,
-                errors="replace",
-                check=False,
-            )
+            try:
+                run = subprocess.run(
+                    command,
+                    cwd=str(Path(row["directory"])),
+                    text=True,
+                    stdout=stdout_fh,
+                    stderr=subprocess.PIPE,
+                    errors="replace",
+                    check=False,
+                )
+                returncode = run.returncode
+                stderr = run.stderr or ""
+            except OSError as exc:
+                launch_error = str(exc)
+
         valid_json = False
         node_kind = ""
-        if run.returncode == 0 and target.stat().st_size:
+        if returncode == 0 and target.stat().st_size:
             try:
                 root = json.loads(target.read_text(
                     encoding="utf-8", errors="replace"
@@ -213,10 +255,14 @@ def _run_clang_ast_probes(
             "kind": "clang_ast_probe",
             "language": language,
             "source_path": row["source_path"],
-            "success": run.returncode == 0 and valid_json,
-            "exit_code": run.returncode,
+            "success": returncode == 0 and valid_json,
+            "exit_code": returncode,
+            "launch_error": launch_error,
             "command": subprocess.list2cmdline(command),
-            "stderr_tail": "\n".join((run.stderr or "").splitlines()[-120:]),
+            "response_file": rsp.as_posix(),
+            "response_argument_count": len(arguments),
+            "response_file_bytes": rsp.stat().st_size,
+            "stderr_tail": "\n".join(stderr.splitlines()[-120:]),
             "output": target.as_posix(),
             "output_bytes": target.stat().st_size,
             "valid_json": valid_json,
