@@ -311,6 +311,18 @@ def _validate_ast(output: Path) -> dict:
         raise RuntimeError(
             f"unexpected native AST pass {manifest.get('pass')!r}"
         )
+    if manifest.get("ruleset") != native_ast.RULESET:
+        raise RuntimeError(
+            "native AST ruleset is stale or missing; recapture with the "
+            "current uatool ast-capture"
+        )
+    if (
+        manifest.get("parameter_owner_policy")
+        != native_ast.PARAMETER_OWNER_POLICY
+    ):
+        raise RuntimeError(
+            "native AST parameter ownership policy mismatch"
+        )
     if not manifest.get("success"):
         raise RuntimeError(
             f"native AST capture failed: {manifest.get('error', '')}"
@@ -322,6 +334,18 @@ def _validate_ast(output: Path) -> dict:
             "native AST translation-unit coverage incomplete: "
             f"{resolved_tus}/{expected_tus}"
         )
+    owner_mismatch_count = manifest.get(
+        "parameter_owner_mismatches_rejected"
+    )
+    if owner_mismatch_count is None:
+        raise RuntimeError(
+            "native AST parameter ownership rejection count missing"
+        )
+    if int(owner_mismatch_count or 0) < 0:
+        raise RuntimeError(
+            "native AST parameter ownership rejection count invalid"
+        )
+
     normalized = manifest.get("normalized_counts")
     if not isinstance(normalized, dict):
         raise RuntimeError(
