@@ -81,6 +81,61 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _canonical_jsonl_rows(path: Path) -> list[str]:
+    rows: list[str] = []
+    with path.open("r", encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, 1):
+            text = line.strip()
+            if not text:
+                continue
+            try:
+                value = json.loads(text)
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(
+                    f"invalid JSON in {path}:{line_number}: {exc}"
+                ) from exc
+            rows.append(
+                json.dumps(
+                    value,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                )
+            )
+    rows.sort()
+    return rows
+
+
+def _semantic_jsonl_digest(path: Path) -> str:
+    digest = hashlib.sha256()
+    for row in _canonical_jsonl_rows(path):
+        digest.update(row.encode("utf-8"))
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
+def _reflected_semantic_records(
+    directory: Path,
+) -> dict[str, dict]:
+    result: dict[str, dict] = {}
+    for name in reflected_native.JSONL_FILES:
+        path = directory / name
+        if not path.is_file():
+            raise RuntimeError(
+                f"reflected semantic file missing: {path}"
+            )
+        rows = _canonical_jsonl_rows(path)
+        digest = hashlib.sha256()
+        for row in rows:
+            digest.update(row.encode("utf-8"))
+            digest.update(b"\n")
+        result[name] = {
+            "rows": len(rows),
+            "semantic_sha256": digest.hexdigest(),
+        }
+    return result
+
+
 def _file_record(path: Path) -> dict:
     return {
         "sha256": _sha256(path),
@@ -174,29 +229,26 @@ def _current_reflected_error(
             f"{reflected_error}"
         )
 
-    files = staged_manifest.get("files", {})
-    reflected_records = (
-        files.get("reflected", {})
-        if isinstance(files, dict)
-        else {}
-    )
-    if not isinstance(reflected_records, dict):
-        return "staged reflected file records missing or invalid"
+    staged_reflected = root(output) / REFLECTED_DIR
+    try:
+        current_semantics = _reflected_semantic_records(output)
+        staged_semantics = _reflected_semantic_records(staged_reflected)
+    except RuntimeError as exc:
+        return str(exc)
 
-    for relative, expected in sorted(reflected_records.items()):
-        if not isinstance(expected, dict):
-            return f"staged reflected file record invalid: {relative}"
-        name = Path(relative).name
-        current = output / name
-        if not current.is_file():
-            return f"current reflected native file missing: {name}"
-        observed = _file_record(current)
-        if observed != expected:
-            return (
-                "current reflected native evidence differs from the "
-                f"staged snapshot: {name}; restage native semantics from "
-                "compiler/join evidence captured against the current reflection"
-            )
+    if current_semantics != staged_semantics:
+        for name in reflected_native.JSONL_FILES:
+            if current_semantics.get(name) != staged_semantics.get(name):
+                return (
+                    "current reflected native semantics differ from the "
+                    f"staged snapshot: {name}; restage native semantics "
+                    "from compiler/join evidence captured against the "
+                    "current reflection"
+                )
+        return (
+            "current reflected native semantics differ from the staged "
+            "snapshot"
+        )
     return None
 
 
@@ -245,6 +297,19 @@ def validation_error(
         )
     except Exception as exc:
         return f"staged native evidence invalid: {exc}"
+
+    semantic_records = manifest.get("reflected_semantics")
+    if semantic_records is not None:
+        if not isinstance(semantic_records, dict):
+            return "native stage reflected_semantics invalid"
+        try:
+            observed_semantics = _reflected_semantic_records(
+                base / REFLECTED_DIR
+            )
+        except RuntimeError as exc:
+            return str(exc)
+        if observed_semantics != semantic_records:
+            return "native stage reflected semantic digest mismatch"
 
     expected_counts = manifest.get("counts")
     if not isinstance(expected_counts, dict):
@@ -351,6 +416,9 @@ def stage(
                 ),
             },
             "counts": observed_counts,
+            "reflected_semantics": _reflected_semantic_records(
+                reflected_dest
+            ),
             "files": {
                 "reflected": {
                     f"{REFLECTED_DIR}/{name}": _file_record(
