@@ -137,7 +137,7 @@ def reflected_diff(
     output = Path(output).expanduser().resolve()
     staged = root(output) / REFLECTED_DIR
     result = {
-        "status": "ok",
+        "status": "same",
         "limit": limit,
         "files": [],
         "difference_count": 0,
