@@ -399,6 +399,22 @@ def _vs_llvm_bin_candidates(compiler: str) -> list[Path]:
     ]
 
 
+def _clang_version_major(frontend: Path) -> int:
+    try:
+        run = subprocess.run(
+            [str(frontend), "--version"],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            errors="replace",
+            check=False,
+        )
+    except OSError:
+        return 0
+    match = re.search(r"clang version\s+(\d+)", run.stdout or "")
+    return int(match.group(1)) if match else 0
+
+
 def discover_clang_frontend(
     editor: Path,
     compiler_paths: list[str],
@@ -410,20 +426,16 @@ def discover_clang_frontend(
         checked.append(candidate.as_posix())
         return (candidate if candidate.is_file() else None), checked
 
+    candidates: list[Path] = []
     for name in ("clang-cl.exe", "clang-cl", "clang.exe", "clang"):
         found = shutil.which(name)
         if found:
-            candidate = _norm(Path(found))
-            checked.append(candidate.as_posix())
-            return candidate, checked
+            candidates.append(_norm(Path(found)))
 
     for compiler in compiler_paths:
         for bindir in _vs_llvm_bin_candidates(compiler):
             for exe in ("clang-cl.exe", "clang.exe"):
-                candidate = bindir / exe
-                checked.append(candidate.as_posix())
-                if candidate.is_file():
-                    return _norm(candidate), checked
+                candidates.append(_norm(bindir / exe))
 
     engine_root = native_source._engine_root_from_editor(editor)
     ue_root = engine_root.parent
@@ -434,11 +446,33 @@ def discover_clang_frontend(
         "Win64" / "bin",
     ):
         for exe in ("clang-cl.exe", "clang.exe"):
-            candidate = bindir / exe
-            checked.append(candidate.as_posix())
-            if candidate.is_file():
-                return _norm(candidate), checked
-    return None, checked
+            candidates.append(_norm(bindir / exe))
+
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = candidate.as_posix().lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        checked.append(candidate.as_posix())
+        if candidate.is_file():
+            unique.append(candidate)
+
+    if not unique:
+        return None, checked
+
+    # Prefer the newest installed Clang frontend. For equal versions, prefer
+    # clang-cl because the UBT database was generated for MSVC/CL semantics.
+    unique.sort(
+        key=lambda path: (
+            _clang_version_major(path),
+            1 if "clang-cl" in path.name.lower() else 0,
+            path.as_posix().lower(),
+        ),
+        reverse=True,
+    )
+    return unique[0], checked
 
 
 def _semantic_mode_arguments(entry: dict) -> list[str]:
