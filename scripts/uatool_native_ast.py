@@ -539,6 +539,27 @@ def _semantic_mode_arguments(entry: dict) -> list[str]:
     return result
 
 
+def _precompiled_header_from_entry(entry: dict) -> str:
+    """Return the UBT /Yu header spelling from the exact expanded command."""
+    directory = _norm(Path(str(entry.get("directory", "."))))
+    tokens = native_source._command_tokens(entry)
+    expanded, _ = native_source._expand_response_tokens(tokens, directory)
+    if expanded:
+        expanded = expanded[1:]
+
+    i = 0
+    while i < len(expanded):
+        token = native_source._strip_quotes(str(expanded[i]))
+        if token.startswith("/Yu"):
+            value = native_source._strip_quotes(token[3:])
+            if not value and i + 1 < len(expanded):
+                i += 1
+                value = native_source._strip_quotes(str(expanded[i]))
+            return value
+        i += 1
+    return ""
+
+
 def _attach_semantic_mode_arguments(
     entries: list[dict],
     compile_rows: list[dict],
@@ -555,6 +576,11 @@ def _attach_semantic_mode_arguments(
         entry = by_source.get(source)
         row["_semantic_mode_arguments"] = (
             _semantic_mode_arguments(entry) if entry is not None else []
+        )
+        row["_precompiled_header"] = (
+            _precompiled_header_from_entry(entry)
+            if entry is not None
+            else ""
         )
 
 
@@ -577,6 +603,9 @@ def _clang_probe_arguments(
             args.append(f"/D{definition}")
         for forced in compile_row.get("forced_includes", []):
             args.append(f"/FI{forced}")
+        pch_header = str(compile_row.get("_precompiled_header", "") or "")
+        if pch_header:
+            args.append(f"/FI{pch_header}")
     else:
         args.extend(["-x", "c" if language == "c" else "c++"])
         for include in compile_row.get("include_paths", []):
@@ -585,6 +614,9 @@ def _clang_probe_arguments(
             args.append(f"-D{definition}")
         for forced in compile_row.get("forced_includes", []):
             args.extend(["-include", forced])
+        pch_header = str(compile_row.get("_precompiled_header", "") or "")
+        if pch_header:
+            args.extend(["-include", pch_header])
 
     args.extend(compile_row.get("_semantic_mode_arguments", []))
     args.append("-fsyntax-only")
@@ -910,6 +942,12 @@ def _run_clang_ast_probes(
             "frontend_major": frontend_major,
             "semantic_mode_arguments": row.get(
                 "_semantic_mode_arguments", []
+            ),
+            "precompiled_header": row.get("_precompiled_header", ""),
+            "precompiled_header_replay": (
+                "forced_include_source_header"
+                if row.get("_precompiled_header")
+                else ""
             ),
             "compatibility_overrides": compatibility_overrides,
             "initial_syntax_exit_code": initial_syntax_returncode,
