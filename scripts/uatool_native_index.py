@@ -1629,6 +1629,273 @@ def build_report(
     return result
 
 
+def build_audit(
+    conn: sqlite3.Connection,
+    *,
+    limit: int = 100,
+) -> dict:
+    if limit < 0:
+        raise ValueError("limit must be >= 0")
+    if conn.row_factory is not sqlite3.Row:
+        conn.row_factory = sqlite3.Row
+    if not has_native_index(conn):
+        return {
+            "status": "no_native_index",
+            "message": "uat.db has no imported native semantic rows",
+        }
+
+    joined_rows = conn.execute(
+        """SELECT reflected_function_path,source_symbol_id,
+                  source_qualified_name,source_path,source_line,proof
+           FROM native_function_joins
+           ORDER BY reflected_function_path
+           LIMIT ?""",
+        (limit,),
+    ).fetchall()
+    joined_functions = [_row_dict(row) for row in joined_rows]
+
+    unresolved_rows = conn.execute(
+        """SELECT reflected_function_path,status,reason,json
+           FROM native_join_diagnostics
+           WHERE kind='function_join'
+           ORDER BY reflected_function_path
+           LIMIT ?""",
+        (limit,),
+    ).fetchall()
+    unresolved_functions = [
+        {
+            "reflected_function_path": row["reflected_function_path"],
+            "status": row["status"],
+            "reason": row["reason"],
+            "diagnostic": _json_value(row["json"], {}),
+        }
+        for row in unresolved_rows
+    ]
+
+    duplicate_groups = conn.execute(
+        """SELECT function_occurrence_id,parameter_index,
+                  MIN(function_symbol_id) AS function_symbol_id,
+                  COUNT(*) AS row_count
+           FROM native_compiler_parameters
+           GROUP BY function_occurrence_id,parameter_index
+           HAVING COUNT(*) > 1
+           ORDER BY row_count DESC,function_occurrence_id,parameter_index
+           LIMIT ?""",
+        (limit,),
+    ).fetchall()
+    duplicate_parameter_slots: list[dict] = []
+    for group in duplicate_groups:
+        rows = conn.execute(
+            """SELECT name,type_spelling,source_path,line,column,
+                      translation_unit,evidence
+               FROM native_compiler_parameters
+               WHERE function_occurrence_id=? AND parameter_index=?
+               ORDER BY line,column,name,type_spelling""",
+            (
+                group["function_occurrence_id"],
+                group["parameter_index"],
+            ),
+        ).fetchall()
+        symbol = _symbol_brief(
+            conn,
+            str(group["function_symbol_id"] or ""),
+        )
+        duplicate_parameter_slots.append({
+            "function_occurrence_id": group["function_occurrence_id"],
+            "function_symbol_id": group["function_symbol_id"],
+            "function_name": (
+                symbol.get("qualified_name")
+                or symbol.get("name", "")
+            ),
+            "parameter_index": group["parameter_index"],
+            "row_count": group["row_count"],
+            "rows": [_row_dict(row) for row in rows],
+        })
+
+    target_groups = conn.execute(
+        """SELECT c.target_symbol_id,c.target_usr,c.target_kind,
+                  c.target_name,c.target_type_spelling,
+                  COUNT(*) AS call_count,
+                  COUNT(DISTINCT c.caller_symbol_id) AS caller_symbol_count,
+                  MIN(c.source_path) AS sample_source_path,
+                  MIN(c.line) AS sample_line
+           FROM native_compiler_calls c
+           WHERE c.target_symbol_id <> ''
+             AND NOT EXISTS(
+                 SELECT 1 FROM native_compiler_symbols s
+                 WHERE s.symbol_id=c.target_symbol_id
+             )
+             AND NOT EXISTS(
+                 SELECT 1 FROM native_compiler_symbols s
+                 WHERE c.target_usr<>'' AND s.clang_usr=c.target_usr
+             )
+           GROUP BY c.target_symbol_id,c.target_usr,c.target_kind,
+                    c.target_name,c.target_type_spelling
+           ORDER BY call_count DESC,c.target_name,c.target_symbol_id
+           LIMIT ?""",
+        (limit,),
+    ).fetchall()
+    unmaterialized_project_targets = [
+        _row_dict(row)
+        for row in target_groups
+    ]
+
+    counts = {
+        "joined_functions": int(
+            conn.execute(
+                "SELECT COUNT(*) FROM native_function_joins"
+            ).fetchone()[0]
+        ),
+        "function_diagnostics": int(
+            conn.execute(
+                """SELECT COUNT(*) FROM native_join_diagnostics
+                   WHERE kind='function_join'"""
+            ).fetchone()[0]
+        ),
+        "duplicate_parameter_slots": int(
+            conn.execute(
+                """SELECT COUNT(*) FROM (
+                     SELECT 1 FROM native_compiler_parameters
+                     GROUP BY function_occurrence_id,parameter_index
+                     HAVING COUNT(*) > 1
+                   )"""
+            ).fetchone()[0]
+        ),
+        "unmaterialized_project_target_calls": int(
+            conn.execute(
+                """SELECT COUNT(*) FROM native_compiler_calls c
+                   WHERE c.target_symbol_id <> ''
+                     AND NOT EXISTS(
+                         SELECT 1 FROM native_compiler_symbols s
+                         WHERE s.symbol_id=c.target_symbol_id
+                     )
+                     AND NOT EXISTS(
+                         SELECT 1 FROM native_compiler_symbols s
+                         WHERE c.target_usr<>'' AND s.clang_usr=c.target_usr
+                     )"""
+            ).fetchone()[0]
+        ),
+        "unmaterialized_project_target_identities": int(
+            conn.execute(
+                """SELECT COUNT(*) FROM (
+                     SELECT c.target_symbol_id,c.target_usr,c.target_kind,
+                            c.target_name,c.target_type_spelling
+                     FROM native_compiler_calls c
+                     WHERE c.target_symbol_id <> ''
+                       AND NOT EXISTS(
+                           SELECT 1 FROM native_compiler_symbols s
+                           WHERE s.symbol_id=c.target_symbol_id
+                       )
+                       AND NOT EXISTS(
+                           SELECT 1 FROM native_compiler_symbols s
+                           WHERE c.target_usr<>'' AND s.clang_usr=c.target_usr
+                       )
+                     GROUP BY c.target_symbol_id,c.target_usr,c.target_kind,
+                              c.target_name,c.target_type_spelling
+                   )"""
+            ).fetchone()[0]
+        ),
+    }
+    return {
+        "status": "ok",
+        "limit": limit,
+        "counts": counts,
+        "joined_functions": joined_functions,
+        "unresolved_functions": unresolved_functions,
+        "duplicate_parameter_slots": duplicate_parameter_slots,
+        "unmaterialized_project_targets": unmaterialized_project_targets,
+    }
+
+
+def print_audit(report: dict) -> None:
+    print("=== NATIVE INDEX AUDIT ===")
+    print(f"Status: {report.get('status', '')}")
+    if report.get("status") != "ok":
+        print(report.get("message", ""))
+        return
+
+    counts = report.get("counts", {})
+    print(
+        "Counts: "
+        f"joined_functions={counts.get('joined_functions', 0)} "
+        f"function_diagnostics={counts.get('function_diagnostics', 0)} "
+        f"duplicate_parameter_slots={counts.get('duplicate_parameter_slots', 0)} "
+        "unmaterialized_project_target_calls="
+        f"{counts.get('unmaterialized_project_target_calls', 0)} "
+        "unmaterialized_project_target_identities="
+        f"{counts.get('unmaterialized_project_target_identities', 0)}"
+    )
+
+    joined = report.get("joined_functions", [])
+    print(
+        f"Joined reflected functions: {counts.get('joined_functions', 0)} "
+        f"(showing {len(joined)})"
+    )
+    for row in joined:
+        print(
+            "  "
+            f"{row.get('reflected_function_path', '')} -> "
+            f"{row.get('source_qualified_name', '')} "
+            f"[{row.get('source_path', '')}:"
+            f"{row.get('source_line', 0)}]"
+        )
+
+    unresolved = report.get("unresolved_functions", [])
+    print(
+        f"Function join diagnostics: "
+        f"{counts.get('function_diagnostics', 0)} "
+        f"(showing {len(unresolved)})"
+    )
+    for row in unresolved:
+        print(
+            "  "
+            f"{row.get('reflected_function_path', '')}: "
+            f"{row.get('status', '')} - {row.get('reason', '')}"
+        )
+
+    duplicates = report.get("duplicate_parameter_slots", [])
+    print(
+        f"Duplicate numeric parameter-index slots: "
+        f"{counts.get('duplicate_parameter_slots', 0)} "
+        f"(showing {len(duplicates)})"
+    )
+    for group in duplicates:
+        print(
+            "  "
+            f"{group.get('function_name', '')} "
+            f"[occurrence={group.get('function_occurrence_id', '')}] "
+            f"index={group.get('parameter_index', 0)} "
+            f"rows={group.get('row_count', 0)}"
+        )
+        for row in group.get("rows", []):
+            print(
+                "    "
+                f"{row.get('name', '')}: {row.get('type_spelling', '')} "
+                f"[{row.get('source_path', '')}:"
+                f"{row.get('line', 0)}]"
+            )
+
+    targets = report.get("unmaterialized_project_targets", [])
+    print(
+        "Unmaterialized project call targets: "
+        f"{counts.get('unmaterialized_project_target_calls', 0)} calls / "
+        f"{counts.get('unmaterialized_project_target_identities', 0)} "
+        f"identities (showing {len(targets)})"
+    )
+    for row in targets:
+        print(
+            "  "
+            f"{row.get('target_name', '')} "
+            f"[{row.get('target_kind', '')}] "
+            f"id={row.get('target_symbol_id', '')} "
+            f"usr={row.get('target_usr', '') or '<none>'} "
+            f"calls={row.get('call_count', 0)} "
+            f"callers={row.get('caller_symbol_count', 0)} "
+            f"sample={row.get('sample_source_path', '')}:"
+            f"{row.get('sample_line', 0)}"
+        )
+
+
 def print_report(report: dict) -> None:
     print("=== NATIVE PROGRAM REPORT ===")
     print(f"Query: {report.get('query', '')}")
@@ -1685,6 +1952,10 @@ def print_report(report: dict) -> None:
     join = report.get("join", {})
     if join:
         print(f"Join proof: {join.get('proof', '')}")
+    elif status == "source":
+        print(
+            "Reflected join: <none; exact compiler symbol is source-only>"
+        )
 
     source = report.get("source", {})
     print(
