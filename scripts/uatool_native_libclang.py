@@ -106,7 +106,13 @@ def run_cursor_probe(
         "parse_error_code": result.get("parse_error_code"),
         "diagnostics": result.get("diagnostics", []),
         "counts": result.get(
-            "counts", {"symbols": 0, "parameters": 0, "calls": 0}
+            "counts",
+            {
+                "symbols": 0,
+                "parameters": 0,
+                "calls": 0,
+                "parameter_owner_mismatches": 0,
+            },
         ),
         "files": result.get("files", {}),
         "exception": result.get("exception", ""),
