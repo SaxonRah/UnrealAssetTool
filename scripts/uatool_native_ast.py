@@ -12,6 +12,7 @@ from pathlib import Path
 
 import uatool_native_source as native_source
 import uatool_native_libclang as native_libclang
+import uatool_native_freshness as native_freshness
 
 SCHEMA_VERSION = 1
 RULESET = "libclang_semantic_callable_owner_v1"
@@ -1103,6 +1104,9 @@ def capture(
     output = _norm(output)
     output.mkdir(parents=True, exist_ok=True)
 
+    compiler_input_snapshot = native_freshness.capture_snapshot(
+        project
+    )
     diagnostics: list[dict] = []
     compile_db = native_source._find_existing_compile_database(project, editor)
     if generate_compile_database:
@@ -1165,6 +1169,9 @@ def capture(
                 "success": False,
                 "error": "no clangd-indexer or clang frontend found",
                 "project": project.as_posix(),
+        "compiler_input_snapshot": compiler_input_snapshot,
+            "compiler_input_snapshot": compiler_input_snapshot,
+                "compiler_input_snapshot": compiler_input_snapshot,
                 "compile_database": compile_db.as_posix(),
                 "filtered_compile_database": filtered_db.as_posix(),
                 "project_owned_translation_units": len(entries),
