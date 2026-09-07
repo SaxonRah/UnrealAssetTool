@@ -787,6 +787,17 @@ def _compatibility_overrides_from_stderr(
     if "member access into incomplete type 'UWorld'" in stderr:
         overrides.append("/FIEngine/World.h")
 
+    # ConstructorHelpers::FObjectFinder<UStaticMesh> requires a complete
+    # UStaticMesh type under Clang even when the MSVC build accepts the same
+    # transitive include state. Keep this as an indexing-only supplement and
+    # apply it only when the hard diagnostic explicitly proves incompleteness.
+    if (
+        "incomplete type 'UStaticMesh'" in stderr
+        or "incomplete type 'UStaticMesh' named in nested name specifier"
+        in stderr
+    ):
+        overrides.append("/FIEngine/StaticMesh.h")
+
     return overrides
 
 
