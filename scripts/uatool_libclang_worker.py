@@ -53,12 +53,37 @@ def _slash(value: str) -> str:
     return str(value).replace("\\", "/")
 
 
+EXCLUDED_SOURCE_PARTS = {
+    ".git",
+    ".hg",
+    ".svn",
+    "__pycache__",
+    "binaries",
+    "deriveddatacache",
+    "intermediate",
+    "saved",
+}
+
+
 def _project_relative(value: str, root: Path) -> str | None:
     source = _slash(value)
     prefix = root.resolve().as_posix().rstrip("/") + "/"
-    if source.lower().startswith(prefix.lower()):
-        return source[len(prefix):]
-    return None
+    if not source.lower().startswith(prefix.lower()):
+        return None
+    relative = source[len(prefix):]
+    parts = {part.lower() for part in relative.split("/") if part}
+    if parts & EXCLUDED_SOURCE_PARTS:
+        return None
+    return relative
+
+
+def _is_excluded_physical_path(value: str) -> bool:
+    parts = {
+        part.lower()
+        for part in _slash(value).split("/")
+        if part
+    }
+    return bool(parts & EXCLUDED_SOURCE_PARTS)
 
 
 class LibClang:
@@ -120,6 +145,13 @@ class LibClang:
             ctypes.POINTER(ctypes.c_uint),
             ctypes.POINTER(ctypes.c_uint),
         ]
+        d.clang_getSpellingLocation.argtypes = [
+            CXSourceLocation,
+            ctypes.POINTER(ctypes.c_void_p),
+            ctypes.POINTER(ctypes.c_uint),
+            ctypes.POINTER(ctypes.c_uint),
+            ctypes.POINTER(ctypes.c_uint),
+        ]
         d.clang_getFileName.argtypes = [ctypes.c_void_p]
         d.clang_getFileName.restype = CXString
 
@@ -175,13 +207,23 @@ class LibClang:
             return ""
         return self.string(self.dll.clang_Cursor_getMangling(cursor))
 
-    def location(self, cursor: CXCursor) -> tuple[str, int, int, int]:
+    def _physical_location(
+        self,
+        cursor: CXCursor,
+        *,
+        spelling: bool,
+    ) -> tuple[str, int, int, int]:
         loc = self.dll.clang_getCursorLocation(cursor)
         file_handle = ctypes.c_void_p()
         line = ctypes.c_uint()
         column = ctypes.c_uint()
         offset = ctypes.c_uint()
-        self.dll.clang_getExpansionLocation(
+        getter = (
+            self.dll.clang_getSpellingLocation
+            if spelling
+            else self.dll.clang_getExpansionLocation
+        )
+        getter(
             loc,
             ctypes.byref(file_handle),
             ctypes.byref(line),
@@ -192,6 +234,14 @@ class LibClang:
         if file_handle.value:
             file_name = self.string(self.dll.clang_getFileName(file_handle))
         return _slash(file_name), line.value, column.value, offset.value
+
+    def location(self, cursor: CXCursor) -> tuple[str, int, int, int]:
+        return self._physical_location(cursor, spelling=False)
+
+    def spelling_location(
+        self, cursor: CXCursor
+    ) -> tuple[str, int, int, int]:
+        return self._physical_location(cursor, spelling=True)
 
     def is_null(self, cursor: CXCursor) -> bool:
         return bool(self.dll.clang_Cursor_isNull(cursor))
@@ -341,6 +391,11 @@ class Capture:
     ) -> None:
         kind = self.clang.kind(cursor)
         source_path, line, column, offset = self.location(cursor)
+
+        spelling_file, _, _, _ = self.clang.spelling_location(cursor)
+        if spelling_file and _is_excluded_physical_path(spelling_file):
+            return
+
         effective_path = source_path or inherited_project_path
 
         # At the TU root, external declarations are siblings of project
@@ -409,9 +464,11 @@ class Capture:
             self.calls.append({
                 "call_id": _stable_id(
                     f"{self.translation_unit}|{source_path}|{offset}|"
-                    f"{target_usr}|{target_kind}|{target_name}"
+                    f"{function_context[1]}|{target_usr}|"
+                    f"{target_kind}|{target_name}"
                 ),
                 "caller_symbol_id": function_context[0],
+                "caller_occurrence_id": function_context[1],
                 "source_path": source_path,
                 "translation_unit": self.translation_unit,
                 "language": self.language,
@@ -560,6 +617,10 @@ def run(config_path: Path) -> int:
                 row["parameter_index"],
             )
         )
+        unique_calls: dict[str, dict] = {}
+        for row in capture.calls:
+            unique_calls.setdefault(row["call_id"], row)
+        capture.calls = list(unique_calls.values())
         capture.calls.sort(
             key=lambda row: (
                 row["source_path"].lower(),
