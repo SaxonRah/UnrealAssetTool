@@ -269,6 +269,7 @@ class NativeStageSchema1Test(unittest.TestCase):
 
     def test_normal_bundle_rejects_invalid_native_stage(self) -> None:
         self.stage()
+        self.install_current_reflection()
         _, compiler, _ = native_stage.roots(self.output)
         (compiler / native_ast.CALLS).unlink()
 
