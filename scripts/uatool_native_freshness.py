@@ -170,6 +170,17 @@ def validation_error(snapshot: object) -> str | None:
         or any(ch not in "0123456789abcdef" for ch in aggregate.lower())
     ):
         return "compiler input snapshot aggregate SHA-256 invalid"
+
+    digest = hashlib.sha256()
+    for record in files:
+        digest.update(str(record["path"]).encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(str(record["sha256"]).encode("ascii"))
+        digest.update(b"\0")
+        digest.update(str(int(record["bytes"])).encode("ascii"))
+        digest.update(b"\n")
+    if digest.hexdigest() != aggregate:
+        return "compiler input snapshot aggregate SHA-256 mismatch"
     return None
 
 
