@@ -371,6 +371,29 @@ class NativeIndexSchema1Tests(unittest.TestCase):
         finally:
             conn.close()
 
+    def test_import_rejects_stale_ast_callable_ruleset(self) -> None:
+        manifest_path = self.compiler / native_ast.MANIFEST
+        manifest = json.loads(
+            manifest_path.read_text(encoding="utf-8")
+        )
+        manifest.pop("ruleset", None)
+        manifest_path.write_text(
+            json.dumps(manifest) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "native AST ruleset is stale or missing",
+        ):
+            native_index.import_database(
+                self.db,
+                self.reflected,
+                self.compiler,
+                self.joins,
+            )
+
     def test_import_preserves_authoritative_row_counts(self) -> None:
         counts = native_index.import_database(
             self.db,
