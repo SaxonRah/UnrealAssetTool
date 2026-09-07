@@ -410,7 +410,7 @@ def _compiler_environment(
         ):
             if upper.startswith(prefix.upper()):
                 kind = label
-                value = token[len(prefix):]
+                value = _strip_quotes(token[len(prefix):])
                 if not value and i + 1 < len(tokens):
                     i += 1
                     value = _strip_quotes(tokens[i])
