@@ -345,7 +345,7 @@ class Capture:
                 f"{line}|{column}|{offset}|{type_spelling}"
             )
         occurrence = _stable_id(
-            f"occurrence|{source_path}|{kind}|{offset}|"
+            f"occurrence|{self.language}|{source_path}|{kind}|{offset}|"
             f"{line}|{column}|{name}|{type_spelling}"
         )
         return semantic, occurrence
@@ -603,6 +603,10 @@ def run(config_path: Path) -> int:
             if source_path:
                 capture.visit(child, source_path, None)
 
+        unique_symbols: dict[str, dict] = {}
+        for row in capture.symbols:
+            unique_symbols.setdefault(row["occurrence_id"], row)
+        capture.symbols = list(unique_symbols.values())
         capture.symbols.sort(
             key=lambda row: (
                 row["source_path"].lower(),
