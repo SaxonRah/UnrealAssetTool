@@ -285,6 +285,80 @@ class NativeASTSchema1Test(unittest.TestCase):
                 calls[0]["caller_symbol_id"],
             )
 
+    def test_source_offset_prevents_local_symbol_id_collisions(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "Source" / "Sample" / "sample.c"
+            source.parent.mkdir(parents=True)
+            ast = {
+                "kind": "TranslationUnitDecl",
+                "inner": [
+                    {
+                        "id": "0x100",
+                        "kind": "VarDecl",
+                        "loc": {
+                            "file": source.as_posix(),
+                            "col": 12,
+                            "offset": 100,
+                        },
+                        "name": "i",
+                        "type": {"qualType": "size_t"},
+                    },
+                    {
+                        "id": "0x101",
+                        "kind": "VarDecl",
+                        "loc": {
+                            "col": 12,
+                            "offset": 200,
+                        },
+                        "name": "i",
+                        "type": {"qualType": "size_t"},
+                    },
+                ],
+            }
+            ast_path = root / "locals.json"
+            ast_path.write_text(json.dumps(ast), encoding="utf-8")
+
+            symbols, _, _ = native_ast._normalize_ast_probe(
+                ast_path,
+                root,
+                "Source/Sample/sample.c",
+                "c",
+            )
+
+            self.assertEqual(len(symbols), 2)
+            self.assertEqual(
+                len({row["symbol_id"] for row in symbols}),
+                2,
+            )
+            self.assertEqual(
+                len({row["occurrence_id"] for row in symbols}),
+                2,
+            )
+
+    def test_compatibility_overrides_are_inserted_before_source(self) -> None:
+        arguments = [
+            "/nologo",
+            "/TP",
+            "-fsyntax-only",
+            "C:/Source/sample.cpp",
+        ]
+        result = native_ast._with_extra_probe_arguments(
+            arguments,
+            [
+                "/D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH=1",
+                "-Wno-invalid-constexpr",
+            ],
+        )
+        self.assertEqual(result[-1], "C:/Source/sample.cpp")
+        self.assertEqual(
+            result[-3:-1],
+            [
+                "/D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH=1",
+                "-Wno-invalid-constexpr",
+            ],
+        )
+
     def test_document_counts_cover_symbols_refs_and_relations(self) -> None:
         text = """--- !Symbol
 ID: AAA
@@ -321,6 +395,9 @@ Object: BBB
         self.assertIn("_semantic_mode_arguments", source)
         self.assertIn("syntax_exit_code", source)
         self.assertIn("syntax_error_lines", source)
+        self.assertIn("compatibility_overrides", source)
+        self.assertIn("STL1000: Unexpected compiler version", source)
+        self.assertIn("_clang_version_major", source)
         self.assertIn("_normalize_successful_probes", source)
         self.assertIn('"compiler_resolved"', source)
         self.assertIn('f"@{syntax_rsp}"', source)
