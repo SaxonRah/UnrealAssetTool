@@ -266,6 +266,73 @@ class NativeStageSchema1Test(unittest.TestCase):
             )
         )
 
+    def test_reflected_diff_reports_exact_changed_fields(self) -> None:
+        self.stage()
+        self.install_current_reflection()
+
+        current_types = self.output / "native_types.jsonl"
+        rows = [
+            json.loads(line)
+            for line in current_types.read_text(
+                encoding="utf-8"
+            ).splitlines()
+            if line.strip()
+        ]
+        identity = rows[0]["type_path"]
+        rows[0]["class_flags_hex"] = "0xDEADBEEF"
+        current_types.write_text(
+            "".join(
+                json.dumps(row, separators=(",", ":")) + "\n"
+                for row in rows
+            ),
+            encoding="utf-8",
+            newline="\n",
+        )
+
+        report = native_stage.reflected_diff(
+            self.output,
+            limit=20,
+        )
+        self.assertEqual(report["status"], "different")
+        file_row = next(
+            row
+            for row in report["files"]
+            if row["filename"] == "native_types.jsonl"
+        )
+        self.assertEqual(file_row["status"], "different")
+        changed = next(
+            row
+            for row in file_row["differences"]
+            if row["identity"] == identity
+        )
+        self.assertEqual(changed["kind"], "changed")
+        self.assertIn("class_flags_hex", changed["fields"])
+
+    def test_reflected_diff_accepts_reordered_rows(self) -> None:
+        self.stage()
+        self.install_current_reflection()
+
+        current_types = self.output / "native_types.jsonl"
+        lines = [
+            line
+            for line in current_types.read_text(
+                encoding="utf-8"
+            ).splitlines()
+            if line.strip()
+        ]
+        current_types.write_text(
+            "\n".join(reversed(lines)) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+
+        report = native_stage.reflected_diff(
+            self.output,
+            limit=20,
+        )
+        self.assertEqual(report["status"], "same")
+        self.assertEqual(report["difference_count"], 0)
+
     def test_current_reflection_real_semantic_change_is_rejected(self) -> None:
         self.stage()
         self.install_current_reflection()
@@ -414,6 +481,11 @@ class NativeStageSchema1Test(unittest.TestCase):
     def test_canonical_launcher_wires_stage_to_db_and_bundle(self) -> None:
         source = (SCRIPTS / "uatool.py").read_text(encoding="utf-8")
         self.assertIn('prog="uatool native-stage"', source)
+        self.assertIn('prog="uatool native-stage-diff"', source)
+        self.assertIn(
+            'sys.argv[1] == "native-stage-diff"',
+            source,
+        )
         self.assertIn('sys.argv[1] == "native-stage"', source)
         self.assertIn("native_stage.load_database(conn, output)", source)
         self.assertIn("*native_stage.BUNDLE_FILES", source)
