@@ -157,7 +157,54 @@ def _verify_file_records(
     return None
 
 
-def validation_error(output: Path) -> str | None:
+def _current_reflected_error(
+    output: Path,
+    staged_manifest: dict,
+) -> str | None:
+    current_manifest = output / reflected_native.MANIFEST_FILE
+    if not current_manifest.is_file():
+        return (
+            "current normal reflected native manifest is missing; "
+            "run a normal scan before building/bundling staged native semantics"
+        )
+    reflected_error = reflected_native.validation_error(output)
+    if reflected_error:
+        return (
+            "current normal reflected native evidence is invalid: "
+            f"{reflected_error}"
+        )
+
+    files = staged_manifest.get("files", {})
+    reflected_records = (
+        files.get("reflected", {})
+        if isinstance(files, dict)
+        else {}
+    )
+    if not isinstance(reflected_records, dict):
+        return "staged reflected file records missing or invalid"
+
+    for relative, expected in sorted(reflected_records.items()):
+        if not isinstance(expected, dict):
+            return f"staged reflected file record invalid: {relative}"
+        name = Path(relative).name
+        current = output / name
+        if not current.is_file():
+            return f"current reflected native file missing: {name}"
+        observed = _file_record(current)
+        if observed != expected:
+            return (
+                "current reflected native evidence differs from the "
+                f"staged snapshot: {name}; restage native semantics from "
+                "compiler/join evidence captured against the current reflection"
+            )
+    return None
+
+
+def validation_error(
+    output: Path,
+    *,
+    require_current_reflected: bool = False,
+) -> str | None:
     output = Path(output).expanduser().resolve()
     base = root(output)
     manifest = read_manifest(output)
@@ -211,6 +258,10 @@ def validation_error(output: Path) -> str | None:
             "native stage row counts mismatch: "
             f"manifest={expected_counts} observed={observed_counts}"
         )
+    if require_current_reflected:
+        error = _current_reflected_error(output, manifest)
+        if error:
+            return error
     return None
 
 
@@ -359,7 +410,10 @@ def load_database(
 ) -> dict[str, int]:
     if not has_stage(output):
         return {}
-    error = validation_error(output)
+    error = validation_error(
+        output,
+        require_current_reflected=True,
+    )
     if error:
         raise RuntimeError(f"native semantic stage incomplete: {error}")
     reflected, compiler, joins = roots(output)
