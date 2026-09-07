@@ -897,6 +897,31 @@ def load_database(
         "parameter_identity_stats_json": _j(
             data["parameter_identity_stats"]
         ),
+        "compiler_capture_stats_json": _j({
+            "ruleset": str(
+                data["manifests"]["compiler"].get("ruleset", "") or ""
+            ),
+            "parameter_owner_policy": str(
+                data["manifests"]["compiler"].get(
+                    "parameter_owner_policy", ""
+                ) or ""
+            ),
+            "call_owner_policy": str(
+                data["manifests"]["compiler"].get(
+                    "call_owner_policy", ""
+                ) or ""
+            ),
+            "parameter_owner_mismatches_rejected": int(
+                data["manifests"]["compiler"].get(
+                    "parameter_owner_mismatches_rejected", 0
+                ) or 0
+            ),
+            "nested_callable_calls_suppressed": int(
+                data["manifests"]["compiler"].get(
+                    "nested_callable_calls_suppressed", 0
+                ) or 0
+            ),
+        }),
         "call_target_stats_json": _j(data["call_target_stats"]),
     }
     conn.executemany(
@@ -954,6 +979,22 @@ def read_parameter_identity_stats(database: Path) -> dict[str, int]:
             str(key): int(count or 0)
             for key, count in value.items()
         }
+    finally:
+        conn.close()
+
+
+def read_compiler_capture_stats(database: Path) -> dict:
+    database = Path(database).expanduser().resolve()
+    conn = sqlite3.connect(database)
+    try:
+        row = conn.execute(
+            """SELECT value FROM native_index_meta
+               WHERE key='compiler_capture_stats_json'"""
+        ).fetchone()
+        if row is None:
+            return {}
+        value = _json_value(row[0], {})
+        return value if isinstance(value, dict) else {}
     finally:
         conn.close()
 
@@ -1683,6 +1724,18 @@ def build_audit(
             "message": "uat.db has no imported native semantic rows",
         }
 
+    capture_row = conn.execute(
+        """SELECT value FROM native_index_meta
+           WHERE key='compiler_capture_stats_json'"""
+    ).fetchone()
+    compiler_capture = (
+        _json_value(capture_row["value"], {})
+        if capture_row is not None
+        else {}
+    )
+    if not isinstance(compiler_capture, dict):
+        compiler_capture = {}
+
     joined_rows = conn.execute(
         """SELECT reflected_function_path,source_symbol_id,
                   source_qualified_name,source_path,source_line,proof
@@ -1839,6 +1892,7 @@ def build_audit(
         "status": "ok",
         "limit": limit,
         "counts": counts,
+        "compiler_capture": compiler_capture,
         "joined_functions": joined_functions,
         "unresolved_functions": unresolved_functions,
         "duplicate_parameter_slots": duplicate_parameter_slots,
@@ -1854,6 +1908,17 @@ def print_audit(report: dict) -> None:
         return
 
     counts = report.get("counts", {})
+    capture = report.get("compiler_capture", {})
+    if capture:
+        print(
+            "Compiler capture: "
+            f"ruleset={capture.get('ruleset', '')} "
+            "parameter_owner_mismatches_rejected="
+            f"{capture.get('parameter_owner_mismatches_rejected', 0)} "
+            "nested_callable_calls_suppressed="
+            f"{capture.get('nested_callable_calls_suppressed', 0)}"
+        )
+
     print(
         "Counts: "
         f"joined_functions={counts.get('joined_functions', 0)} "
