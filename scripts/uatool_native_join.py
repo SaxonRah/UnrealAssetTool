@@ -104,16 +104,68 @@ def _normalize_cpp_type(value: str) -> str:
 
 
 def _reflected_parameter_type(row: dict) -> str:
+    """Canonical reflected spelling before UHT passing-mode projection."""
     text = str(row.get("cpp_type", "") or "")
-    is_const = bool(row.get("const_parameter"))
-    is_ref = bool(row.get("reference_parameter"))
-
     normalized = _normalize_cpp_type(text)
-    if is_const and not normalized.startswith("const "):
+    if bool(row.get("const_parameter")) and not normalized.startswith("const "):
         normalized = "const " + normalized
-    if is_ref and not normalized.endswith("&"):
+    if bool(row.get("reference_parameter")) and not normalized.endswith("&"):
         normalized += "&"
     return _normalize_cpp_type(normalized)
+
+
+def _reflected_parameter_source_types(row: dict) -> list[str]:
+    """Exact authored spellings that project to this reflected parameter.
+
+    Reflection preserves property type and Parm/OutParm/ReferenceParm/ConstParm
+    state, but UHT does not preserve every authored C++ passing convention.
+    In schema 1 we model only erasures proven by the real corpus and normal
+    UFUNCTION thunk semantics:
+      - out/inout parameters are authored as references;
+      - explicit ReferenceParm remains a reference;
+      - an input FString reflected as StrProperty may be authored by value or
+        as const FString&, both of which project to the same reflected shape.
+
+    Candidate source methods still must collapse to one libclang USR identity;
+    these alternatives never choose between overloads heuristically.
+    """
+    base = _normalize_cpp_type(str(row.get("cpp_type", "") or ""))
+    if bool(row.get("const_parameter")) and not base.startswith("const "):
+        base = "const " + base
+    base = _normalize_cpp_type(base)
+
+    parameter_kind = str(row.get("parameter_kind", "") or "")
+    if parameter_kind in {"out", "inout"} or bool(
+        row.get("reference_parameter")
+    ):
+        value = base if base.endswith("&") else base + "&"
+        return [_normalize_cpp_type(value)]
+
+    if (
+        str(row.get("property_class", "") or "") == "StrProperty"
+        and not bool(row.get("const_parameter"))
+    ):
+        return sorted({
+            base,
+            _normalize_cpp_type(f"const {base}&"),
+        })
+
+    return [base]
+
+
+def _signature_matches_projection(
+    source_signature: list[str],
+    reflected_options: list[list[str]],
+) -> bool:
+    return (
+        len(source_signature) == len(reflected_options)
+        and all(
+            source_type in accepted
+            for source_type, accepted in zip(
+                source_signature, reflected_options
+            )
+        )
+    )
 
 
 def _source_parameter_signature(
@@ -341,8 +393,12 @@ def capture(
             ],
             key=lambda row: int(row.get("parameter_index", 0) or 0),
         )
-        expected_signature = [
+        reflected_signature = [
             _reflected_parameter_type(row)
+            for row in reflected_params
+        ]
+        accepted_source_types = [
+            _reflected_parameter_source_types(row)
             for row in reflected_params
         ]
 
@@ -360,7 +416,10 @@ def capture(
                 source_parameters,
             )
             observed_signatures.add(tuple(signature))
-            if signature == expected_signature:
+            if _signature_matches_projection(
+                signature,
+                accepted_source_types,
+            ):
                 matches_by_symbol.setdefault(
                     str(candidate.get("symbol_id", "")), []
                 ).append((candidate, signature))
@@ -382,7 +441,8 @@ def capture(
                     if not matches_by_symbol
                     else "multiple exact compiler semantic identities"
                 ),
-                "expected_parameter_signature": expected_signature,
+                "reflected_parameter_signature": reflected_signature,
+                "accepted_source_parameter_types": accepted_source_types,
                 "observed_parameter_signatures": [
                     list(value)
                     for value in sorted(observed_signatures)
@@ -406,7 +466,8 @@ def capture(
                 reflected.get("module_name", "")
             ),
             "reflected_name": function_name,
-            "reflected_parameter_signature": expected_signature,
+            "reflected_parameter_signature": reflected_signature,
+            "accepted_source_parameter_types": accepted_source_types,
             "source_symbol_id": source_symbol_id,
             "source_clang_usr": str(
                 representative.get("clang_usr", "")
@@ -424,13 +485,14 @@ def capture(
             "source_qualified_name": str(
                 representative.get("qualified_name", "")
             ),
-            "source_parameter_signature": expected_signature,
+            "source_parameter_signature": list(matched[0][1]),
             "compatibility_overrides": _proof_compatibility(
                 occurrence_rows
             ),
             "proof": (
                 "proven_owner_type+exact_qualified_name+"
-                "exact_parameter_signature+single_libclang_usr_identity"
+                "reflection_projection_parameter_match+"
+                "single_libclang_usr_identity"
             ),
             "evidence": "reflected_native_schema1+libclang_cursor_schema1",
         }
@@ -512,7 +574,7 @@ def capture(
             ),
             "functions": (
                 "proven owner type + exact qualified function name + "
-                "exact non-return parameter signature + "
+                "exact reflected-to-source parameter projection + "
                 "single libclang USR-backed semantic identity"
             ),
             "fuzzy_matching": False,
