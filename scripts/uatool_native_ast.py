@@ -133,6 +133,7 @@ def _symbol_identity(node: dict, source_path: str) -> str:
     location = _node_location(node)
     line = int(location.get("line", 0) or 0)
     column = int(location.get("col", 0) or 0)
+    offset = int(location.get("offset", 0) or 0)
 
     if mangled and storage != "static":
         key = f"{kind}|mangled|{mangled}|{qual_type}"
@@ -141,7 +142,7 @@ def _symbol_identity(node: dict, source_path: str) -> str:
     else:
         key = (
             f"{kind}|source|{source_path}|{name}|"
-            f"{line}|{column}|{qual_type}"
+            f"{line}|{column}|{offset}|{qual_type}"
         )
     return _stable_id(key)
 
@@ -218,8 +219,15 @@ def _normalize_ast_probe(
             kind in {"RecordDecl", "CXXRecordDecl", "EnumDecl"}
             and bool(node.get("completeDefinition"))
         )
+        occurrence_id = _stable_id(
+            f"occurrence|{source_path}|{kind}|"
+            f"{location.get('offset', 0)}|{location.get('line', 0)}|"
+            f"{location.get('col', 0)}|{node.get('name', '')}|"
+            f"{(node.get('type') or {}).get('qualType', '')}"
+        )
         symbols.append({
             "symbol_id": stable,
+            "occurrence_id": occurrence_id,
             "clang_node_id": clang_id,
             "source_path": source_path,
             "translation_unit": translation_unit,
@@ -245,6 +253,7 @@ def _normalize_ast_probe(
                 ploc = _node_location(child)
                 parameters.append({
                     "function_symbol_id": stable,
+                    "function_occurrence_id": occurrence_id,
                     "parameter_index": parameter_index,
                     "name": str(child.get("name", "") or ""),
                     "type_spelling": str(
