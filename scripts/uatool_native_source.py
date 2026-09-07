@@ -718,6 +718,39 @@ def _parameter_name(spelling: str) -> str:
     return ""
 
 
+def _lexical_parameter_list_is_plausible(raw_params: str) -> bool:
+    """Reject obvious expression lists masquerading as parameters.
+
+    This fallback intentionally prefers false negatives to false function
+    declarations. Compiler-derived AST evidence will provide exact identity.
+    """
+    stripped = raw_params.strip()
+    if stripped in {"", "void"}:
+        return True
+
+    for spelling in _split_parameters(raw_params):
+        before_default = spelling.split("=", 1)[0].strip()
+        if not before_default:
+            continue
+
+        # Constructor-style local variables commonly appear as Type Name(*Value)
+        # or Type Name(*Pair.Member). Those are expressions, not parameters.
+        if re.fullmatch(r"[*&]\s*[A-Za-z_]\w*", before_default):
+            return False
+        if "." in before_default or "->" in before_default:
+            return False
+
+        # Nested calls/macros before a default-value '=' are expression evidence,
+        # e.g. CubeMesh(TEXT(...)) or Params(SCENE_QUERY_STAT(...), Flag).
+        if re.search(
+            r"\b[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*\s*\(",
+            before_default,
+        ):
+            return False
+
+    return True
+
+
 _FUNCTION_RE = re.compile(
     r"""(?mx)
     ^[ \t]*
@@ -876,6 +909,8 @@ def scan_lexical_file(
         prefix_words = re.findall(r"[A-Za-z_]\w*", prefix)
         if prefix_words and prefix_words[0] in _CONTROL_NAMES:
             continue
+        if prefix_words and prefix_words[0] == "typedef":
+            continue
         if any(op in prefix for op in ("=", "->")):
             continue
         # A declaration prefix may contain templates, pointers, references,
@@ -886,6 +921,12 @@ def scan_lexical_file(
         if "(" in prefix or ")" in prefix:
             continue
         if not is_constructor and not prefix:
+            continue
+
+        raw_params = text[
+            m.start("params"):m.end("params")
+        ]
+        if not _lexical_parameter_list_is_plausible(raw_params):
             continue
 
         line, column = _line_col(text, m.start("name"))
@@ -935,9 +976,6 @@ def scan_lexical_file(
             }
         )
 
-        raw_params = text[
-            m.start("params"):m.end("params")
-        ]
         param_parts = (
             []
             if raw_params.strip() in {"", "void"}
