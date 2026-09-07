@@ -79,6 +79,7 @@ class NativeASTSchema1Test(unittest.TestCase):
                 row,
                 source,
                 "cpp",
+                dump_ast=True,
             )
             self.assertIn("/TP", arguments)
             self.assertIn("/IC:/inc one", arguments)
@@ -102,6 +103,7 @@ class NativeASTSchema1Test(unittest.TestCase):
                 row,
                 source,
                 "c",
+                dump_ast=False,
             )
             self.assertEqual(arguments[:2], ["-x", "c"])
             self.assertIn("-I", arguments)
@@ -109,6 +111,36 @@ class NativeASTSchema1Test(unittest.TestCase):
             self.assertIn("-DFOO=1", arguments)
             self.assertIn("-include", arguments)
             self.assertIn("C:/defs.h", arguments)
+
+    def test_semantic_mode_arguments_replay_ubt_language_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            rsp = write(
+                root / "sample.rsp",
+                (
+                    "/std:c++20 /permissive- /Zc:__cplusplus "
+                    "/EHsc /MDd /arch:AVX2 /fp:fast "
+                    "/O2 /W4 /DIGNORED_DEFINE=1\n"
+                ),
+            )
+            source = write(root / "sample.cpp", "int sample() { return 0; }\n")
+            entry = {
+                "directory": str(root),
+                "file": str(source),
+                "arguments": ["cl.exe", f"@{rsp}", "/c", str(source)],
+            }
+            self.assertEqual(
+                native_ast._semantic_mode_arguments(entry),
+                [
+                    "/std:c++20",
+                    "/permissive-",
+                    "/Zc:__cplusplus",
+                    "/EHsc",
+                    "/MDd",
+                    "/arch:AVX2",
+                    "/fp:fast",
+                ],
+            )
 
     def test_probe_response_file_preserves_spaced_arguments(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -177,6 +209,8 @@ Object: BBB
         self.assertIn("discover_clang_frontend", source)
         self.assertIn("_run_clang_ast_probes", source)
         self.assertIn("_write_response_file", source)
+        self.assertIn("_semantic_mode_arguments", source)
+        self.assertIn("syntax_exit_code", source)
         self.assertIn('f"@{rsp}"', source)
 
 
