@@ -486,6 +486,7 @@ def run(config_path: Path) -> int:
         "files": {},
     }
 
+    clang = None
     index = None
     tu = ctypes.c_void_p()
     try:
@@ -599,12 +600,12 @@ def run(config_path: Path) -> int:
         )
         return 3
     finally:
-        if tu.value:
+        if clang is not None and tu.value:
             try:
                 clang.dll.clang_disposeTranslationUnit(tu)
             except Exception:
                 pass
-        if index:
+        if clang is not None and index:
             try:
                 clang.dll.clang_disposeIndex(index)
             except Exception:
