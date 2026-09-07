@@ -766,6 +766,16 @@ class NativeASTSchema1Test(unittest.TestCase):
             source,
         )
         self.assertIn(
+            '"nested_callable_calls_suppressed"',
+            source,
+        )
+        self.assertIn(
+            "inside_unmaterialized_local_callable",
+            (
+                SCRIPTS / "uatool_libclang_worker.py"
+            ).read_text(encoding="utf-8"),
+        )
+        self.assertIn(
             "parameter_belongs_to_context",
             (
                 SCRIPTS / "uatool_libclang_worker.py"
