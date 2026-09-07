@@ -233,6 +233,14 @@ class NativeJoinSchema1Test(unittest.TestCase):
                 ["const FString&"],
             )
             self.assertEqual(
+                function_rows[0]["accepted_source_parameter_types"],
+                [["const FString&"]],
+            )
+            self.assertEqual(
+                function_rows[0]["source_parameter_signature"],
+                ["const FString&"],
+            )
+            self.assertEqual(
                 function_rows[0]["compatibility_overrides"],
                 ["-Wno-invalid-constexpr"],
             )
@@ -253,6 +261,42 @@ class NativeJoinSchema1Test(unittest.TestCase):
             self.assertEqual(manifest["counts"]["unmatched_types"], 1)
             self.assertEqual(manifest["counts"]["joined_functions"], 0)
 
+    def test_out_parameter_projects_to_reference(self) -> None:
+        row = {
+            "cpp_type": "FString",
+            "property_class": "StrProperty",
+            "parameter_kind": "out",
+            "const_parameter": False,
+            "reference_parameter": False,
+        }
+        self.assertEqual(
+            native_join._reflected_parameter_source_types(row),
+            ["FString&"],
+        )
+
+    def test_input_fstring_models_reflection_erasure_without_guessing(self) -> None:
+        row = {
+            "cpp_type": "FString",
+            "property_class": "StrProperty",
+            "parameter_kind": "input",
+            "const_parameter": False,
+            "reference_parameter": False,
+        }
+        accepted = native_join._reflected_parameter_source_types(row)
+        self.assertEqual(accepted, ["FString", "const FString&"])
+        self.assertTrue(
+            native_join._signature_matches_projection(
+                ["const FString&"],
+                [accepted],
+            )
+        )
+        self.assertTrue(
+            native_join._signature_matches_projection(
+                ["FString"],
+                [accepted],
+            )
+        )
+
     def test_signature_mismatch_is_not_joined(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -262,7 +306,7 @@ class NativeJoinSchema1Test(unittest.TestCase):
             reflected.mkdir()
             ast.mkdir()
             make_reflected(reflected)
-            make_ast(ast, method_type="FString")
+            make_ast(ast, method_type="int32")
 
             manifest = native_join.capture(reflected, ast, output)
             self.assertEqual(manifest["counts"]["joined_types"], 1)
