@@ -30,6 +30,7 @@ import uatool_build_perf as build_perf
 import uatool_verify_bundle as bundle_verify
 import uatool_version as version
 import uatool_beta_rc as beta_rc
+import uatool_native_source as native_source
 
 # Public derived schema 40 distinguishes authored Bind/Assign sites from
 # resolved delegate subscriptions. Zero-input sites remain diagnostic evidence
@@ -1021,7 +1022,69 @@ def _verify_bundle_cli(argv: list[str]) -> int:
     return 0
 
 
+
+def _native_source_cli(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="uatool source-capture",
+        description=(
+            "capture project-owned native C/C++ source plus UBT compiler "
+            "database evidence"
+        ),
+    )
+    parser.add_argument("project", help="target .uproject")
+    parser.add_argument(
+        "--editor",
+        required=True,
+        help="UnrealEditor-*-Cmd.exe used to resolve the Engine/UBT installation",
+    )
+    parser.add_argument(
+        "--output",
+        help=(
+            "output directory; defaults to <project>/.uatool-native-source1"
+        ),
+    )
+    parser.add_argument(
+        "--configuration",
+        default="DebugGame",
+        choices=("DebugGame", "Development"),
+        help="Editor target configuration used by GenerateClangDatabase",
+    )
+    parser.add_argument(
+        "--no-generate-compile-db",
+        action="store_true",
+        help=(
+            "reuse an existing compile_commands.json if present and skip "
+            "UnrealBuildTool GenerateClangDatabase"
+        ),
+    )
+    args = parser.parse_args(argv)
+
+    project = Path(args.project).expanduser().resolve()
+    editor = Path(args.editor).expanduser().resolve()
+    output = (
+        Path(args.output).expanduser().resolve()
+        if args.output
+        else project.parent / ".uatool-native-source1"
+    )
+
+    manifest = native_source.capture(
+        project,
+        editor,
+        output,
+        configuration=args.configuration,
+        generate_compile_database=not args.no_generate_compile_db,
+    )
+    native_source.print_summary(manifest)
+    print(f"native source output: {output}")
+    return 0
+
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "source-capture":
+        try:
+            return _native_source_cli(sys.argv[2:])
+        except Exception as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 48
     if len(sys.argv) > 1 and sys.argv[1] == "beta-rc-check":
         try:
             return _beta_rc_cli(sys.argv[2:])
