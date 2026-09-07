@@ -1151,6 +1151,9 @@ def capture(
             "checked": libclang_checked,
             "selected": libclang.as_posix() if libclang else "",
         })
+        translation_units = _translation_unit_rows(
+            compile_rows, project.parent
+        )
         probe_diagnostics, probe_outputs = _run_clang_ast_probes(
             frontend, libclang, compile_rows, project, output
         )
@@ -1158,8 +1161,23 @@ def capture(
         normalized_counts = _normalize_successful_probes(
             output, probe_diagnostics, project
         )
-        probe_success = _probe_languages_successful(
-            probe_diagnostics
+        probe_success = _translation_units_successful(
+            probe_diagnostics,
+            translation_units,
+        )
+        resolved_translation_units = sorted({
+            str(row.get("source_path", ""))
+            for row in probe_diagnostics
+            if row.get("kind") == "libclang_cursor_probe"
+            and row.get("success")
+        })
+        expected_translation_units = sorted(
+            row[0]["source_path"]
+            for row in translation_units
+        )
+        failed_translation_units = sorted(
+            set(expected_translation_units)
+            - set(resolved_translation_units)
         )
         diagnostics.append({
             "kind": "clang_frontend_discovery",
@@ -1173,11 +1191,19 @@ def capture(
             "schema_version": SCHEMA_VERSION,
             "pass": "UnrealAssetToolNativeAST",
             "success": probe_success,
-            "error": "" if probe_success else "clang frontend AST probe failed",
+            "error": (
+                ""
+                if probe_success
+                else "one or more project translation units failed compiler-resolved capture"
+            ),
             "project": project.as_posix(),
             "compile_database": compile_db.as_posix(),
             "filtered_compile_database": filtered_db.as_posix(),
             "project_owned_translation_units": len(entries),
+            "compiler_resolved_translation_units": len(
+                resolved_translation_units
+            ),
+            "failed_translation_units": failed_translation_units,
             "compiler_paths": compiler_paths,
             "clangd_indexer": "",
             "clang_frontend": frontend.as_posix(),
@@ -1194,7 +1220,7 @@ def capture(
                 "calls": (output / CALLS).as_posix(),
             },
             "normalized_counts": normalized_counts,
-            "evidence": "clang_frontend_ast_json_probe",
+            "evidence": "libclang_cursor_all_translation_units",
         }
         (output / MANIFEST).write_text(
             json.dumps(manifest, indent=2, sort_keys=True) + "\n",
