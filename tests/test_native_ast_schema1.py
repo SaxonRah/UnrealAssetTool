@@ -782,6 +782,41 @@ class NativeASTSchema1Test(unittest.TestCase):
             ).read_text(encoding="utf-8"),
         )
 
+    def test_callable_ownership_metrics_sum_probe_counts(self) -> None:
+        diagnostics = [
+            {
+                "kind": "libclang_cursor_probe",
+                "counts": {
+                    "parameter_owner_mismatches": 2,
+                    "nested_callable_calls_suppressed": 5,
+                },
+            },
+            {
+                "kind": "other",
+                "counts": {
+                    "parameter_owner_mismatches": 99,
+                    "nested_callable_calls_suppressed": 99,
+                },
+            },
+            {
+                "kind": "libclang_cursor_probe",
+                "counts": {
+                    "parameter_owner_mismatches": 3,
+                    "nested_callable_calls_suppressed": 7,
+                },
+            },
+        ]
+        self.assertEqual(
+            native_ast._parameter_owner_mismatch_count(diagnostics),
+            5,
+        )
+        self.assertEqual(
+            native_ast._nested_callable_call_suppression_count(
+                diagnostics
+            ),
+            12,
+        )
+
     def test_libclang_worker_call_identity_uses_caller_occurrence(self) -> None:
         worker = (
             SCRIPTS / "uatool_libclang_worker.py"
