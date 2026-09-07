@@ -20,6 +20,7 @@ for path in (SCRIPTS, TESTS):
 
 import test_native_index_schema1 as fixture
 import uatool_native_ast as native_ast
+import uatool_native_freshness as native_freshness
 import uatool_native_index as native_index
 import uatool_native_join as native_join
 import uatool_native_stage as native_stage
@@ -56,6 +57,40 @@ class NativeStageSchema1Test(unittest.TestCase):
             self.compiler,
             self.joins,
         )
+
+    def install_compiler_input_snapshot(self) -> Path:
+        project = self.root / "Sample.uproject"
+        project.write_text(
+            '{"FileVersion":3}\n',
+            encoding="utf-8",
+            newline="\n",
+        )
+        source = self.root / "Source" / "Sample" / "Sample.cpp"
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text(
+            "int sample(void) { return 1; }\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        build_cs = self.root / "Source" / "Sample" / "Sample.Build.cs"
+        build_cs.write_text(
+            "public class Sample {}\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        manifest_path = self.compiler / native_ast.MANIFEST
+        manifest = json.loads(
+            manifest_path.read_text(encoding="utf-8")
+        )
+        manifest["compiler_input_snapshot"] = (
+            native_freshness.capture_snapshot(project)
+        )
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        return project
 
     def install_current_reflection(self) -> None:
         for name in native_stage.REFLECTED_FILES:
@@ -146,6 +181,146 @@ class NativeStageSchema1Test(unittest.TestCase):
             native_stage._reflected_semantic_records(
                 native_stage.roots(self.output)[0]
             ),
+        )
+
+    def test_legacy_stage_freshness_is_explicitly_unknown(self) -> None:
+        self.stage()
+        self.install_current_reflection()
+        project = self.root / "Sample.uproject"
+        project.write_text(
+            '{"FileVersion":3}\n',
+            encoding="utf-8",
+            newline="\n",
+        )
+
+        report = native_stage.freshness_report(
+            self.output,
+            project,
+            limit=20,
+        )
+        self.assertEqual(
+            report["status"],
+            "unknown_legacy_stage",
+        )
+
+    def test_stage_carries_compiler_snapshot_and_reports_fresh(self) -> None:
+        project = self.install_compiler_input_snapshot()
+        manifest = self.stage()
+        self.install_current_reflection()
+
+        self.assertEqual(
+            manifest["compiler_inputs"],
+            json.loads(
+                (self.compiler / native_ast.MANIFEST).read_text(
+                    encoding="utf-8"
+                )
+            )["compiler_input_snapshot"],
+        )
+        report = native_stage.freshness_report(
+            self.output,
+            project,
+            limit=20,
+        )
+        self.assertEqual(report["status"], "fresh")
+        self.assertEqual(
+            report["compiler"]["compiler_inputs"]["status"],
+            "same",
+        )
+        self.assertEqual(
+            report["reflection"]["status"],
+            "same",
+        )
+
+    def test_reflection_only_change_reports_join_stale(self) -> None:
+        project = self.install_compiler_input_snapshot()
+        self.stage()
+        self.install_current_reflection()
+
+        current_types = self.output / "native_types.jsonl"
+        rows = [
+            json.loads(line)
+            for line in current_types.read_text(
+                encoding="utf-8"
+            ).splitlines()
+            if line.strip()
+        ]
+        rows[0]["cpp_name"] = (
+            str(rows[0].get("cpp_name", "")) + "_Changed"
+        )
+        current_types.write_text(
+            "".join(
+                json.dumps(row, separators=(",", ":")) + "\n"
+                for row in rows
+            ),
+            encoding="utf-8",
+            newline="\n",
+        )
+
+        report = native_stage.freshness_report(
+            self.output,
+            project,
+            limit=20,
+        )
+        self.assertEqual(report["status"], "join_stale")
+        self.assertEqual(
+            report["compiler"]["compiler_inputs"]["status"],
+            "same",
+        )
+        self.assertEqual(
+            report["reflection"]["status"],
+            "different",
+        )
+
+    def test_source_change_reports_compiler_stale(self) -> None:
+        project = self.install_compiler_input_snapshot()
+        self.stage()
+        self.install_current_reflection()
+
+        source = self.root / "Source" / "Sample" / "Sample.cpp"
+        source.write_text(
+            "int sample(void) { return 2; }\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+
+        report = native_stage.freshness_report(
+            self.output,
+            project,
+            limit=20,
+        )
+        self.assertEqual(report["status"], "compiler_stale")
+        differences = report["compiler"]["compiler_inputs"][
+            "differences"
+        ]
+        self.assertEqual(len(differences), 1)
+        self.assertEqual(
+            differences[0]["path"],
+            "Source/Sample/Sample.cpp",
+        )
+
+    def test_stage_snapshot_must_match_hashed_ast_manifest(self) -> None:
+        self.install_compiler_input_snapshot()
+        self.stage()
+        stage_manifest_path = (
+            native_stage.root(self.output) / native_stage.MANIFEST
+        )
+        stage_manifest = json.loads(
+            stage_manifest_path.read_text(encoding="utf-8")
+        )
+        stage_manifest["compiler_inputs"]["aggregate_sha256"] = (
+            "0" * 64
+        )
+        stage_manifest_path.write_text(
+            json.dumps(stage_manifest, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+
+        error = native_stage.validation_error(self.output)
+        self.assertIsNotNone(error)
+        self.assertIn(
+            "differs from the hashed staged AST manifest",
+            error,
         )
 
     def test_tampered_staged_file_is_rejected(self) -> None:
@@ -530,6 +705,7 @@ class NativeStageSchema1Test(unittest.TestCase):
         source = (SCRIPTS / "uatool.py").read_text(encoding="utf-8")
         self.assertIn('prog="uatool native-stage"', source)
         self.assertIn('prog="uatool native-stage-diff"', source)
+        self.assertIn('prog="uatool native-stage-freshness"', source)
         self.assertIn(
             'sys.argv[1] == "native-stage-diff"',
             source,
