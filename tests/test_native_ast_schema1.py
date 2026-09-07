@@ -118,12 +118,16 @@ class NativeASTSchema1Test(unittest.TestCase):
                 [
                     "/IC:/Program Files/UE/include",
                     "/DVALUE=hello world",
+                    "-Xclang",
+                    "-ast-dump=json",
                     "C:/Source Dir/sample.cpp",
                 ],
             )
             text = rsp.read_text(encoding="utf-8")
+            self.assertEqual(len(text.splitlines()), 1)
             self.assertIn('"/IC:/Program Files/UE/include"', text)
             self.assertIn('"/DVALUE=hello world"', text)
+            self.assertIn("-Xclang -ast-dump=json", text)
             self.assertIn('"C:/Source Dir/sample.cpp"', text)
 
     def test_vs_llvm_candidates_come_from_vc_root(self) -> None:
