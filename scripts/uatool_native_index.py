@@ -436,22 +436,52 @@ def load_authoritative_inputs(
         raise RuntimeError("native compiler call lacks call_id")
     if len(call_ids) != len(set(call_ids)):
         raise RuntimeError("native compiler call_id values are not unique")
+    symbol_usrs = {
+        str(row.get("clang_usr", "") or "")
+        for row in data["compiler_symbols"]
+        if row.get("clang_usr")
+    }
+    project_target_calls = 0
+    materialized_target_id_calls = 0
+    materialized_target_usr_calls = 0
+    unmaterialized_project_target_calls = 0
     for row in data["compiler_calls"]:
         caller = str(row.get("caller_symbol_id", "") or "")
         target = str(row.get("target_symbol_id", "") or "")
+        target_usr = str(row.get("target_usr", "") or "")
         if caller not in symbol_ids:
             raise RuntimeError(
                 f"compiler call references unknown caller symbol: {caller}"
             )
-        if target and target not in symbol_ids:
-            raise RuntimeError(
-                f"compiler call references unknown project target symbol: {target}"
-            )
+        if target:
+            project_target_calls += 1
+            if target in symbol_ids:
+                materialized_target_id_calls += 1
+            elif target_usr and target_usr in symbol_usrs:
+                materialized_target_usr_calls += 1
+            else:
+                # target_symbol_id is created from the compiler-resolved
+                # referenced cursor whenever that cursor has a project-relative
+                # expansion location. Canonical symbol rows use a stricter
+                # authored/traversal filter, so generated/macro/template cursors
+                # may intentionally have a stable project target identity
+                # without a first-class symbol row. Preserve that evidence
+                # instead of manufacturing or requiring a synthetic symbol.
+                unmaterialized_project_target_calls += 1
         if _excluded_source(str(row.get("source_path", ""))):
             raise RuntimeError(
                 "excluded Engine/build source leaked into compiler calls: "
                 f"{row.get('source_path', '')}"
             )
+
+    data["call_target_stats"] = {
+        "project_target_calls": project_target_calls,
+        "materialized_by_symbol_id": materialized_target_id_calls,
+        "materialized_by_clang_usr": materialized_target_usr_calls,
+        "unmaterialized_project_targets": (
+            unmaterialized_project_target_calls
+        ),
+    }
 
     reflected_type_paths = {
         str(row.get("type_path", "") or "")
@@ -783,6 +813,7 @@ def load_database(
         "compiler_manifest_json": _j(data["manifests"]["compiler"]),
         "join_manifest_json": _j(data["manifests"]["join"]),
         "counts_json": _j(counts),
+        "call_target_stats_json": _j(data["call_target_stats"]),
     }
     conn.executemany(
         "INSERT INTO native_index_meta(key,value) VALUES(?,?)",
@@ -992,10 +1023,18 @@ def query(
                         (SELECT s.qualified_name
                          FROM native_compiler_symbols s
                          WHERE s.symbol_id=c.target_symbol_id
-                         ORDER BY s.is_definition DESC,s.source_path,s.line
+                            OR (c.target_usr<>'' AND s.clang_usr=c.target_usr)
+                         ORDER BY
+                           (s.symbol_id=c.target_symbol_id) DESC,
+                           s.is_definition DESC,s.source_path,s.line
                          LIMIT 1),
                         c.target_name
                       ) AS callee,
+                      CASE WHEN EXISTS(
+                        SELECT 1 FROM native_compiler_symbols s
+                        WHERE s.symbol_id=c.target_symbol_id
+                           OR (c.target_usr<>'' AND s.clang_usr=c.target_usr)
+                      ) THEN 1 ELSE 0 END AS target_materialized,
                       c.target_usr,c.resolution,c.translation_unit
                FROM native_compiler_calls c
                WHERE c.call_id LIKE ?
@@ -1012,7 +1051,10 @@ def query(
                   )
                   OR EXISTS(
                        SELECT 1 FROM native_compiler_symbols s
-                       WHERE s.symbol_id=c.target_symbol_id
+                       WHERE (
+                            s.symbol_id=c.target_symbol_id
+                            OR (c.target_usr<>'' AND s.clang_usr=c.target_usr)
+                       )
                          AND (s.qualified_name LIKE ? OR s.name LIKE ?)
                   )
                LIMIT ?""",
@@ -1037,6 +1079,7 @@ def query(
             "line",
             "caller",
             "callee",
+            "target_materialized",
             "target_usr",
             "resolution",
             "translation_unit",
@@ -1128,6 +1171,24 @@ def _symbol_brief(
         ),
         "evidence": row["evidence"],
     }
+
+
+def _symbol_brief_by_usr(
+    conn: sqlite3.Connection,
+    clang_usr: str,
+) -> dict:
+    if not clang_usr:
+        return {}
+    row = conn.execute(
+        """SELECT symbol_id FROM native_compiler_symbols
+           WHERE clang_usr=?
+           ORDER BY is_definition DESC,source_path,line,column,occurrence_id
+           LIMIT 1""",
+        (clang_usr,),
+    ).fetchone()
+    if row is None:
+        return {}
+    return _symbol_brief(conn, str(row["symbol_id"]))
 
 
 def _resolve_reflected_function(
@@ -1231,14 +1292,24 @@ def _call_edge(
     }
     if direction == "callee":
         target_symbol_id = str(row["target_symbol_id"] or "")
+        target_usr = str(row["target_usr"] or "")
         target = (
             _symbol_brief(conn, target_symbol_id)
             if target_symbol_id
             else {}
         )
+        target_resolution_basis = "symbol_id" if target else ""
+        if not target and target_usr:
+            target = _symbol_brief_by_usr(conn, target_usr)
+            if target:
+                target_resolution_basis = "clang_usr"
+        if not target_resolution_basis and target_symbol_id:
+            target_resolution_basis = "unmaterialized_project_cursor"
+        elif not target_resolution_basis:
+            target_resolution_basis = "external_or_unmaterialized"
         value.update({
             "target_symbol_id": target_symbol_id,
-            "target_usr": row["target_usr"],
+            "target_usr": target_usr,
             "target_name": (
                 target.get("qualified_name")
                 or row["target_name"]
@@ -1246,6 +1317,8 @@ def _call_edge(
             "target_kind": row["target_kind"],
             "target_type_spelling": row["target_type_spelling"],
             "project_owned_target": bool(target_symbol_id),
+            "target_materialized": bool(target),
+            "target_resolution_basis": target_resolution_basis,
             "target_source_path": target.get("source_path", ""),
             "target_source_line": target.get("line", 0),
         })
@@ -1564,12 +1637,17 @@ def print_report(report: dict) -> None:
                 if edge.get("project_owned_target")
                 else "external"
             )
+            materialized = (
+                edge.get("target_resolution_basis", "")
+                if edge.get("target_materialized")
+                else "unmaterialized"
+            )
             print(
                 "  "
                 f"{edge.get('source_path', '')}:"
                 f"{edge.get('line', 0)} -> "
                 f"{edge.get('target_name', '')} "
-                f"[{ownership}]"
+                f"[{ownership}; {materialized}]"
             )
 
     if "callers" in report:
