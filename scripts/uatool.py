@@ -867,7 +867,47 @@ def _combined_summary(args) -> None:
     )
 
 
+def _native_stage_scan_status_code(status: str) -> int:
+    return {
+        "join_stale": 57,
+        "compiler_stale": 58,
+        "unknown_legacy_stage": 59,
+        "invalid_stage": 55,
+        "reflection_invalid": 55,
+    }.get(status, 0)
+
+
+def _native_stage_scan_preflight(args) -> int:
+    output = runtime._output(args)
+    if not native_stage.has_stage(output):
+        return 0
+    project_value = getattr(args, "project", "")
+    if not project_value:
+        return 0
+
+    report = native_stage.freshness_report(
+        output,
+        Path(project_value),
+        limit=20,
+    )
+    code = _native_stage_scan_status_code(
+        str(report.get("status", "") or "")
+    )
+    if code:
+        native_stage.print_freshness(report)
+        print(
+            "ERROR: staged native semantics are not reusable for "
+            "this project source state",
+            file=sys.stderr,
+        )
+    return code
+
+
 def scan(args):
+    preflight = _native_stage_scan_preflight(args)
+    if preflight:
+        return preflight
+
     try:
         result = int(_base_scan(args))
     except RuntimeError as exc:
@@ -910,6 +950,26 @@ def scan(args):
         return result
 
     output = runtime._output(args)
+    if native_stage.has_stage(output):
+        project_value = getattr(args, "project", "")
+        if project_value:
+            freshness = native_stage.freshness_report(
+                output,
+                Path(project_value),
+                limit=20,
+            )
+            freshness_code = _native_stage_scan_status_code(
+                str(freshness.get("status", "") or "")
+            )
+            if freshness_code:
+                native_stage.print_freshness(freshness)
+                print(
+                    "ERROR: staged native semantics became stale during "
+                    "the normal scan lifecycle",
+                    file=sys.stderr,
+                )
+                return freshness_code
+
     try:
         imported = _ensure_staged_native_database(output)
     except RuntimeError as exc:
@@ -1139,6 +1199,60 @@ def _verify_bundle_cli(argv: list[str]) -> int:
     bundle_verify.print_report(result)
     return 0
 
+
+
+def _native_stage_freshness_cli(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="uatool native-stage-freshness",
+        description=(
+            "compare staged compiler inputs and reflected semantics against "
+            "one explicit live project without recapturing Clang"
+        ),
+    )
+    parser.add_argument(
+        "output",
+        help="normal .uatool output directory",
+    )
+    parser.add_argument(
+        "--project",
+        required=True,
+        help="explicit live .uproject used for compiler-input comparison",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=100,
+        help="maximum compiler/reflection differences to show",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="emit machine-readable JSON",
+    )
+    args = parser.parse_args(argv)
+    if args.limit < 0:
+        parser.error("--limit must be >= 0")
+
+    report = native_stage.freshness_report(
+        Path(args.output),
+        Path(args.project),
+        limit=args.limit,
+    )
+    if args.json:
+        print(json.dumps(report, indent=2, sort_keys=True))
+    else:
+        native_stage.print_freshness(report)
+
+    return {
+        "fresh": 0,
+        "join_stale": 57,
+        "compiler_stale": 58,
+        "unknown_legacy_stage": 59,
+        "absent": 60,
+        "reflection_unknown": 61,
+        "reflection_invalid": 55,
+        "invalid_stage": 55,
+    }.get(str(report.get("status", "") or ""), 55)
 
 
 def _native_stage_diff_cli(argv: list[str]) -> int:
@@ -1629,6 +1743,12 @@ def _native_ast_cli(argv: list[str]) -> int:
     return 0 if manifest.get("success") else 49
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "native-stage-freshness":
+        try:
+            return _native_stage_freshness_cli(sys.argv[2:])
+        except Exception as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 55
     if len(sys.argv) > 1 and sys.argv[1] == "native-stage-diff":
         try:
             return _native_stage_diff_cli(sys.argv[2:])
