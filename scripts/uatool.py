@@ -1090,6 +1090,18 @@ def _native_index_cli(argv: list[str]) -> int:
             for key, value in counts.items()
         )
     )
+    parameter_stats = native_index.read_parameter_identity_stats(
+        database
+    )
+    if parameter_stats:
+        print(
+            "native compiler parameters: "
+            f"rows={parameter_stats.get('rows', 0)} "
+            f"negative_index={parameter_stats.get('negative_index_rows', 0)} "
+            f"duplicate_index_slots={parameter_stats.get('duplicate_index_slots', 0)} "
+            "rows_beyond_unique_slots="
+            f"{parameter_stats.get('rows_beyond_unique_index_slots', 0)}"
+        )
     target_stats = native_index.read_call_target_stats(database)
     if target_stats:
         print(
