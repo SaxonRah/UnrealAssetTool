@@ -13,6 +13,7 @@ if str(SCRIPTS) not in sys.path:
 
 import uatool_native_ast as native_ast
 import uatool_native_source as native_source
+import uatool_native_libclang as native_libclang
 
 
 def write(path: Path, text: str) -> Path:
@@ -470,6 +471,49 @@ class NativeASTSchema1Test(unittest.TestCase):
             ],
         )
 
+    def test_probe_success_accepts_mixed_json_and_libclang_backends(self) -> None:
+        diagnostics = [
+            {
+                "kind": "clang_ast_probe",
+                "language": "c",
+                "success": True,
+            },
+            {
+                "kind": "clang_ast_probe",
+                "language": "cpp",
+                "success": False,
+            },
+            {
+                "kind": "libclang_cursor_probe",
+                "language": "cpp",
+                "success": True,
+            },
+        ]
+        self.assertTrue(
+            native_ast._probe_languages_successful(diagnostics)
+        )
+
+    def test_libclang_discovery_checks_frontend_sibling(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            bindir = root / "bin"
+            bindir.mkdir()
+            frontend = write(bindir / "clang-cl.exe", "")
+            dll = write(bindir / "libclang.dll", "")
+            selected, checked = native_libclang.discover_libclang(frontend)
+            self.assertEqual(selected, dll.resolve())
+            self.assertIn(dll.resolve().as_posix(), checked)
+
+    def test_libclang_worker_uses_fullargv_cursor_traversal(self) -> None:
+        worker = (
+            SCRIPTS / "uatool_libclang_worker.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("clang_parseTranslationUnit2FullArgv", worker)
+        self.assertIn("clang_visitChildren", worker)
+        self.assertIn("clang_getCursorReferenced", worker)
+        self.assertIn("clang_getCursorUSR", worker)
+        self.assertIn("libclang_cursor_compatibility_replay", worker)
+
     def test_document_counts_cover_symbols_refs_and_relations(self) -> None:
         text = """--- !Symbol
 ID: AAA
@@ -512,6 +556,9 @@ Object: BBB
         self.assertIn("STL1000: Unexpected compiler version", source)
         self.assertIn("_clang_version_major", source)
         self.assertIn("_normalize_successful_probes", source)
+        self.assertIn("native_libclang.run_cursor_probe", source)
+        self.assertIn("native_libclang.discover_libclang", source)
+        self.assertIn("_probe_languages_successful", source)
         self.assertIn('"compiler_resolved"', source)
         self.assertIn('f"@{syntax_rsp}"', source)
         self.assertIn('f"@{ast_rsp}"', source)
