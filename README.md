@@ -249,13 +249,21 @@ When a validated native semantic index has been imported, the same query command
 
 ### Native compiler semantics
 
-Native reflection, compiler AST and exact reflected/source joins remain independently authoritative in schema 1. The explicit `native-index` import into standard `uat.db` has been validated against a full Hyperreality project corpus. Normal `scan` / `bundle` does **not** include native captures automatically yet; that automation is a separate integration phase.
+Native reflection, compiler AST and exact reflected/source joins remain independently authoritative in schema 1. The explicit `native-index` path and the portable `.uatool/native_semantics` lifecycle have both been validated against a full Hyperreality corpus. `native-stage` atomically carries a validated reflected/compiler/join triple into ordinary `pack` / `bundle` rebuilds; a fresh unpack can rebuild the same native SQLite/query surfaces without the original sidecars. Normal scans never launch the expensive all-TU compiler capture automatically.
 
 ```powershell
 python scripts\uatool.py native-index "E:\Path\Project\.uatool" `
     --reflected "E:\Path\Project\.uatool-native-reflected" `
     --compiler "E:\Path\Project\.uatool-native-ast" `
     --joins "E:\Path\Project\.uatool-native-join"
+python scripts\uatool.py native-stage "E:\Path\Project\.uatool" `
+    --reflected "E:\Path\Project\.uatool-native-reflected" `
+    --compiler "E:\Path\Project\.uatool-native-ast" `
+    --joins "E:\Path\Project\.uatool-native-join"
+
+python scripts\uatool.py native-stage-freshness `
+    "E:\Path\Project\.uatool" `
+    --project "E:\Path\Project\Project.uproject"
 
 python scripts\uatool.py native-index-audit `
     "E:\Path\Project\.uatool" `
@@ -272,6 +280,8 @@ python scripts\uatool.py native-program-report `
 ```
 
 The report resolver is exact-only. It can start from an exact reflected function path, compiler symbol ID, Clang USR or qualified C/C++ name. An unresolved reflected function remains visible with its exact join diagnostic instead of being silently dropped or guessed. A compiler symbol without a reflected UFunction counterpart remains explicitly source-only. Compiler-resolved call targets that have a stable project target ID but no first-class canonical symbol row are retained and labeled unmaterialized; exact Clang USR is used to reach a canonical symbol when available.
+
+For live development, `native-stage-freshness` separates compiler freshness from join freshness. Unchanged source/build inputs plus unchanged reflection are `fresh`; reflection-only changes are `join_stale` and reuse the retained compiler graph; source/header/build/descriptors changes are `compiler_stale` and require a new AST capture. Stages created from older AST manifests without input fingerprints are reported as `unknown_legacy_stage` rather than guessed fresh. Portable `pack` / bundle rebuilds never consult the original absolute source tree.
 
 See [docs/native-semantics-schema1.md](docs/native-semantics-schema1.md).
 
