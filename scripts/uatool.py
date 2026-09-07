@@ -1090,6 +1090,18 @@ def _native_index_cli(argv: list[str]) -> int:
             for key, value in counts.items()
         )
     )
+    capture_stats = native_index.read_compiler_capture_stats(
+        database
+    )
+    if capture_stats:
+        print(
+            "native compiler capture: "
+            f"ruleset={capture_stats.get('ruleset', '')} "
+            "parameter_owner_mismatches_rejected="
+            f"{capture_stats.get('parameter_owner_mismatches_rejected', 0)} "
+            "nested_callable_calls_suppressed="
+            f"{capture_stats.get('nested_callable_calls_suppressed', 0)}"
+        )
     parameter_stats = native_index.read_parameter_identity_stats(
         database
     )
