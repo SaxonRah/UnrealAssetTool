@@ -144,6 +144,60 @@ class NativeASTSchema1Test(unittest.TestCase):
                 ],
             )
 
+    def test_shared_pch_is_replayed_as_source_forced_include(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            rsp = write(
+                root / "sample.rsp",
+                (
+                    '/std:c++20 '
+                    '/Yu"SharedPCH.Engine.Project.ValApi.Cpp20.h" '
+                    '/Fp"SharedPCH.Engine.Project.ValApi.Cpp20.h.pch" '
+                    '/DVALUE=1\n'
+                ),
+            )
+            source = write(
+                root / "sample.cpp",
+                "int sample() { return 0; }\n",
+            )
+            entry = {
+                "directory": str(root),
+                "file": str(source),
+                "arguments": [
+                    "cl.exe",
+                    f"@{rsp}",
+                    "/c",
+                    str(source),
+                ],
+            }
+            self.assertEqual(
+                native_ast._precompiled_header_from_entry(entry),
+                "SharedPCH.Engine.Project.ValApi.Cpp20.h",
+            )
+
+            row = {
+                "include_paths": [str(root)],
+                "definitions": ["VALUE=1"],
+                "forced_includes": [],
+                "_precompiled_header": (
+                    "SharedPCH.Engine.Project.ValApi.Cpp20.h"
+                ),
+                "_semantic_mode_arguments": ["/std:c++20"],
+            }
+            arguments = native_ast._clang_probe_arguments(
+                root / "clang-cl.exe",
+                row,
+                source,
+                "cpp",
+                dump_ast=False,
+            )
+            self.assertIn(
+                "/FISharedPCH.Engine.Project.ValApi.Cpp20.h",
+                arguments,
+            )
+            self.assertFalse(any(arg.startswith("/Fp") for arg in arguments))
+            self.assertFalse(any(arg.startswith("/Yu") for arg in arguments))
+
     def test_probe_response_file_preserves_spaced_arguments(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             rsp = Path(temp) / "probe.rsp"
@@ -591,6 +645,8 @@ Object: BBB
         self.assertIn("_run_clang_ast_probes", source)
         self.assertIn("_write_response_file", source)
         self.assertIn("_semantic_mode_arguments", source)
+        self.assertIn("_precompiled_header_from_entry", source)
+        self.assertIn("precompiled_header_replay", source)
         self.assertIn("syntax_exit_code", source)
         self.assertIn("syntax_error_lines", source)
         self.assertIn("compatibility_overrides", source)
