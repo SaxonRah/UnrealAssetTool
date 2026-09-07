@@ -640,6 +640,57 @@ class NativeASTSchema1Test(unittest.TestCase):
         self.assertIn('"hrraientitycomponent.cpp": 0', source)
         self.assertIn('"hrraiinteractablecomponent.cpp": 1', source)
 
+    def test_all_translation_unit_success_requires_every_expected_tu(self) -> None:
+        rows = [
+            ({"source_path": "Source/A.c"}, Path("A.c"), "c"),
+            ({"source_path": "Source/B.cpp"}, Path("B.cpp"), "cpp"),
+        ]
+        diagnostics = [
+            {
+                "kind": "libclang_cursor_probe",
+                "source_path": "Source/A.c",
+                "success": True,
+            },
+            {
+                "kind": "libclang_cursor_probe",
+                "source_path": "Source/B.cpp",
+                "success": True,
+            },
+        ]
+        self.assertTrue(
+            native_ast._translation_units_successful(
+                diagnostics,
+                rows,
+            )
+        )
+        diagnostics[-1]["success"] = False
+        self.assertFalse(
+            native_ast._translation_units_successful(
+                diagnostics,
+                rows,
+            )
+        )
+
+    def test_libclang_occurrence_identity_is_language_aware(self) -> None:
+        worker = (
+            SCRIPTS / "uatool_libclang_worker.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            'f"occurrence|{self.language}|{source_path}|{kind}|{offset}|"',
+            worker,
+        )
+        self.assertIn("unique_symbols.setdefault", worker)
+
+    def test_libclang_outputs_are_unique_per_translation_unit(self) -> None:
+        source = (
+            SCRIPTS / "uatool_native_libclang.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("hashlib.sha256(source_key.encode", source)
+        self.assertIn(
+            'stem = f"native_ast_libclang_{language}_{base}_{digest}"',
+            source,
+        )
+
     def test_document_counts_cover_symbols_refs_and_relations(self) -> None:
         text = """--- !Symbol
 ID: AAA
@@ -688,10 +739,11 @@ Object: BBB
         self.assertIn("_normalize_successful_probes", source)
         self.assertIn("native_libclang.run_cursor_probe", source)
         self.assertIn("native_libclang.discover_libclang", source)
-        self.assertIn("_probe_languages_successful", source)
+        self.assertIn("_translation_unit_rows", source)
+        self.assertIn("_translation_units_successful", source)
+        self.assertIn('"libclang_cursor_all_translation_units"', source)
         self.assertIn('"compiler_resolved"', source)
         self.assertIn('f"@{syntax_rsp}"', source)
-        self.assertIn('f"@{ast_rsp}"', source)
 
 
 if __name__ == "__main__":
