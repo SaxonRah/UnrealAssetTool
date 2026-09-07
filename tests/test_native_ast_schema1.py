@@ -122,7 +122,7 @@ class NativeASTSchema1Test(unittest.TestCase):
                 ],
             )
             text = rsp.read_text(encoding="utf-8")
-            self.assertIn('"C:/Program Files/UE/include"', text)
+            self.assertIn('"/IC:/Program Files/UE/include"', text)
             self.assertIn('"/DVALUE=hello world"', text)
             self.assertIn('"C:/Source Dir/sample.cpp"', text)
 
