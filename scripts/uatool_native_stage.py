@@ -585,6 +585,14 @@ def validation_error(
             return "native stage reflected semantic digest mismatch"
 
     compiler_inputs = manifest.get("compiler_inputs")
+    staged_compiler_inputs = data["manifests"]["compiler"].get(
+        "compiler_input_snapshot"
+    )
+    if compiler_inputs != staged_compiler_inputs:
+        return (
+            "native stage compiler input snapshot differs from the "
+            "hashed staged AST manifest"
+        )
     if compiler_inputs is not None:
         compiler_input_error = native_freshness.validation_error(
             compiler_inputs
