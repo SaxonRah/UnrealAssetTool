@@ -38,7 +38,7 @@ native_ast_calls.jsonl
 native_ast_diagnostics.jsonl
 ```
 
-Project-owned semantic identity is compiler-derived. Clang USR is retained when available. Symbols are canonicalized while call rows remain translation-unit-specific. Engine/system headers may participate in compilation but are not emitted as project-owned symbols.
+Project-owned semantic identity is compiler-derived. Clang USR is retained when available. Symbols are canonicalized while call rows remain translation-unit-specific. Engine/system headers may participate in compilation but are not emitted as project-owned symbols. Current compiler schema-1 outputs declare ruleset `libclang_semantic_callable_owner_v1`: parameter rows are accepted only when the libclang semantic parent exactly matches the current callable identity, and calls inside a lambda body are not attributed to an enclosing function when the lambda callable itself does not materialize as a canonical symbol. Rejected parameter-owner mismatches and conservatively suppressed nested-callable calls are counted in the manifest.
 
 Any indexing-only compatibility replay is retained on each affected symbol/call as `compatibility_overrides`.
 
