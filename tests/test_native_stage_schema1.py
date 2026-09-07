@@ -141,6 +141,12 @@ class NativeStageSchema1Test(unittest.TestCase):
             native_join.RULESET,
         )
         self.assertEqual(manifest["counts"]["function_joins"], 1)
+        self.assertEqual(
+            manifest["reflected_semantics"],
+            native_stage._reflected_semantic_records(
+                native_stage.roots(self.output)[0]
+            ),
+        )
 
     def test_tampered_staged_file_is_rejected(self) -> None:
         self.stage()
@@ -235,9 +241,24 @@ class NativeStageSchema1Test(unittest.TestCase):
         finally:
             conn.close()
 
-    def test_current_reflection_must_match_staged_snapshot(self) -> None:
+    def test_current_reflection_semantic_reordering_is_accepted(self) -> None:
         self.stage()
         self.install_current_reflection()
+
+        current_types = self.output / "native_types.jsonl"
+        lines = [
+            line
+            for line in current_types.read_text(
+                encoding="utf-8"
+            ).splitlines()
+            if line.strip()
+        ]
+        current_types.write_text(
+            "\n".join(reversed(lines)) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+
         self.assertIsNone(
             native_stage.validation_error(
                 self.output,
@@ -245,22 +266,44 @@ class NativeStageSchema1Test(unittest.TestCase):
             )
         )
 
-        current_functions = self.output / "native_functions.jsonl"
-        current_functions.write_text(
-            " " + current_functions.read_text(encoding="utf-8"),
+    def test_current_reflection_real_semantic_change_is_rejected(self) -> None:
+        self.stage()
+        self.install_current_reflection()
+
+        current_types = self.output / "native_types.jsonl"
+        rows = [
+            json.loads(line)
+            for line in current_types.read_text(
+                encoding="utf-8"
+            ).splitlines()
+            if line.strip()
+        ]
+        self.assertTrue(rows)
+        rows[0]["cpp_name"] = (
+            str(rows[0].get("cpp_name", "")) + "_Changed"
+        )
+        current_types.write_text(
+            "".join(
+                json.dumps(row, separators=(",", ":")) + "\n"
+                for row in rows
+            ),
             encoding="utf-8",
             newline="\n",
         )
 
+        self.assertIsNone(
+            native_stage.reflected_native.validation_error(self.output)
+        )
         error = native_stage.validation_error(
             self.output,
             require_current_reflected=True,
         )
         self.assertIsNotNone(error)
         self.assertIn(
-            "current reflected native evidence differs",
+            "current reflected native semantics differ",
             error,
         )
+        self.assertIn("native_types.jsonl", error)
 
     def test_current_reflection_is_required_for_normal_db_load(self) -> None:
         self.stage()
