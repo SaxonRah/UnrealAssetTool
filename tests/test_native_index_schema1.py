@@ -271,12 +271,15 @@ def make_ast(root: Path) -> None:
 
     manifest = {
         "schema_version": native_ast.SCHEMA_VERSION,
+        "ruleset": native_ast.RULESET,
+        "parameter_owner_policy": native_ast.PARAMETER_OWNER_POLICY,
         "pass": "UnrealAssetToolNativeAST",
         "success": True,
         "error": "",
         "project_owned_translation_units": 2,
         "compiler_resolved_translation_units": 2,
         "failed_translation_units": [],
+        "parameter_owner_mismatches_rejected": 0,
         "normalized_counts": {
             "symbols": len(symbols),
             "parameters": len(parameters),
