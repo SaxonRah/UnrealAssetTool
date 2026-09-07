@@ -597,6 +597,49 @@ def derive_output(output):
     return counts
 
 
+def _ensure_staged_native_database(
+    output: Path,
+    database: Path | None = None,
+) -> dict[str, int]:
+    output = Path(output).expanduser().resolve()
+    if not native_stage.has_stage(output):
+        return {}
+
+    error = native_stage.validation_error(
+        output,
+        require_current_reflected=True,
+    )
+    if error:
+        raise RuntimeError(
+            f"native semantic stage incomplete: {error}"
+        )
+
+    db = (
+        Path(database).expanduser().resolve()
+        if database is not None
+        else output / core.DB_NAME
+    )
+    if not db.is_file():
+        raise RuntimeError(
+            f"native semantic stage present but database is missing: {db}"
+        )
+
+    conn = sqlite3.connect(db)
+    try:
+        if native_index.has_native_index(conn):
+            return {}
+        counts = native_stage.load_database(conn, output)
+        conn.commit()
+        if not native_index.has_native_index(conn):
+            raise RuntimeError(
+                "native semantic stage import completed without "
+                "materializing native compiler rows"
+            )
+        return counts
+    finally:
+        conn.close()
+
+
 def build_database(output):
     output = Path(output).expanduser().resolve()
     fresh = _derived_is_fresh(output)
@@ -637,6 +680,11 @@ def build_database(output):
         conn.execute("PRAGMA synchronous=NORMAL")
     finally:
         conn.close()
+
+    # Enforce the lifecycle contract even if a lower composed DB builder is
+    # refactored later: a present valid native stage must be queryable from the
+    # disposable database before build_database returns.
+    _ensure_staged_native_database(output, db)
     return db
 
 
@@ -694,6 +742,18 @@ def _combined_summary(args) -> None:
     delegate_summary = delegate_summary if isinstance(delegate_summary, dict) else {}
     statement_summary = top_manifest.get("blueprint_statement_summary", {})
     statement_summary = statement_summary if isinstance(statement_summary, dict) else {}
+
+    native_stage_manifest = (
+        native_stage.read_manifest(output)
+        if native_stage.has_stage(output)
+        else None
+    )
+    native_stage_counts = (
+        native_stage_manifest.get("counts", {})
+        if isinstance(native_stage_manifest, dict)
+        and isinstance(native_stage_manifest.get("counts", {}), dict)
+        else {}
+    )
 
     print(
         "vfx scan complete: "
@@ -764,6 +824,15 @@ def _combined_summary(args) -> None:
             f"blocks={statement_summary.get('block_count', 0)} "
             f"with_dependencies={statement_summary.get('dependency_statement_count', 0)} "
             f"with_literals={statement_summary.get('literal_statement_count', 0)}"
+        )
+    if native_stage_counts:
+        print(
+            "native staged semantics: "
+            f"symbols={native_stage_counts.get('compiler_symbols', 0)} "
+            f"parameters={native_stage_counts.get('compiler_parameters', 0)} "
+            f"calls={native_stage_counts.get('compiler_calls', 0)} "
+            f"function_joins={native_stage_counts.get('function_joins', 0)} "
+            f"diagnostics={native_stage_counts.get('join_diagnostics', 0)}"
         )
     print(
         "final derived complete: "
@@ -841,6 +910,19 @@ def scan(args):
         return result
 
     output = runtime._output(args)
+    try:
+        imported = _ensure_staged_native_database(output)
+    except RuntimeError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 55
+    if imported:
+        print(
+            "native staged semantics imported after normal scan: "
+            + " ".join(
+                f"{key.removeprefix('native_')}={value}"
+                for key, value in imported.items()
+            )
+        )
     if not _derived_is_fresh(output):
         # This should be rare: the composed derive writes the stamp only after
         # all raw/derived validators pass. Keep a conservative diagnostic path
