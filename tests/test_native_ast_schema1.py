@@ -211,7 +211,8 @@ Object: BBB
         self.assertIn("_write_response_file", source)
         self.assertIn("_semantic_mode_arguments", source)
         self.assertIn("syntax_exit_code", source)
-        self.assertIn('f"@{rsp}"', source)
+        self.assertIn('f"@{syntax_rsp}"', source)
+        self.assertIn('f"@{ast_rsp}"', source)
 
 
 if __name__ == "__main__":
