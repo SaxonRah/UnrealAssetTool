@@ -2,6 +2,7 @@
 """Compiler-resolved native C/C++ index capture using clangd-indexer."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -16,6 +17,9 @@ RAW_INDEX = "native_ast_index.yaml"
 FILTERED_DB = "native_ast_compile_commands.json"
 MANIFEST = "native_ast_manifest.json"
 DIAGNOSTICS = "native_ast_diagnostics.jsonl"
+SYMBOLS = "native_ast_symbols.jsonl"
+PARAMETERS = "native_ast_parameters.jsonl"
+CALLS = "native_ast_calls.jsonl"
 
 
 def _norm(path: Path) -> Path:
@@ -43,6 +47,306 @@ def _owned_compile_entries(compile_db: Path, project: Path) -> tuple[list[dict],
         if source is not None and source in owned:
             result.append(entry)
     return result, owned
+
+
+
+def _stable_id(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:24]
+
+
+def _slash_path(value: str) -> str:
+    return str(value).replace("\\", "/")
+
+
+def _project_relative_string(value: str, project_root: Path) -> str | None:
+    source = _slash_path(value)
+    root = _slash_path(project_root.as_posix()).rstrip("/")
+    prefix = root + "/"
+    if source.lower().startswith(prefix.lower()):
+        return source[len(prefix):]
+    return None
+
+
+def _location_file(location: dict | None) -> str | None:
+    if not isinstance(location, dict):
+        return None
+    if location.get("file"):
+        return _slash_path(location["file"])
+    expansion = location.get("expansionLoc")
+    if isinstance(expansion, dict) and expansion.get("file"):
+        return _slash_path(expansion["file"])
+    spelling = location.get("spellingLoc")
+    if isinstance(spelling, dict) and spelling.get("file"):
+        return _slash_path(spelling["file"])
+    return None
+
+
+def _node_location(node: dict) -> dict:
+    location = node.get("loc")
+    if isinstance(location, dict):
+        return location
+    source_range = node.get("range")
+    if isinstance(source_range, dict):
+        begin = source_range.get("begin")
+        if isinstance(begin, dict):
+            return begin
+    return {}
+
+
+def _walk_ast(
+    children: list,
+    inherited_file: str | None = None,
+    enclosing_function: str | None = None,
+):
+    active_file = inherited_file
+    function_kinds = {
+        "FunctionDecl",
+        "CXXMethodDecl",
+        "CXXConstructorDecl",
+        "CXXDestructorDecl",
+        "CXXConversionDecl",
+    }
+    for node in children or []:
+        if not isinstance(node, dict):
+            continue
+        explicit_file = _location_file(_node_location(node))
+        if explicit_file:
+            active_file = explicit_file
+        node_file = explicit_file or active_file or inherited_file
+        node_enclosing = enclosing_function
+        if node.get("kind") in function_kinds:
+            node_enclosing = str(node.get("id", "") or "")
+        yield node, node_file, enclosing_function
+        yield from _walk_ast(
+            node.get("inner") or [],
+            node_file,
+            node_enclosing,
+        )
+
+
+def _symbol_identity(node: dict, source_path: str) -> str:
+    kind = str(node.get("kind", ""))
+    name = str(node.get("name", ""))
+    mangled = str(node.get("mangledName", "") or "")
+    qual_type = str((node.get("type") or {}).get("qualType", ""))
+    storage = str(node.get("storageClass", "") or "")
+    location = _node_location(node)
+    line = int(location.get("line", 0) or 0)
+    column = int(location.get("col", 0) or 0)
+
+    if mangled and storage != "static":
+        key = f"{kind}|mangled|{mangled}|{qual_type}"
+    elif mangled:
+        key = f"{kind}|static|{source_path}|{mangled}|{qual_type}"
+    else:
+        key = (
+            f"{kind}|source|{source_path}|{name}|"
+            f"{line}|{column}|{qual_type}"
+        )
+    return _stable_id(key)
+
+
+def _find_referenced_decl(node: dict) -> dict | None:
+    stack = list(reversed(node.get("inner") or []))
+    while stack:
+        current = stack.pop()
+        if not isinstance(current, dict):
+            continue
+        referenced = current.get("referencedDecl")
+        if isinstance(referenced, dict):
+            return referenced
+        stack.extend(reversed(current.get("inner") or []))
+    return None
+
+
+def _normalize_ast_probe(
+    ast_path: Path,
+    project_root: Path,
+    translation_unit: str,
+    language: str,
+) -> tuple[list[dict], list[dict], list[dict]]:
+    root = json.loads(ast_path.read_text(encoding="utf-8", errors="replace"))
+    walked = list(_walk_ast(root.get("inner") or []))
+
+    symbol_kinds = {
+        "FunctionDecl": "function",
+        "CXXMethodDecl": "method",
+        "CXXConstructorDecl": "constructor",
+        "CXXDestructorDecl": "destructor",
+        "CXXRecordDecl": "record",
+        "RecordDecl": "record",
+        "EnumDecl": "enum",
+        "TypedefDecl": "typedef",
+        "TypeAliasDecl": "type_alias",
+        "FieldDecl": "field",
+        "VarDecl": "variable",
+    }
+    function_kinds = {
+        "FunctionDecl",
+        "CXXMethodDecl",
+        "CXXConstructorDecl",
+        "CXXDestructorDecl",
+        "CXXConversionDecl",
+    }
+
+    symbols: list[dict] = []
+    parameters: list[dict] = []
+    calls: list[dict] = []
+    clang_to_stable: dict[str, str] = {}
+
+    for node, source_file, _ in walked:
+        kind = str(node.get("kind", ""))
+        if kind not in symbol_kinds or not source_file:
+            continue
+        source_path = _project_relative_string(source_file, project_root)
+        if source_path is None:
+            continue
+        location = _node_location(node)
+        stable = _symbol_identity(node, source_path)
+        clang_id = str(node.get("id", "") or "")
+        if clang_id:
+            clang_to_stable[clang_id] = stable
+        inner = node.get("inner") or []
+        is_definition = (
+            kind in function_kinds
+            and any(
+                isinstance(child, dict)
+                and child.get("kind") in {"CompoundStmt", "CXXTryStmt"}
+                for child in inner
+            )
+        ) or (
+            kind in {"RecordDecl", "CXXRecordDecl", "EnumDecl"}
+            and bool(node.get("completeDefinition"))
+        )
+        symbols.append({
+            "symbol_id": stable,
+            "clang_node_id": clang_id,
+            "source_path": source_path,
+            "translation_unit": translation_unit,
+            "language": language,
+            "clang_kind": kind,
+            "kind": symbol_kinds[kind],
+            "name": str(node.get("name", "") or ""),
+            "mangled_name": str(node.get("mangledName", "") or ""),
+            "type_spelling": str((node.get("type") or {}).get("qualType", "")),
+            "storage_class": str(node.get("storageClass", "") or ""),
+            "line": int(location.get("line", 0) or 0),
+            "column": int(location.get("col", 0) or 0),
+            "offset": int(location.get("offset", 0) or 0),
+            "is_definition": bool(is_definition),
+            "evidence": "clang_frontend_ast_json",
+        })
+
+        if kind in function_kinds:
+            parameter_index = 0
+            for child in inner:
+                if not isinstance(child, dict) or child.get("kind") != "ParmVarDecl":
+                    continue
+                ploc = _node_location(child)
+                parameters.append({
+                    "function_symbol_id": stable,
+                    "parameter_index": parameter_index,
+                    "name": str(child.get("name", "") or ""),
+                    "type_spelling": str(
+                        (child.get("type") or {}).get("qualType", "")
+                    ),
+                    "source_path": source_path,
+                    "translation_unit": translation_unit,
+                    "language": language,
+                    "line": int(ploc.get("line", 0) or 0),
+                    "column": int(ploc.get("col", 0) or 0),
+                    "evidence": "clang_frontend_ast_json",
+                })
+                parameter_index += 1
+
+    call_kinds = {"CallExpr", "CXXMemberCallExpr", "CXXOperatorCallExpr"}
+    for node, source_file, enclosing_clang in walked:
+        if node.get("kind") not in call_kinds or not source_file:
+            continue
+        source_path = _project_relative_string(source_file, project_root)
+        if source_path is None:
+            continue
+        referenced = _find_referenced_decl(node)
+        if referenced is None:
+            continue
+        location = _node_location(node)
+        target_clang = str(referenced.get("id", "") or "")
+        caller_stable = clang_to_stable.get(str(enclosing_clang or ""), "")
+        calls.append({
+            "call_id": _stable_id(
+                f"{translation_unit}|{source_path}|"
+                f"{location.get('offset', 0)}|{target_clang}"
+            ),
+            "caller_symbol_id": caller_stable,
+            "source_path": source_path,
+            "translation_unit": translation_unit,
+            "language": language,
+            "line": int(location.get("line", 0) or 0),
+            "column": int(location.get("col", 0) or 0),
+            "offset": int(location.get("offset", 0) or 0),
+            "target_symbol_id": clang_to_stable.get(target_clang, ""),
+            "target_clang_node_id": target_clang,
+            "target_kind": str(referenced.get("kind", "") or ""),
+            "target_name": str(referenced.get("name", "") or ""),
+            "target_type_spelling": str(
+                (referenced.get("type") or {}).get("qualType", "")
+            ),
+            "resolution": "compiler_resolved",
+            "evidence": "clang_frontend_ast_json",
+        })
+
+    symbols.sort(key=lambda row: (
+        row["source_path"].lower(),
+        row["line"],
+        row["column"],
+        row["kind"],
+        row["name"],
+    ))
+    parameters.sort(key=lambda row: (
+        row["function_symbol_id"],
+        row["parameter_index"],
+    ))
+    calls.sort(key=lambda row: (
+        row["source_path"].lower(),
+        row["line"],
+        row["column"],
+        row["call_id"],
+    ))
+    return symbols, parameters, calls
+
+
+def _normalize_successful_probes(
+    output: Path,
+    diagnostics: list[dict],
+    project: Path,
+) -> dict[str, int]:
+    symbols: list[dict] = []
+    parameters: list[dict] = []
+    calls: list[dict] = []
+    for row in diagnostics:
+        if row.get("kind") != "clang_ast_probe" or not row.get("success"):
+            continue
+        ast_path = Path(str(row.get("output", "")))
+        if not ast_path.is_file():
+            continue
+        s, p, c = _normalize_ast_probe(
+            ast_path,
+            project.parent,
+            str(row.get("source_path", "")),
+            str(row.get("language", "")),
+        )
+        symbols.extend(s)
+        parameters.extend(p)
+        calls.extend(c)
+
+    _write_jsonl(output / SYMBOLS, symbols)
+    _write_jsonl(output / PARAMETERS, parameters)
+    _write_jsonl(output / CALLS, calls)
+    return {
+        "symbols": len(symbols),
+        "parameters": len(parameters),
+        "calls": len(calls),
+    }
 
 
 def _vs_indexer_from_compiler(compiler: str) -> Path | None:
@@ -240,9 +544,24 @@ def _select_probe_rows(
     result: list[tuple[dict, Path, str]] = []
     for wanted in ("c", "cpp"):
         matches = [item for item in candidates if item[3] == wanted]
-        if matches:
+        if not matches:
+            continue
+        if wanted == "c":
+            preferred = {
+                "radiant.c": 0,
+                "hrsim_world.c": 1,
+                "hrsim_action.c": 2,
+            }
+            _, row, source, language = min(
+                matches,
+                key=lambda x: (
+                    preferred.get(x[2].name.lower(), 10),
+                    x[0],
+                ),
+            )
+        else:
             _, row, source, language = min(matches, key=lambda x: x[0])
-            result.append((row, source, language))
+        result.append((row, source, language))
     return result
 
 
@@ -282,6 +601,20 @@ def _run_clang_ast_probes(
         except OSError as exc:
             syntax_launch_error = str(exc)
 
+        syntax_stderr_path = (
+            output / f"native_ast_probe_{language}_syntax.stderr.txt"
+        )
+        syntax_stderr_path.write_text(
+            syntax_stderr,
+            encoding="utf-8",
+            newline="\n",
+        )
+        syntax_error_lines = [
+            line
+            for line in syntax_stderr.splitlines()
+            if " error:" in line.lower() or "fatal error:" in line.lower()
+        ][:80]
+
         target = output / f"native_ast_probe_{language}.json"
         target.write_text("", encoding="utf-8")
         ast_rsp = output / f"native_ast_probe_{language}.rsp"
@@ -315,6 +648,18 @@ def _run_clang_ast_probes(
         else:
             ast_rsp.write_text("", encoding="utf-8")
 
+        ast_stderr_path = output / f"native_ast_probe_{language}.stderr.txt"
+        ast_stderr_path.write_text(
+            ast_stderr,
+            encoding="utf-8",
+            newline="\n",
+        )
+        ast_error_lines = [
+            line
+            for line in ast_stderr.splitlines()
+            if " error:" in line.lower() or "fatal error:" in line.lower()
+        ][:80]
+
         valid_json = False
         node_kind = ""
         if ast_returncode == 0 and target.stat().st_size:
@@ -341,6 +686,8 @@ def _run_clang_ast_probes(
             "syntax_response_file": syntax_rsp.as_posix(),
             "syntax_response_argument_count": len(syntax_arguments),
             "syntax_response_file_bytes": syntax_rsp.stat().st_size,
+            "syntax_stderr_file": syntax_stderr_path.as_posix(),
+            "syntax_error_lines": syntax_error_lines,
             "syntax_stderr_tail": "\n".join(
                 syntax_stderr.splitlines()[-120:]
             ),
@@ -349,6 +696,8 @@ def _run_clang_ast_probes(
             "response_file": ast_rsp.as_posix(),
             "response_argument_count": ast_argument_count,
             "response_file_bytes": ast_rsp.stat().st_size,
+            "stderr_file": ast_stderr_path.as_posix(),
+            "error_lines": ast_error_lines,
             "stderr_tail": "\n".join(ast_stderr.splitlines()[-120:]),
             "output": target.as_posix(),
             "output_bytes": target.stat().st_size,
@@ -509,6 +858,9 @@ def capture(
             frontend, compile_rows, project, output
         )
         diagnostics.extend(probe_diagnostics)
+        normalized_counts = _normalize_successful_probes(
+            output, probe_diagnostics, project
+        )
         probe_success = bool(probe_diagnostics) and all(
             row.get("success") for row in probe_diagnostics
         )
@@ -537,6 +889,12 @@ def capture(
             "checked_frontend_paths": frontend_checked,
             "raw_document_counts": {"symbols": 0, "refs": 0, "relations": 0},
             "ast_probe_outputs": probe_outputs,
+            "normalized_files": {
+                "symbols": (output / SYMBOLS).as_posix(),
+                "parameters": (output / PARAMETERS).as_posix(),
+                "calls": (output / CALLS).as_posix(),
+            },
+            "normalized_counts": normalized_counts,
             "evidence": "clang_frontend_ast_json_probe",
         }
         (output / MANIFEST).write_text(
