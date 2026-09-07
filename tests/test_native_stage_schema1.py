@@ -721,6 +721,19 @@ class NativeStageSchema1Test(unittest.TestCase):
             set(native_stage.BUNDLE_FILES).issubset(names)
         )
 
+    def test_bundle_with_freshness_snapshot_never_requires_live_source(self) -> None:
+        project = self.install_compiler_input_snapshot()
+        self.stage()
+        self.install_current_reflection()
+
+        shutil.rmtree(self.root / "Source")
+        project.unlink()
+
+        destination = self.root / "portable-no-source.zip"
+        result = self.run_composed_bundle(destination)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(destination.is_file())
+
     def test_normal_bundle_rejects_invalid_native_stage(self) -> None:
         self.stage()
         self.install_current_reflection()
