@@ -119,6 +119,27 @@ class NativeStageSchema1Test(unittest.TestCase):
             check=False,
         )
 
+    def run_freshness_cli(
+        self,
+        project: Path,
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPTS / "uatool.py"),
+                "native-stage-freshness",
+                str(self.output),
+                "--project",
+                str(project),
+                "--limit",
+                "20",
+            ],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+
     def run_composed_bundle(
         self,
         destination: Path,
@@ -321,6 +342,36 @@ class NativeStageSchema1Test(unittest.TestCase):
         self.assertIn(
             "differs from the hashed staged AST manifest",
             error,
+        )
+
+    def test_freshness_cli_returns_zero_for_fresh_stage(self) -> None:
+        project = self.install_compiler_input_snapshot()
+        self.stage()
+        self.install_current_reflection()
+
+        result = self.run_freshness_cli(project)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Status: fresh", result.stdout)
+        self.assertIn(
+            "Recommendation: reuse staged compiler evidence and joins",
+            result.stdout,
+        )
+
+    def test_freshness_cli_returns_59_for_legacy_stage(self) -> None:
+        self.stage()
+        self.install_current_reflection()
+        project = self.root / "Sample.uproject"
+        project.write_text(
+            '{"FileVersion":3}\n',
+            encoding="utf-8",
+            newline="\n",
+        )
+
+        result = self.run_freshness_cli(project)
+        self.assertEqual(result.returncode, 59, result.stderr)
+        self.assertIn(
+            "Status: unknown_legacy_stage",
+            result.stdout,
         )
 
     def test_tampered_staged_file_is_rejected(self) -> None:
@@ -706,6 +757,22 @@ class NativeStageSchema1Test(unittest.TestCase):
         self.assertIn('prog="uatool native-stage"', source)
         self.assertIn('prog="uatool native-stage-diff"', source)
         self.assertIn('prog="uatool native-stage-freshness"', source)
+        self.assertIn(
+            'sys.argv[1] == "native-stage-freshness"',
+            source,
+        )
+        self.assertIn(
+            "_native_stage_scan_preflight(args)",
+            source,
+        )
+        self.assertIn(
+            '"compiler_stale": 58',
+            source,
+        )
+        self.assertIn(
+            '"unknown_legacy_stage": 59',
+            source,
+        )
         self.assertIn(
             'sys.argv[1] == "native-stage-diff"',
             source,
