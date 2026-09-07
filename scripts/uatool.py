@@ -89,7 +89,10 @@ def create_upload_bundle(
 ) -> Path:
     output = Path(output).expanduser().resolve()
     if native_stage.has_stage(output):
-        error = native_stage.validation_error(output)
+        error = native_stage.validation_error(
+            output,
+            require_current_reflected=True,
+        )
         if error:
             raise RuntimeError(
                 f"native semantic stage incomplete: {error}"
