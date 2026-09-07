@@ -11,6 +11,7 @@ import subprocess
 from pathlib import Path
 
 import uatool_native_source as native_source
+import uatool_native_libclang as native_libclang
 
 SCHEMA_VERSION = 1
 RAW_INDEX = "native_ast_index.yaml"
@@ -362,7 +363,17 @@ def _normalize_successful_probes(
     parameters: list[dict] = []
     calls: list[dict] = []
     for row in diagnostics:
-        if row.get("kind") != "clang_ast_probe" or not row.get("success"):
+        if not row.get("success"):
+            continue
+
+        if row.get("kind") == "libclang_cursor_probe":
+            s, p, c = native_libclang.read_probe_rows(row)
+            symbols.extend(s)
+            parameters.extend(p)
+            calls.extend(c)
+            continue
+
+        if row.get("kind") != "clang_ast_probe":
             continue
         ast_path = Path(str(row.get("output", "")))
         if not ast_path.is_file():
