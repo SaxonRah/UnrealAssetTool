@@ -853,6 +853,27 @@ def import_database(
         conn.close()
 
 
+def read_call_target_stats(database: Path) -> dict[str, int]:
+    database = Path(database).expanduser().resolve()
+    conn = sqlite3.connect(database)
+    try:
+        row = conn.execute(
+            """SELECT value FROM native_index_meta
+               WHERE key='call_target_stats_json'"""
+        ).fetchone()
+        if row is None:
+            return {}
+        value = _json_value(row[0], {})
+        if not isinstance(value, dict):
+            return {}
+        return {
+            str(key): int(count or 0)
+            for key, count in value.items()
+        }
+    finally:
+        conn.close()
+
+
 def has_native_index(conn: sqlite3.Connection) -> bool:
     row = conn.execute(
         """SELECT 1 FROM sqlite_master
