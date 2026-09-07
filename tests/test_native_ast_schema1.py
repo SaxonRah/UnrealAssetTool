@@ -176,6 +176,115 @@ class NativeASTSchema1Test(unittest.TestCase):
             any(path.endswith("/VC/Tools/Llvm/bin") for path in rendered)
         )
 
+    def test_ast_normalizer_emits_stable_symbols_parameters_and_calls(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "Source" / "Sample" / "sample.c"
+            source.parent.mkdir(parents=True)
+            ast = {
+                "kind": "TranslationUnitDecl",
+                "inner": [
+                    {
+                        "id": "0x100",
+                        "kind": "FunctionDecl",
+                        "loc": {
+                            "file": source.as_posix(),
+                            "line": 3,
+                            "col": 5,
+                            "offset": 20,
+                        },
+                        "name": "helper",
+                        "mangledName": "helper",
+                        "type": {"qualType": "int (int)"},
+                        "inner": [
+                            {
+                                "id": "0x101",
+                                "kind": "ParmVarDecl",
+                                "loc": {"line": 3, "col": 16, "offset": 31},
+                                "name": "value",
+                                "type": {"qualType": "int"},
+                            }
+                        ],
+                    },
+                    {
+                        "id": "0x200",
+                        "kind": "FunctionDecl",
+                        "loc": {"line": 5, "col": 5, "offset": 40},
+                        "name": "caller",
+                        "mangledName": "caller",
+                        "type": {"qualType": "int (void)"},
+                        "inner": [
+                            {
+                                "id": "0x201",
+                                "kind": "CompoundStmt",
+                                "range": {
+                                    "begin": {"line": 6, "col": 1, "offset": 55},
+                                    "end": {"line": 8, "col": 1, "offset": 80},
+                                },
+                                "inner": [
+                                    {
+                                        "id": "0x202",
+                                        "kind": "CallExpr",
+                                        "range": {
+                                            "begin": {
+                                                "line": 7,
+                                                "col": 12,
+                                                "offset": 68,
+                                            },
+                                            "end": {
+                                                "line": 7,
+                                                "col": 20,
+                                                "offset": 76,
+                                            },
+                                        },
+                                        "inner": [
+                                            {
+                                                "id": "0x203",
+                                                "kind": "DeclRefExpr",
+                                                "referencedDecl": {
+                                                    "id": "0x100",
+                                                    "kind": "FunctionDecl",
+                                                    "name": "helper",
+                                                    "type": {
+                                                        "qualType": "int (int)"
+                                                    },
+                                                },
+                                            }
+                                        ],
+                                    }
+                                ],
+                            }
+                        ],
+                    },
+                ],
+            }
+            ast_path = root / "probe.json"
+            ast_path.write_text(json.dumps(ast), encoding="utf-8")
+
+            symbols, parameters, calls = native_ast._normalize_ast_probe(
+                ast_path,
+                root,
+                "Source/Sample/sample.c",
+                "c",
+            )
+
+            functions = [row for row in symbols if row["kind"] == "function"]
+            self.assertEqual(
+                [row["name"] for row in functions],
+                ["helper", "caller"],
+            )
+            self.assertEqual(len(parameters), 1)
+            self.assertEqual(parameters[0]["name"], "value")
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(calls[0]["target_name"], "helper")
+            self.assertEqual(calls[0]["resolution"], "compiler_resolved")
+            self.assertTrue(calls[0]["target_symbol_id"])
+            self.assertTrue(calls[0]["caller_symbol_id"])
+            self.assertNotEqual(
+                calls[0]["target_symbol_id"],
+                calls[0]["caller_symbol_id"],
+            )
+
     def test_document_counts_cover_symbols_refs_and_relations(self) -> None:
         text = """--- !Symbol
 ID: AAA
@@ -211,6 +320,9 @@ Object: BBB
         self.assertIn("_write_response_file", source)
         self.assertIn("_semantic_mode_arguments", source)
         self.assertIn("syntax_exit_code", source)
+        self.assertIn("syntax_error_lines", source)
+        self.assertIn("_normalize_successful_probes", source)
+        self.assertIn('"compiler_resolved"', source)
         self.assertIn('f"@{syntax_rsp}"', source)
         self.assertIn('f"@{ast_rsp}"', source)
 
