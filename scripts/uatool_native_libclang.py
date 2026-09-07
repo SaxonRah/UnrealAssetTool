@@ -112,6 +112,7 @@ def run_cursor_probe(
                 "parameters": 0,
                 "calls": 0,
                 "parameter_owner_mismatches": 0,
+                "nested_callable_calls_suppressed": 0,
             },
         ),
         "files": result.get("files", {}),
