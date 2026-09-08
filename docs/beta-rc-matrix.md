@@ -89,6 +89,8 @@ Purpose: Mass, authored ZoneGraph, Smart Objects, world and project-graph regres
 
 Requires non-empty MassEntityConfig, ZoneShape, SmartObjectDefinition, world-actor and project-edge streams.
 
+City Sample has one intentional composed-corpus step: its authored ZoneShapes are placed world actors, so an ordinary Asset Registry/systems scan legitimately emits zero `zonegraph_shapes.jsonl` rows. After a fresh current-schema scan, reuse or recapture the focused authored ZoneGraph world evidence and run `zonegraph-world-promote` before the final derive/RC check. Promotion validates the focused 61-shape/144-point capture against the fresh canonical world-owned ZoneShape set, overlays only the two ZoneGraph streams into the current systems schema, and does not launch Unreal or derive. A zero-shape ordinary systems pass must not be treated as proof that City Sample contains no authored ZoneShapes.
+
 ### `lyra`
 
 Purpose: Gameplay Ability System and Gameplay Framework.
