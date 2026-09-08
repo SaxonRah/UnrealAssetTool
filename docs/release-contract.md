@@ -16,7 +16,7 @@ python scripts\uatool.py version
 python scripts\uatool.py version --json
 ```
 
-`UnrealAssetTool.uplugin`, the CLI, `capabilities.json`, and current-facing documentation must agree on the release version.
+`UnrealAssetTool.uplugin`, the CLI, `capabilities.json`, and current-facing documentation must agree on the release version. The candidate release notes are [release-notes-1.0.0-beta.2.md](release-notes-1.0.0-beta.2.md).
 
 ## Current full-corpus schema baseline
 
@@ -87,7 +87,7 @@ Important global non-claims include:
 - no runtime animation pose/search evaluation;
 - no runtime AI/StateTree/BehaviorTree execution state;
 - no generated PCG spatial output;
-- no dynamically spawned world state unless authored/captured by a canonical pass.
+- no dynamically spawned world state unless authored/captured by a canonical pass;
 - no guessed native call resolution through unresolved overload sets, template parameters, or other unsupported compiler cursor constructs.
 
 `capabilities.json` is the machine-readable source for family-by-family coverage and boundaries.
