@@ -1713,11 +1713,12 @@ def _graph_edge_from_row(
             if direction == "callee"
             else "unmaterialized_caller"
         )
+    elif next_symbol_id not in discovered_depth:
+        terminal_reason = "node_limit"
     elif cycle:
         terminal_reason = "cycle"
     elif revisit:
         terminal_reason = "revisit"
-
     edge.update({
         "materialized_traversal_target": materialized,
         "tree_edge": bool(tree_edge),
