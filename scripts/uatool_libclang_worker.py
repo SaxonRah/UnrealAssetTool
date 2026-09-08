@@ -268,6 +268,17 @@ SYMBOL_KIND = {
     "ConversionFunction": "conversion_function",
 }
 
+# clang_getCursorKindSpelling() reports several callable cursor names with a
+# CXX prefix even though the legacy traversal table above used shorter names.
+# Keep normal callable traversal semantics unchanged in this issue; these
+# aliases are only for exact call-target symbol materialization.
+TARGET_ONLY_SYMBOL_KIND = {
+    **SYMBOL_KIND,
+    "CXXConstructor": "constructor",
+    "CXXDestructor": "destructor",
+    "CXXConversionFunction": "conversion_function",
+}
+
 FUNCTION_KINDS = {
     "FunctionDecl",
     "FunctionTemplate",
@@ -298,11 +309,17 @@ class Capture:
             if self.compatibility_overrides
             else "libclang_cursor"
         )
+        self.target_evidence = (
+            "libclang_referenced_target_cursor_compatibility_replay"
+            if self.compatibility_overrides
+            else "libclang_referenced_target_cursor"
+        )
         self.symbols: list[dict] = []
         self.parameters: list[dict] = []
         self.calls: list[dict] = []
         self.parameter_owner_mismatches = 0
         self.nested_callable_calls_suppressed = 0
+        self.referenced_target_occurrence_ids: set[str] = set()
 
     def location(self, cursor: CXCursor) -> tuple[str | None, int, int, int]:
         file_name, line, column, offset = self.clang.location(cursor)
@@ -417,6 +434,84 @@ class Capture:
             )
         return stable, usr, kind, name or self.clang.display_name(cursor)
 
+    def symbol_row(
+        self,
+        cursor: CXCursor,
+        kind: str,
+        source_path: str,
+        line: int,
+        column: int,
+        offset: int,
+        *,
+        symbol_kind: str,
+        evidence: str,
+        symbol_origin: str,
+    ) -> dict:
+        semantic, occurrence = self.identity(
+            cursor,
+            kind,
+            source_path,
+            line,
+            column,
+            offset,
+        )
+        return {
+            "symbol_id": semantic,
+            "occurrence_id": occurrence,
+            "clang_usr": self.clang.usr(cursor),
+            "clang_node_id": "",
+            "source_path": source_path,
+            "translation_unit": self.translation_unit,
+            "language": self.language,
+            "clang_kind": kind,
+            "kind": symbol_kind,
+            "name": self.clang.spelling(cursor),
+            "qualified_name": self.qualified_name(cursor),
+            "mangled_name": self.clang.mangling(cursor),
+            "type_spelling": self.clang.type_spelling(cursor),
+            "storage_class": "",
+            "line": line,
+            "column": column,
+            "offset": offset,
+            "is_definition": bool(
+                self.clang.dll.clang_isCursorDefinition(cursor)
+            ),
+            "compatibility_overrides": self.compatibility_overrides,
+            "evidence": evidence,
+            "symbol_origin": symbol_origin,
+        }
+
+    def materialize_referenced_target(
+        self,
+        cursor: CXCursor,
+    ) -> dict | None:
+        if self.clang.is_null(cursor):
+            return None
+        kind = self.clang.kind(cursor)
+        symbol_kind = TARGET_ONLY_SYMBOL_KIND.get(kind)
+        if symbol_kind is None:
+            return None
+        source_path, line, column, offset = self.location(cursor)
+        if not source_path:
+            return None
+
+        row = self.symbol_row(
+            cursor,
+            kind,
+            source_path,
+            line,
+            column,
+            offset,
+            symbol_kind=symbol_kind,
+            evidence=self.target_evidence,
+            symbol_origin="compiler_referenced_call_target",
+        )
+        occurrence = str(row["occurrence_id"])
+        if occurrence not in self.referenced_target_occurrence_ids:
+            self.symbols.append(row)
+            self.referenced_target_occurrence_ids.add(occurrence)
+        return row
+
     def visit(
         self,
         cursor: CXCursor,
@@ -448,36 +543,23 @@ class Capture:
             or kind == "LambdaExpr"
         )
         if kind in SYMBOL_KIND:
-            semantic, occurrence = self.identity(
-                cursor, kind, source_path, line, column, offset
+            symbol = self.symbol_row(
+                cursor,
+                kind,
+                source_path,
+                line,
+                column,
+                offset,
+                symbol_kind=SYMBOL_KIND[kind],
+                evidence=self.evidence,
+                symbol_origin="project_ast_traversal",
             )
-            symbol = {
-                "symbol_id": semantic,
-                "occurrence_id": occurrence,
-                "clang_usr": self.clang.usr(cursor),
-                "clang_node_id": "",
-                "source_path": source_path,
-                "translation_unit": self.translation_unit,
-                "language": self.language,
-                "clang_kind": kind,
-                "kind": SYMBOL_KIND[kind],
-                "name": self.clang.spelling(cursor),
-                "qualified_name": self.qualified_name(cursor),
-                "mangled_name": self.clang.mangling(cursor),
-                "type_spelling": self.clang.type_spelling(cursor),
-                "storage_class": "",
-                "line": line,
-                "column": column,
-                "offset": offset,
-                "is_definition": bool(
-                    self.clang.dll.clang_isCursorDefinition(cursor)
-                ),
-                "compatibility_overrides": self.compatibility_overrides,
-                "evidence": self.evidence,
-            }
             self.symbols.append(symbol)
             if kind in FUNCTION_KINDS:
-                next_function_context = (semantic, occurrence)
+                next_function_context = (
+                    str(symbol["symbol_id"]),
+                    str(symbol["occurrence_id"]),
+                )
                 next_inside_local_callable = False
 
         if kind == "ParmDecl" and function_context:
@@ -510,6 +592,8 @@ class Capture:
                 target_id, target_usr, target_kind, target_name = (
                     self.target_identity(referenced)
                 )
+                if target_id:
+                    self.materialize_referenced_target(referenced)
                 self.calls.append({
                     "call_id": _stable_id(
                         f"{self.translation_unit}|{source_path}|{offset}|"
@@ -665,7 +749,17 @@ def run(config_path: Path) -> int:
 
         unique_symbols: dict[str, dict] = {}
         for row in capture.symbols:
-            unique_symbols.setdefault(row["occurrence_id"], row)
+            occurrence_id = str(row["occurrence_id"])
+            existing = unique_symbols.get(occurrence_id)
+            if existing is None:
+                unique_symbols[occurrence_id] = row
+                continue
+            if (
+                existing.get("symbol_origin")
+                == "compiler_referenced_call_target"
+                and row.get("symbol_origin") == "project_ast_traversal"
+            ):
+                unique_symbols[occurrence_id] = row
         capture.symbols = list(unique_symbols.values())
         capture.symbols.sort(
             key=lambda row: (
@@ -715,6 +809,12 @@ def run(config_path: Path) -> int:
             ),
             "nested_callable_calls_suppressed": (
                 capture.nested_callable_calls_suppressed
+            ),
+            "referenced_target_symbols_materialized": sum(
+                1
+                for row in capture.symbols
+                if row.get("symbol_origin")
+                == "compiler_referenced_call_target"
             ),
         }
         result["success"] = True
