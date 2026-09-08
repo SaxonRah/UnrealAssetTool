@@ -6,7 +6,7 @@
 
 ## Current baseline
 
-- release: **1.0.0-beta.1**
+- release: **1.0.0-beta.2**
 - Unreal target: **UE 5.8+**
 - validated engine: **UE 5.8.2**
 - structural scanner schema: **13**
