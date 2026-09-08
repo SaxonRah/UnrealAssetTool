@@ -2,7 +2,7 @@
 
 ## Current versions
 
-UnrealAssetTool 1.0.0-beta.1 uses independently versioned canonical layers plus one final derived layer and a machine-readable capability contract:
+UnrealAssetTool 1.0.0-beta.2 uses independently versioned canonical layers plus one final derived layer and a machine-readable capability contract:
 
 ```text
 structural scanner schema: 13
