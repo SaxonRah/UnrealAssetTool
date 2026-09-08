@@ -34,6 +34,9 @@ CALL_TARGET_SYMBOL_CURSOR_KINDS = frozenset({
     "FunctionDecl",
     "FunctionTemplate",
     "CXXMethod",
+    "CXXConstructor",
+    "CXXDestructor",
+    "CXXConversionFunction",
     "Constructor",
     "Destructor",
     "ConversionFunction",
@@ -353,6 +356,13 @@ def _validate_ast(output: Path) -> dict:
     if manifest.get("call_owner_policy") != native_ast.CALL_OWNER_POLICY:
         raise RuntimeError(
             "native AST call ownership policy mismatch"
+        )
+    if (
+        manifest.get("call_target_materialization_policy")
+        != native_ast.CALL_TARGET_MATERIALIZATION_POLICY
+    ):
+        raise RuntimeError(
+            "native AST call target materialization policy mismatch"
         )
     compiler_inputs = manifest.get("compiler_input_snapshot")
     if compiler_inputs is not None:
@@ -1056,6 +1066,16 @@ def _compiler_capture_stats_from_conn(
         ),
         "call_owner_policy": str(
             manifest.get("call_owner_policy", "") or ""
+        ),
+        "call_target_materialization_policy": str(
+            manifest.get("call_target_materialization_policy", "") or ""
+        ),
+        "target_only_symbols": int(
+            (manifest.get("normalized_counts") or {}).get(
+                "target_only_symbols",
+                0,
+            )
+            or 0
         ),
         "parameter_owner_mismatches_rejected": int(
             manifest.get("parameter_owner_mismatches_rejected", 0) or 0
@@ -2174,7 +2194,9 @@ def print_audit(report: dict) -> None:
             "parameter_owner_mismatches_rejected="
             f"{capture.get('parameter_owner_mismatches_rejected', 0)} "
             "nested_callable_calls_suppressed="
-            f"{capture.get('nested_callable_calls_suppressed', 0)}"
+            f"{capture.get('nested_callable_calls_suppressed', 0)} "
+            "target_only_symbols="
+            f"{capture.get('target_only_symbols', 0)}"
         )
 
     print(
