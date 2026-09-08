@@ -193,6 +193,9 @@ def make_ast(
             "ruleset": native_ast.RULESET,
             "parameter_owner_policy": native_ast.PARAMETER_OWNER_POLICY,
             "call_owner_policy": native_ast.CALL_OWNER_POLICY,
+            "call_target_materialization_policy": (
+                native_ast.CALL_TARGET_MATERIALIZATION_POLICY
+            ),
             "pass": "UnrealAssetToolNativeAST",
             "success": True,
             "error": "",
