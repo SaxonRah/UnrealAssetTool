@@ -711,6 +711,26 @@ class NativeIndexSchema1Tests(unittest.TestCase):
                         "{}",
                     ),
                     (
+                        "call-do-helper-repeat",
+                        "do-symbol",
+                        "do-occurrence",
+                        "helper-symbol",
+                        "c:@F@hrsim_helper#I#",
+                        "FunctionDecl",
+                        "hrsim_helper",
+                        "void (int)",
+                        "Plugins/HR_RAI/Source/HRRAI/Private/HRThing.cpp",
+                        "Plugins/HR_RAI/Source/HRRAI/Private/HRThing.cpp",
+                        "cpp",
+                        33,
+                        6,
+                        330,
+                        "compiler_resolved",
+                        "[]",
+                        "libclang_cursor_schema1",
+                        "{}",
+                    ),
+                    (
                         "call-do-caller",
                         "do-symbol",
                         "do-occurrence",
@@ -834,6 +854,26 @@ class NativeIndexSchema1Tests(unittest.TestCase):
             edge["call_id"]: edge
             for edge in callees["edges"]
         }
+        tree_edges = [
+            edge
+            for edge in callees["edges"]
+            if edge["tree_edge"]
+        ]
+        self.assertEqual(
+            len(tree_edges),
+            callees["node_count"] - 1,
+        )
+        self.assertTrue(by_call["call-out"]["tree_edge"])
+        self.assertFalse(
+            by_call["call-do-helper-repeat"]["tree_edge"]
+        )
+        self.assertTrue(
+            by_call["call-do-helper-repeat"]["revisit"]
+        )
+        self.assertEqual(
+            by_call["call-do-helper-repeat"]["terminal_reason"],
+            "revisit",
+        )
         self.assertEqual(
             by_call["call-helper-leaf-usr"][
                 "target_resolution_basis"
