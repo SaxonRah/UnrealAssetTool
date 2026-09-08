@@ -38,7 +38,9 @@ native_ast_calls.jsonl
 native_ast_diagnostics.jsonl
 ```
 
-Project-owned semantic identity is compiler-derived. Clang USR is retained when available. Symbols are canonicalized while call rows remain translation-unit-specific. Engine/system headers may participate in compilation but are not emitted as project-owned symbols. Current compiler schema-1 outputs declare ruleset `libclang_semantic_callable_owner_v1`: parameter rows are accepted only when the libclang semantic parent exactly matches the current callable identity, and calls inside a lambda body are not attributed to an enclosing function when the lambda callable itself does not materialize as a canonical symbol. Rejected parameter-owner mismatches and conservatively suppressed nested-callable calls are counted in the manifest.
+Project-owned semantic identity is compiler-derived. Clang USR is retained when available. Symbols are canonicalized while call rows remain translation-unit-specific. Engine/system headers may participate in compilation but are not emitted as project-owned symbols. Current compiler schema-1 outputs declare ruleset `libclang_semantic_callable_owner_target_v2`: parameter rows are accepted only when the libclang semantic parent exactly matches the current callable identity, calls inside a lambda body are not attributed to an enclosing function when the lambda callable itself does not materialize as a canonical symbol, and project-relative call targets may materialize as target-only symbols only from the exact libclang referenced cursor under policy `exact_project_relative_referenced_cursor_supported_symbol_kind`. Rejected parameter-owner mismatches and conservatively suppressed nested-callable calls are counted in the manifest.
+
+Target-only symbols are provenance-labeled as `compiler_referenced_call_target` with evidence `libclang_referenced_target_cursor` (or its compatibility-replay variant). If normal project-AST traversal and target-only capture observe the same exact occurrence, normal traversal evidence wins. Unsupported compiler cursor kinds such as `OverloadedDeclRef` and `TemplateTypeParameter` remain explicitly unmaterialized; the tool does not invent a function or template identity for them.
 
 Any indexing-only compatibility replay is retained on each affected symbol/call as `compatibility_overrides`.
 
@@ -141,6 +143,14 @@ The audit reports:
 - unresolved reflected-function diagnostics;
 - repeated numeric compiler parameter-index slots, preserving every authoritative row;
 - compiler-resolved project call targets that carry a stable project target identity but do not materialize as canonical symbols.
+
+For a focused breakdown of unresolved call-target cursor kinds, use:
+
+```powershell
+python scripts\uatool.py native-call-target-audit "E:\Path\Project\.uatool" --limit 100
+```
+
+That audit separates exact target-only materialization candidates from cursor kinds that must remain unresolved. It is especially useful before a compiler recapture because it runs only against the existing `uat.db`.
 
 This is a diagnostic/read-only view. It does not rewrite native JSONL, synthesize symbols, renumber parameters, or change join decisions.
 
