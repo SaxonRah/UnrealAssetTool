@@ -274,6 +274,9 @@ def make_ast(root: Path) -> None:
         "ruleset": native_ast.RULESET,
         "parameter_owner_policy": native_ast.PARAMETER_OWNER_POLICY,
         "call_owner_policy": native_ast.CALL_OWNER_POLICY,
+        "call_target_materialization_policy": (
+            native_ast.CALL_TARGET_MATERIALIZATION_POLICY
+        ),
         "pass": "UnrealAssetToolNativeAST",
         "success": True,
         "error": "",
@@ -871,7 +874,7 @@ class NativeIndexSchema1Tests(unittest.TestCase):
                     "do-occurrence",
                     "project-ctor-target",
                     "c:@S@FThing@F@FThing#",
-                    "Constructor",
+                    "CXXConstructor",
                     "FThing",
                     "void ()",
                     "Plugins/HR_RAI/Source/HRRAI/Private/HRThing.cpp",
