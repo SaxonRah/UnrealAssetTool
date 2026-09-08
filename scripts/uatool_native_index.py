@@ -1659,6 +1659,7 @@ def _graph_edge_from_row(
     current_depth: int,
     discovered_depth: dict[str, int],
     parent_by_symbol: dict[str, str],
+    discovery_call_by_symbol: dict[str, str],
 ) -> dict:
     next_symbol_id, resolution_basis = _graph_next_symbol(
         conn,
@@ -1695,15 +1696,17 @@ def _graph_edge_from_row(
             next_symbol_id,
         )
     )
-    revisit = (
-        materialized
-        and next_symbol_id in discovered_depth
-        and parent_by_symbol.get(next_symbol_id) != current_symbol_id
-    )
     tree_edge = (
         materialized
         and discovered_depth.get(next_symbol_id) == next_depth
         and parent_by_symbol.get(next_symbol_id) == current_symbol_id
+        and discovery_call_by_symbol.get(next_symbol_id)
+            == str(row["call_id"] or "")
+    )
+    revisit = (
+        materialized
+        and next_symbol_id in discovered_depth
+        and not tree_edge
     )
 
     terminal_reason = ""
@@ -1790,6 +1793,9 @@ def build_call_graph(
     parent_by_symbol: dict[str, str] = {
         start_symbol_id: "",
     }
+    discovery_call_by_symbol: dict[str, str] = {
+        start_symbol_id: "",
+    }
     queue: list[tuple[str, int]] = [(start_symbol_id, 0)]
     queue_index = 0
     node_truncated = False
@@ -1823,6 +1829,9 @@ def build_call_graph(
             next_depth = current_depth + 1
             discovered_depth[next_symbol_id] = next_depth
             parent_by_symbol[next_symbol_id] = current_symbol_id
+            discovery_call_by_symbol[next_symbol_id] = str(
+                row["call_id"] or ""
+            )
             node = _graph_node(
                 conn,
                 next_symbol_id,
@@ -1869,6 +1878,7 @@ def build_call_graph(
                     current_depth=current_depth,
                     discovered_depth=discovered_depth,
                     parent_by_symbol=parent_by_symbol,
+                    discovery_call_by_symbol=discovery_call_by_symbol,
                 )
             )
 
