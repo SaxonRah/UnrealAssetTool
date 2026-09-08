@@ -1471,6 +1471,8 @@ def _native_call_target_audit_cli(argv: list[str]) -> int:
     args = parser.parse_args(argv)
     if args.limit < 0:
         parser.error("--limit must be >= 0")
+    if args.depth < 1:
+        parser.error("--depth must be >= 1")
 
     root = Path(args.output).expanduser().resolve()
     database = (
@@ -1556,7 +1558,7 @@ def _native_program_report_cli(argv: list[str]) -> int:
         prog="uatool native-program-report",
         description=(
             "follow one exact reflected UFunction or compiler symbol "
-            "through its proven native join and one-hop call neighborhood"
+            "through its proven native join and bounded exact call graph"
         ),
     )
     parser.add_argument(
@@ -1585,6 +1587,15 @@ def _native_program_report_cli(argv: list[str]) -> int:
         type=int,
         default=80,
         help="maximum call edges shown per selected direction",
+    )
+    parser.add_argument(
+        "--depth",
+        type=int,
+        default=1,
+        help=(
+            "exact call-graph traversal depth; depth 1 preserves the "
+            "existing one-hop report"
+        ),
     )
     parser.add_argument(
         "--json",
@@ -1617,6 +1628,7 @@ def _native_program_report_cli(argv: list[str]) -> int:
             include_callers=include_callers,
             include_callees=include_callees,
             limit=args.limit,
+            depth=args.depth,
         )
     finally:
         conn.close()

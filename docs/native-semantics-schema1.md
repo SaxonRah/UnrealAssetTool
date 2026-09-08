@@ -176,6 +176,12 @@ For semantic traversal, use:
 python scripts\uatool.py native-program-report `
     "E:\Path\Project\.uatool" `
     "/Script/Module.Type.Function"
+
+# Bounded exact multi-hop callees:
+python scripts\uatool.py native-program-report `
+    "E:\Path\Project\.uatool" `
+    "/Script/Module.Type.Function" `
+    --callees --depth 3 --limit 200
 ```
 
 The report resolves exact identity only. Supported exact starting identities are:
@@ -187,7 +193,7 @@ The report resolves exact identity only. Supported exact starting identities are
 - qualified C/C++ name;
 - unique exact compiler symbol name.
 
-By default the report shows both one-hop callers and callees. Use `--callers` or `--callees` to select a direction, `--limit` to bound rows and `--json` for machine-readable output. A compiler symbol that has no reflected UFunction counterpart is reported as `source` and explicitly labeled source-only; that status is distinct from an unresolved reflected function.
+By default the report shows both one-hop callers and callees. Use `--callers` or `--callees` to select a direction, `--limit` to bound rows and `--json` for machine-readable output. `--depth N` adds a bounded multi-hop graph while the default depth 1 preserves the existing one-hop report. Multi-hop traversal crosses only exact materialized project identities: direct compiler `symbol_id` first, then exact Clang USR fallback. Unsupported or unmaterialized call targets remain terminal boundary edges; they are never guessed into graph nodes. Traversal uses a two-phase budget: exact materialized nodes are discovered first with a node bound derived from `--limit`, then graph edges are emitted with discovery-tree edges ahead of terminal/revisit noise. This prevents high-fanout external calls from consuming the entire edge budget before deeper exact paths can be represented. Nodes carry their shortest discovered depth, cycles/revisits are labeled instead of recursively expanded, and JSON reports node/edge truncation separately. A compiler symbol that has no reflected UFunction counterpart is reported as `source` and explicitly labeled source-only; that status is distinct from an unresolved reflected function.
 
 A joined reflected function reports:
 
