@@ -43,6 +43,24 @@ class NativeASTSchema1Test(unittest.TestCase):
             self.assertIn(ext.resolve().as_posix(), includes)
             self.assertEqual(forced, [])
 
+    def test_capture_manifest_paths_all_persist_target_materialization_policy(self) -> None:
+        source = (
+            SCRIPTS / "uatool_native_ast.py"
+        ).read_text(encoding="utf-8")
+        self.assertEqual(
+            source.count(
+                '"call_target_materialization_policy": '
+                "CALL_TARGET_MATERIALIZATION_POLICY"
+            ),
+            3,
+        )
+        self.assertEqual(
+            source.count(
+                '"call_owner_policy": CALL_OWNER_POLICY'
+            ),
+            3,
+        )
+
     def test_capture_manifest_paths_all_persist_freshness_provenance(self) -> None:
         source = (
             SCRIPTS / "uatool_native_ast.py"
