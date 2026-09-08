@@ -1011,7 +1011,15 @@ class NativeASTSchema1Test(unittest.TestCase):
             'f"occurrence|{self.language}|{source_path}|{kind}|{offset}|"',
             worker,
         )
-        self.assertIn("unique_symbols.setdefault", worker)
+        self.assertIn("unique_symbols.get", worker)
+        self.assertIn(
+            '"compiler_referenced_call_target"',
+            worker,
+        )
+        self.assertIn(
+            '"project_ast_traversal"',
+            worker,
+        )
 
     def test_libclang_outputs_are_unique_per_translation_unit(self) -> None:
         source = (
