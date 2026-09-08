@@ -1635,6 +1635,119 @@ def _path_contains(
     return False
 
 
+def _graph_next_symbol(
+    conn: sqlite3.Connection,
+    row: sqlite3.Row,
+    *,
+    direction: str,
+) -> tuple[str, str]:
+    if direction == "callee":
+        target, resolution_basis = _resolved_call_target(conn, row)
+        return (
+            str(target.get("symbol_id", "") or ""),
+            resolution_basis,
+        )
+    return str(row["caller_symbol_id"] or ""), "symbol_id"
+
+
+def _graph_edge_from_row(
+    conn: sqlite3.Connection,
+    row: sqlite3.Row,
+    *,
+    direction: str,
+    current_symbol_id: str,
+    current_depth: int,
+    discovered_depth: dict[str, int],
+    parent_by_symbol: dict[str, str],
+) -> dict:
+    next_symbol_id, resolution_basis = _graph_next_symbol(
+        conn,
+        row,
+        direction=direction,
+    )
+    next_depth = current_depth + 1
+
+    if direction == "callee":
+        call = _call_edge(conn, row, "callee")
+        edge = dict(call)
+        edge.update({
+            "from_symbol_id": current_symbol_id,
+            "to_symbol_id": next_symbol_id,
+            "traversal_depth": next_depth,
+        })
+        if next_symbol_id:
+            edge["target_resolution_basis"] = resolution_basis
+    else:
+        call = _call_edge(conn, row, "caller")
+        edge = dict(call)
+        edge.update({
+            "from_symbol_id": next_symbol_id,
+            "to_symbol_id": current_symbol_id,
+            "traversal_depth": next_depth,
+        })
+
+    materialized = bool(next_symbol_id)
+    cycle = (
+        materialized
+        and _path_contains(
+            parent_by_symbol,
+            current_symbol_id,
+            next_symbol_id,
+        )
+    )
+    revisit = (
+        materialized
+        and next_symbol_id in discovered_depth
+        and parent_by_symbol.get(next_symbol_id) != current_symbol_id
+    )
+    tree_edge = (
+        materialized
+        and discovered_depth.get(next_symbol_id) == next_depth
+        and parent_by_symbol.get(next_symbol_id) == current_symbol_id
+    )
+
+    terminal_reason = ""
+    if not materialized:
+        terminal_reason = (
+            call.get("target_resolution_basis", "")
+            if direction == "callee"
+            else "unmaterialized_caller"
+        )
+    elif cycle:
+        terminal_reason = "cycle"
+    elif revisit:
+        terminal_reason = "revisit"
+
+    edge.update({
+        "materialized_traversal_target": materialized,
+        "tree_edge": bool(tree_edge),
+        "cycle": bool(cycle),
+        "revisit": bool(revisit),
+        "terminal": bool(terminal_reason),
+        "terminal_reason": terminal_reason,
+    })
+    return edge
+
+
+def _graph_edge_priority(edge: dict) -> tuple:
+    if edge.get("tree_edge"):
+        priority = 0
+    elif not edge.get("materialized_traversal_target"):
+        priority = 1
+    elif edge.get("cycle"):
+        priority = 2
+    else:
+        priority = 3
+    return (
+        priority,
+        int(edge.get("traversal_depth", 0) or 0),
+        str(edge.get("source_path", "") or "").lower(),
+        int(edge.get("line", 0) or 0),
+        int(edge.get("column", 0) or 0),
+        str(edge.get("call_id", "") or ""),
+    )
+
+
 def build_call_graph(
     conn: sqlite3.Connection,
     start_symbol_id: str,
@@ -1656,12 +1769,17 @@ def build_call_graph(
             "direction": direction,
             "depth_limit": depth,
             "edge_limit": limit,
+            "node_limit": max(1, limit + 1),
             "root_symbol_id": start_symbol_id,
             "nodes": [],
             "edges": [],
             "truncated": False,
+            "node_truncated": False,
+            "edge_truncated": False,
+            "candidate_edge_count": 0,
         }
 
+    node_limit = max(1, limit + 1)
     nodes_by_symbol: dict[str, dict] = {
         start_symbol_id: root,
     }
@@ -1672,97 +1790,36 @@ def build_call_graph(
         start_symbol_id: "",
     }
     queue: list[tuple[str, int]] = [(start_symbol_id, 0)]
-    edges: list[dict] = []
-    truncated = False
     queue_index = 0
+    node_truncated = False
 
+    # Phase 1: discover exact materialized project nodes only. Terminal,
+    # external and repeated edges do not consume the discovery budget.
     while queue_index < len(queue):
         current_symbol_id, current_depth = queue[queue_index]
         queue_index += 1
         if current_depth >= depth:
             continue
 
-        rows = _call_rows_for_symbol(
+        for row in _call_rows_for_symbol(
             conn,
             current_symbol_id,
             direction=direction,
-        )
-        for row in rows:
-            if len(edges) >= limit:
-                truncated = True
-                break
-
-            next_depth = current_depth + 1
-            if direction == "callee":
-                call = _call_edge(conn, row, "callee")
-                target, resolution_basis = _resolved_call_target(
-                    conn,
-                    row,
-                )
-                next_symbol_id = str(
-                    target.get("symbol_id", "") or ""
-                )
-                edge = dict(call)
-                edge.update({
-                    "from_symbol_id": current_symbol_id,
-                    "to_symbol_id": next_symbol_id,
-                    "traversal_depth": next_depth,
-                })
-                if next_symbol_id:
-                    edge["target_resolution_basis"] = resolution_basis
-            else:
-                call = _call_edge(conn, row, "caller")
-                next_symbol_id = str(
-                    call.get("caller_symbol_id", "") or ""
-                )
-                edge = dict(call)
-                edge.update({
-                    "from_symbol_id": next_symbol_id,
-                    "to_symbol_id": current_symbol_id,
-                    "traversal_depth": next_depth,
-                })
-
-            materialized = bool(next_symbol_id)
-            cycle = (
-                materialized
-                and _path_contains(
-                    parent_by_symbol,
-                    current_symbol_id,
-                    next_symbol_id,
-                )
+        ):
+            next_symbol_id, _ = _graph_next_symbol(
+                conn,
+                row,
+                direction=direction,
             )
-            revisit = (
-                materialized
-                and next_symbol_id in discovered_depth
-            )
-            at_depth_limit = materialized and next_depth >= depth
-
-            terminal_reason = ""
-            if not materialized:
-                terminal_reason = (
-                    call.get("target_resolution_basis", "")
-                    if direction == "callee"
-                    else "unmaterialized_caller"
-                )
-            elif cycle:
-                terminal_reason = "cycle"
-            elif revisit:
-                terminal_reason = "revisit"
-            elif at_depth_limit:
-                terminal_reason = "depth_limit"
-
-            edge.update({
-                "materialized_traversal_target": materialized,
-                "cycle": bool(cycle),
-                "revisit": bool(revisit),
-                "terminal": bool(terminal_reason),
-                "terminal_reason": terminal_reason,
-            })
-            edges.append(edge)
-
-            if not materialized or revisit:
+            if not next_symbol_id:
+                continue
+            if next_symbol_id in discovered_depth:
+                continue
+            if len(nodes_by_symbol) >= node_limit:
+                node_truncated = True
                 continue
 
+            next_depth = current_depth + 1
             discovered_depth[next_symbol_id] = next_depth
             parent_by_symbol[next_symbol_id] = current_symbol_id
             node = _graph_node(
@@ -1775,8 +1832,48 @@ def build_call_graph(
             if next_depth < depth:
                 queue.append((next_symbol_id, next_depth))
 
-        if truncated:
-            break
+    # Phase 2: classify/report edges from discovered nodes. Tree edges are
+    # emitted first so high-fanout terminal/revisit traffic cannot starve
+    # deeper exact traversal. All categories remain deterministic.
+    candidate_edges: list[dict] = []
+    ordered_symbols = sorted(
+        discovered_depth,
+        key=lambda symbol_id: (
+            discovered_depth[symbol_id],
+            str(
+                nodes_by_symbol.get(symbol_id, {}).get(
+                    "qualified_name",
+                    "",
+                )
+                or ""
+            ),
+            symbol_id,
+        ),
+    )
+    for current_symbol_id in ordered_symbols:
+        current_depth = discovered_depth[current_symbol_id]
+        if current_depth >= depth:
+            continue
+        for row in _call_rows_for_symbol(
+            conn,
+            current_symbol_id,
+            direction=direction,
+        ):
+            candidate_edges.append(
+                _graph_edge_from_row(
+                    conn,
+                    row,
+                    direction=direction,
+                    current_symbol_id=current_symbol_id,
+                    current_depth=current_depth,
+                    discovered_depth=discovered_depth,
+                    parent_by_symbol=parent_by_symbol,
+                )
+            )
+
+    candidate_edges.sort(key=_graph_edge_priority)
+    edges = candidate_edges[:limit]
+    edge_truncated = len(candidate_edges) > len(edges)
 
     nodes = sorted(
         nodes_by_symbol.values(),
@@ -1790,12 +1887,16 @@ def build_call_graph(
         "direction": direction,
         "depth_limit": depth,
         "edge_limit": limit,
+        "node_limit": node_limit,
         "root_symbol_id": start_symbol_id,
         "node_count": len(nodes),
         "edge_count": len(edges),
+        "candidate_edge_count": len(candidate_edges),
         "nodes": nodes,
         "edges": edges,
-        "truncated": truncated,
+        "node_truncated": node_truncated,
+        "edge_truncated": edge_truncated,
+        "truncated": bool(node_truncated or edge_truncated),
     }
 
 
