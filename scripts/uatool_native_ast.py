@@ -15,12 +15,15 @@ import uatool_native_libclang as native_libclang
 import uatool_native_freshness as native_freshness
 
 SCHEMA_VERSION = 1
-RULESET = "libclang_semantic_callable_owner_v1"
+RULESET = "libclang_semantic_callable_owner_target_v2"
 PARAMETER_OWNER_POLICY = (
     "exact_libclang_semantic_parent_callable_identity"
 )
 CALL_OWNER_POLICY = (
     "do_not_attribute_unmaterialized_lambda_body_calls_to_enclosing_callable"
+)
+CALL_TARGET_MATERIALIZATION_POLICY = (
+    "exact_project_relative_referenced_cursor_supported_symbol_kind"
 )
 RAW_INDEX = "native_ast_index.yaml"
 FILTERED_DB = "native_ast_compile_commands.json"
@@ -424,12 +427,22 @@ def _normalize_successful_probes(
         units.add(row["translation_unit"])
         existing["translation_units"] = sorted(units)
 
-        # Same language-aware physical occurrence should resolve to the same
-        # libclang USR. Prefer a row with a USR if one observation lacks it.
+        prefer_row = False
         if (
+            existing.get("symbol_origin")
+            == "compiler_referenced_call_target"
+            and row.get("symbol_origin") == "project_ast_traversal"
+        ):
+            prefer_row = True
+        elif (
             not existing.get("clang_usr")
             and row.get("clang_usr")
         ):
+            # Same language-aware physical occurrence should resolve to the
+            # same libclang USR. Prefer a row with a USR if one observation
+            # lacks it.
+            prefer_row = True
+        if prefer_row:
             row["translation_units"] = existing["translation_units"]
             symbol_map[key] = row
 
@@ -484,9 +497,21 @@ def _normalize_successful_probes(
         "symbols": len(symbols),
         "parameters": len(parameters),
         "calls": len(calls),
+        "target_only_symbols": sum(
+            1
+            for row in symbols
+            if row.get("symbol_origin")
+            == "compiler_referenced_call_target"
+        ),
         "observed_symbols": len(observed_symbols),
         "observed_parameters": len(observed_parameters),
         "observed_calls": len(observed_calls),
+        "observed_target_only_symbols": sum(
+            1
+            for row in observed_symbols
+            if row.get("symbol_origin")
+            == "compiler_referenced_call_target"
+        ),
     }
 
 
@@ -1165,6 +1190,9 @@ def capture(
                 "ruleset": RULESET,
                 "parameter_owner_policy": PARAMETER_OWNER_POLICY,
                 "call_owner_policy": CALL_OWNER_POLICY,
+        "call_target_materialization_policy": CALL_TARGET_MATERIALIZATION_POLICY,
+            "call_target_materialization_policy": CALL_TARGET_MATERIALIZATION_POLICY,
+                "call_target_materialization_policy": CALL_TARGET_MATERIALIZATION_POLICY,
                 "pass": "UnrealAssetToolNativeAST",
                 "success": False,
                 "error": "no clangd-indexer or clang frontend found",
@@ -1410,6 +1438,7 @@ def print_summary(manifest: dict) -> None:
             f"symbols={normalized.get('symbols', 0)} "
             f"parameters={normalized.get('parameters', 0)} "
             f"calls={normalized.get('calls', 0)} "
+            f"target_only_symbols={normalized.get('target_only_symbols', 0)} "
             "parameter_owner_mismatches_rejected="
             f"{manifest.get('parameter_owner_mismatches_rejected', 0)} "
             "nested_callable_calls_suppressed="
