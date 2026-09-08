@@ -9,6 +9,7 @@ from pathlib import Path
 import uatool_native as reflected_native
 import uatool_native_ast as native_ast
 import uatool_native_join as native_join
+import uatool_native_freshness as native_freshness
 
 SCHEMA_VERSION = 1
 
@@ -327,6 +328,21 @@ def _validate_ast(output: Path) -> dict:
         raise RuntimeError(
             "native AST call ownership policy mismatch"
         )
+    compiler_inputs = manifest.get("compiler_input_snapshot")
+    if compiler_inputs is not None:
+        compiler_input_error = native_freshness.validation_error(
+            compiler_inputs
+        )
+        if compiler_input_error:
+            raise RuntimeError(
+                "native AST compiler input snapshot invalid: "
+                f"{compiler_input_error}"
+            )
+        if manifest.get("compiler_inputs_unchanged") is False:
+            raise RuntimeError(
+                "native AST compiler inputs changed during capture"
+            )
+
     if not manifest.get("success"):
         raise RuntimeError(
             f"native AST capture failed: {manifest.get('error', '')}"

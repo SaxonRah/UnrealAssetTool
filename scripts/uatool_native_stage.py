@@ -13,6 +13,7 @@ import uatool_native as reflected_native
 import uatool_native_ast as native_ast
 import uatool_native_index as native_index
 import uatool_native_join as native_join
+import uatool_native_freshness as native_freshness
 
 SCHEMA_VERSION = 1
 PASS_NAME = "UnrealAssetToolNativeStage"
@@ -583,6 +584,25 @@ def validation_error(
         if observed_semantics != semantic_records:
             return "native stage reflected semantic digest mismatch"
 
+    compiler_inputs = manifest.get("compiler_inputs")
+    staged_compiler_inputs = data["manifests"]["compiler"].get(
+        "compiler_input_snapshot"
+    )
+    if compiler_inputs != staged_compiler_inputs:
+        return (
+            "native stage compiler input snapshot differs from the "
+            "hashed staged AST manifest"
+        )
+    if compiler_inputs is not None:
+        compiler_input_error = native_freshness.validation_error(
+            compiler_inputs
+        )
+        if compiler_input_error:
+            return (
+                "native stage compiler input snapshot invalid: "
+                f"{compiler_input_error}"
+            )
+
     expected_counts = manifest.get("counts")
     if not isinstance(expected_counts, dict):
         return "native stage counts missing or invalid"
@@ -687,6 +707,18 @@ def stage(
                     data["manifests"]["join"].get("ruleset", "") or ""
                 ),
             },
+            "compiler_inputs": (
+                data["manifests"]["compiler"].get(
+                    "compiler_input_snapshot"
+                )
+                if isinstance(
+                    data["manifests"]["compiler"].get(
+                        "compiler_input_snapshot"
+                    ),
+                    dict,
+                )
+                else None
+            ),
             "counts": observed_counts,
             "reflected_semantics": _reflected_semantic_records(
                 reflected_dest
@@ -742,6 +774,201 @@ def stage(
             f"native stage failed post-swap validation: {error}"
         )
     return manifest
+
+
+def compiler_freshness_report(
+    output: Path,
+    project: Path,
+    *,
+    limit: int = 100,
+) -> dict:
+    output = Path(output).expanduser().resolve()
+    project = Path(project).expanduser().resolve()
+
+    if not has_stage(output):
+        return {
+            "status": "absent",
+            "error": "",
+            "compiler_inputs": {},
+        }
+
+    error = validation_error(output)
+    if error:
+        return {
+            "status": "invalid_stage",
+            "error": error,
+            "compiler_inputs": {},
+        }
+
+    manifest = read_manifest(output) or {}
+    expected = manifest.get("compiler_inputs")
+    if not isinstance(expected, dict):
+        return {
+            "status": "unknown_legacy_stage",
+            "error": (
+                "staged compiler evidence predates project-owned compiler "
+                "input fingerprints; recapture AST once with the current "
+                "uatool and restage before claiming compiler freshness"
+            ),
+            "compiler_inputs": {},
+        }
+
+    comparison = native_freshness.compare_snapshot(
+        expected,
+        project,
+        limit=limit,
+    )
+    if comparison.get("status") == "invalid_snapshot":
+        return {
+            "status": "invalid_stage",
+            "error": str(comparison.get("error", "") or ""),
+            "compiler_inputs": comparison,
+        }
+    return {
+        "status": (
+            "compiler_fresh"
+            if comparison.get("status") == "same"
+            else "compiler_stale"
+        ),
+        "error": "",
+        "compiler_inputs": comparison,
+    }
+
+
+def freshness_report(
+    output: Path,
+    project: Path,
+    *,
+    limit: int = 100,
+) -> dict:
+    output = Path(output).expanduser().resolve()
+    compiler = compiler_freshness_report(
+        output,
+        project,
+        limit=limit,
+    )
+    base_status = compiler.get("status", "")
+
+    reflection = {
+        "status": "unavailable",
+        "error": "",
+        "difference_count": 0,
+        "shown_difference_count": 0,
+        "files": [],
+    }
+    current_manifest = output / reflected_native.MANIFEST_FILE
+    if current_manifest.is_file():
+        reflected_error = reflected_native.validation_error(output)
+        if reflected_error:
+            reflection = {
+                "status": "invalid",
+                "error": reflected_error,
+                "difference_count": 0,
+                "shown_difference_count": 0,
+                "files": [],
+            }
+        else:
+            reflection = reflected_diff(output, limit=limit)
+
+    if base_status in {
+        "absent",
+        "invalid_stage",
+        "unknown_legacy_stage",
+        "compiler_stale",
+    }:
+        status = base_status
+    elif reflection.get("status") == "unavailable":
+        status = "reflection_unknown"
+    elif reflection.get("status") == "invalid":
+        status = "reflection_invalid"
+    elif reflection.get("status") == "different":
+        status = "join_stale"
+    else:
+        status = "fresh"
+
+    recommendations = {
+        "fresh": "reuse staged compiler evidence and joins",
+        "join_stale": (
+            "reuse staged compiler evidence; rerun native-join against "
+            "the current reflection, then restage"
+        ),
+        "compiler_stale": (
+            "recapture AST/compiler evidence, rerun native-join, then restage"
+        ),
+        "unknown_legacy_stage": (
+            "recapture AST once to establish compiler-input fingerprints, "
+            "rerun native-join, then restage"
+        ),
+        "reflection_unknown": (
+            "run a normal reflected/native scan before deciding join freshness"
+        ),
+        "reflection_invalid": (
+            "repair or rerun the current reflected native capture"
+        ),
+        "invalid_stage": "repair or restage the validated native evidence",
+        "absent": "no staged native semantics are present",
+    }
+
+    return {
+        "status": status,
+        "error": str(compiler.get("error", "") or ""),
+        "recommendation": recommendations.get(status, ""),
+        "compiler": compiler,
+        "reflection": reflection,
+    }
+
+
+def print_freshness(report: dict) -> None:
+    print("=== NATIVE STAGE FRESHNESS ===")
+    print(f"Status: {report.get('status', '')}")
+    error = str(report.get("error", "") or "")
+    if error:
+        print(f"Error: {error}")
+
+    compiler = report.get("compiler", {})
+    comparison = (
+        compiler.get("compiler_inputs", {})
+        if isinstance(compiler, dict)
+        else {}
+    )
+    if comparison:
+        print(
+            "Compiler inputs: "
+            f"{comparison.get('status', '')} "
+            f"expected_files={comparison.get('expected_file_count', 0)} "
+            f"current_files={comparison.get('current_file_count', 0)} "
+            f"differences={comparison.get('difference_count', 0)}"
+        )
+        for diff in comparison.get("differences", []):
+            print(
+                f"  {diff.get('kind', '')}: "
+                f"{diff.get('path', '')}"
+            )
+            if diff.get("kind") == "changed":
+                print(
+                    "    sha256: "
+                    f"expected={diff.get('expected_sha256', '')} "
+                    f"current={diff.get('current_sha256', '')}"
+                )
+
+    reflection = report.get("reflection", {})
+    if isinstance(reflection, dict):
+        print(
+            "Reflection: "
+            f"{reflection.get('status', '')} "
+            f"differences={reflection.get('difference_count', 0)}"
+        )
+        for file_row in reflection.get("files", []):
+            for diff in file_row.get("differences", []):
+                print(
+                    f"  {file_row.get('filename', '')}: "
+                    f"{diff.get('kind', '')} "
+                    f"{diff.get('identity', '')}"
+                )
+
+    recommendation = str(report.get("recommendation", "") or "")
+    if recommendation:
+        print(f"Recommendation: {recommendation}")
 
 
 def load_database(

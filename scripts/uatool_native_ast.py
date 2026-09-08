@@ -12,6 +12,7 @@ from pathlib import Path
 
 import uatool_native_source as native_source
 import uatool_native_libclang as native_libclang
+import uatool_native_freshness as native_freshness
 
 SCHEMA_VERSION = 1
 RULESET = "libclang_semantic_callable_owner_v1"
@@ -1103,6 +1104,9 @@ def capture(
     output = _norm(output)
     output.mkdir(parents=True, exist_ok=True)
 
+    compiler_input_snapshot = native_freshness.capture_snapshot(
+        project
+    )
     diagnostics: list[dict] = []
     compile_db = native_source._find_existing_compile_database(project, editor)
     if generate_compile_database:
@@ -1165,6 +1169,7 @@ def capture(
                 "success": False,
                 "error": "no clangd-indexer or clang frontend found",
                 "project": project.as_posix(),
+                "compiler_input_snapshot": compiler_input_snapshot,
                 "compile_database": compile_db.as_posix(),
                 "filtered_compile_database": filtered_db.as_posix(),
                 "project_owned_translation_units": len(entries),
@@ -1228,6 +1233,16 @@ def capture(
             set(expected_translation_units)
             - set(resolved_translation_units)
         )
+        final_compiler_input_snapshot = (
+            native_freshness.capture_snapshot(project)
+        )
+        compiler_inputs_unchanged = (
+            final_compiler_input_snapshot
+            == compiler_input_snapshot
+        )
+        probe_success = (
+            probe_success and compiler_inputs_unchanged
+        )
         diagnostics.append({
             "kind": "clang_frontend_discovery",
             "success": True,
@@ -1246,9 +1261,15 @@ def capture(
             "error": (
                 ""
                 if probe_success
-                else "one or more project translation units failed compiler-resolved capture"
+                else (
+                    "project-owned compiler inputs changed during AST capture"
+                    if not compiler_inputs_unchanged
+                    else "one or more project translation units failed compiler-resolved capture"
+                )
             ),
             "project": project.as_posix(),
+            "compiler_input_snapshot": compiler_input_snapshot,
+            "compiler_inputs_unchanged": compiler_inputs_unchanged,
             "compile_database": compile_db.as_posix(),
             "filtered_compile_database": filtered_db.as_posix(),
             "project_owned_translation_units": len(entries),
@@ -1327,7 +1348,16 @@ def capture(
     })
     _write_jsonl(output / DIAGNOSTICS, diagnostics)
 
-    success = run.returncode == 0 and sum(counts.values()) > 0
+    capture_complete = (
+        run.returncode == 0 and sum(counts.values()) > 0
+    )
+    final_compiler_input_snapshot = (
+        native_freshness.capture_snapshot(project)
+    )
+    compiler_inputs_unchanged = (
+        final_compiler_input_snapshot == compiler_input_snapshot
+    )
+    success = capture_complete and compiler_inputs_unchanged
     manifest = {
         "schema_version": SCHEMA_VERSION,
         "ruleset": RULESET,
@@ -1335,8 +1365,18 @@ def capture(
         "call_owner_policy": CALL_OWNER_POLICY,
         "pass": "UnrealAssetToolNativeAST",
         "success": success,
-        "error": "" if success else "clangd-indexer failed or emitted no index documents",
+        "error": (
+            ""
+            if success
+            else (
+                "project-owned compiler inputs changed during AST capture"
+                if not compiler_inputs_unchanged
+                else "clangd-indexer failed or emitted no index documents"
+            )
+        ),
         "project": project.as_posix(),
+        "compiler_input_snapshot": compiler_input_snapshot,
+        "compiler_inputs_unchanged": compiler_inputs_unchanged,
         "configuration": configuration,
         "compile_database": compile_db.as_posix(),
         "filtered_compile_database": filtered_db.as_posix(),
