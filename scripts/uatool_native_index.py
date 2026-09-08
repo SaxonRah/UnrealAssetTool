@@ -963,6 +963,22 @@ def load_database(
                     "call_owner_policy", ""
                 ) or ""
             ),
+            "call_target_materialization_policy": str(
+                data["manifests"]["compiler"].get(
+                    "call_target_materialization_policy",
+                    "",
+                )
+                or ""
+            ),
+            "target_only_symbols": int(
+                (
+                    data["manifests"]["compiler"].get(
+                        "normalized_counts"
+                    )
+                    or {}
+                ).get("target_only_symbols", 0)
+                or 0
+            ),
             "parameter_owner_mismatches_rejected": int(
                 data["manifests"]["compiler"].get(
                     "parameter_owner_mismatches_rejected", 0
@@ -1042,24 +1058,27 @@ def _compiler_capture_stats_from_conn(
         """SELECT value FROM native_index_meta
            WHERE key='compiler_capture_stats_json'"""
     ).fetchone()
+    value: dict = {}
     if row is not None:
-        value = _json_value(row[0], {})
-        if isinstance(value, dict):
-            return value
+        parsed = _json_value(row[0], {})
+        if isinstance(parsed, dict):
+            value = dict(parsed)
 
-    # Compatibility with a cache imported immediately before this derived
-    # convenience key existed: the full authoritative compiler manifest was
-    # already retained in native_index_meta.
+    # Compatibility with caches written before later compiler-capture
+    # convenience fields existed: the full authoritative compiler manifest is
+    # retained independently in native_index_meta. Backfill only missing
+    # convenience keys from that manifest rather than treating a partial
+    # compiler_capture_stats_json row as complete.
     row = conn.execute(
         """SELECT value FROM native_index_meta
            WHERE key='compiler_manifest_json'"""
     ).fetchone()
     if row is None:
-        return {}
+        return value
     manifest = _json_value(row[0], {})
     if not isinstance(manifest, dict):
-        return {}
-    return {
+        return value
+    fallback = {
         "ruleset": str(manifest.get("ruleset", "") or ""),
         "parameter_owner_policy": str(
             manifest.get("parameter_owner_policy", "") or ""
@@ -1084,6 +1103,9 @@ def _compiler_capture_stats_from_conn(
             manifest.get("nested_callable_calls_suppressed", 0) or 0
         ),
     }
+    for key, fallback_value in fallback.items():
+        value.setdefault(key, fallback_value)
+    return value
 
 
 def read_compiler_capture_stats(database: Path) -> dict:
