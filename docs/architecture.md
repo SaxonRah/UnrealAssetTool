@@ -4,7 +4,7 @@
 
 UnrealAssetTool is an AI-facing indexer for Unreal Engine projects. It prioritizes authoritative authored facts from Unreal objects and serialized/editor data, then builds deterministic cross-system relationships and retrieval views outside Unreal.
 
-Current release contract: **1.0.0-beta.1** ([release-contract.md](release-contract.md)).
+Current release contract: **1.0.0-beta.2** ([release-contract.md](release-contract.md)).
 
 The architecture has three layers:
 
