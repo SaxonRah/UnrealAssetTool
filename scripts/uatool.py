@@ -1445,6 +1445,59 @@ def _native_index_cli(argv: list[str]) -> int:
     return 0
 
 
+def _native_call_target_audit_cli(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="uatool native-call-target-audit",
+        description=(
+            "classify compiler-resolved project call targets that do not "
+            "currently materialize as first-class native compiler symbols"
+        ),
+    )
+    parser.add_argument(
+        "output",
+        help="standard .uatool directory or uat.db path",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=100,
+        help="maximum unmaterialized target identities to show",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="emit the complete audit as JSON",
+    )
+    args = parser.parse_args(argv)
+    if args.limit < 0:
+        parser.error("--limit must be >= 0")
+
+    root = Path(args.output).expanduser().resolve()
+    database = (
+        root
+        if root.suffix.lower() == ".db"
+        else root / core.DB_NAME
+    )
+    if not database.is_file():
+        raise RuntimeError(f"uat.db not found: {database}")
+
+    conn = sqlite3.connect(database)
+    conn.row_factory = sqlite3.Row
+    try:
+        report = native_index.build_call_target_audit(
+            conn,
+            limit=args.limit,
+        )
+    finally:
+        conn.close()
+
+    if args.json:
+        print(json.dumps(report, indent=2, sort_keys=True))
+    else:
+        native_index.print_call_target_audit(report)
+    return 0 if report.get("status") == "ok" else 62
+
+
 def _native_index_audit_cli(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="uatool native-index-audit",
@@ -1767,6 +1820,12 @@ def main():
         except Exception as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
             return 51
+    if len(sys.argv) > 1 and sys.argv[1] == "native-call-target-audit":
+        try:
+            return _native_call_target_audit_cli(sys.argv[2:])
+        except Exception as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 62
     if len(sys.argv) > 1 and sys.argv[1] == "native-index-audit":
         try:
             return _native_index_audit_cli(sys.argv[2:])

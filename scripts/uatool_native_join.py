@@ -87,6 +87,13 @@ def _validate_ast_input(output: Path) -> dict:
         raise RuntimeError(
             "native AST call ownership policy mismatch"
         )
+    if (
+        manifest.get("call_target_materialization_policy")
+        != native_ast.CALL_TARGET_MATERIALIZATION_POLICY
+    ):
+        raise RuntimeError(
+            "native AST call target materialization policy mismatch"
+        )
     if manifest.get("parameter_owner_mismatches_rejected") is None:
         raise RuntimeError(
             "native AST parameter ownership rejection count missing"

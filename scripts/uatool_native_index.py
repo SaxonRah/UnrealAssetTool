@@ -13,6 +13,35 @@ import uatool_native_freshness as native_freshness
 
 SCHEMA_VERSION = 1
 
+# libclang cursor kinds that the capture worker already knows how to emit as
+# first-class compiler symbols. A call target with one of these kinds and a
+# non-empty target_symbol_id has a project-relative compiler cursor identity
+# and is eligible for exact target-only materialization in the next capture
+# phase. This classification does not itself manufacture any symbol rows.
+CALL_TARGET_SYMBOL_CURSOR_KINDS = frozenset({
+    "Namespace",
+    "StructDecl",
+    "UnionDecl",
+    "ClassDecl",
+    "ClassTemplate",
+    "ClassTemplatePartialSpecialization",
+    "EnumDecl",
+    "EnumConstantDecl",
+    "TypedefDecl",
+    "TypeAliasDecl",
+    "FieldDecl",
+    "VarDecl",
+    "FunctionDecl",
+    "FunctionTemplate",
+    "CXXMethod",
+    "CXXConstructor",
+    "CXXDestructor",
+    "CXXConversionFunction",
+    "Constructor",
+    "Destructor",
+    "ConversionFunction",
+})
+
 _SQL = """
 CREATE TABLE IF NOT EXISTS native_index_meta(
  key TEXT PRIMARY KEY,
@@ -327,6 +356,13 @@ def _validate_ast(output: Path) -> dict:
     if manifest.get("call_owner_policy") != native_ast.CALL_OWNER_POLICY:
         raise RuntimeError(
             "native AST call ownership policy mismatch"
+        )
+    if (
+        manifest.get("call_target_materialization_policy")
+        != native_ast.CALL_TARGET_MATERIALIZATION_POLICY
+    ):
+        raise RuntimeError(
+            "native AST call target materialization policy mismatch"
         )
     compiler_inputs = manifest.get("compiler_input_snapshot")
     if compiler_inputs is not None:
@@ -927,6 +963,22 @@ def load_database(
                     "call_owner_policy", ""
                 ) or ""
             ),
+            "call_target_materialization_policy": str(
+                data["manifests"]["compiler"].get(
+                    "call_target_materialization_policy",
+                    "",
+                )
+                or ""
+            ),
+            "target_only_symbols": int(
+                (
+                    data["manifests"]["compiler"].get(
+                        "normalized_counts"
+                    )
+                    or {}
+                ).get("target_only_symbols", 0)
+                or 0
+            ),
             "parameter_owner_mismatches_rejected": int(
                 data["manifests"]["compiler"].get(
                     "parameter_owner_mismatches_rejected", 0
@@ -1006,30 +1058,43 @@ def _compiler_capture_stats_from_conn(
         """SELECT value FROM native_index_meta
            WHERE key='compiler_capture_stats_json'"""
     ).fetchone()
+    value: dict = {}
     if row is not None:
-        value = _json_value(row[0], {})
-        if isinstance(value, dict):
-            return value
+        parsed = _json_value(row[0], {})
+        if isinstance(parsed, dict):
+            value = dict(parsed)
 
-    # Compatibility with a cache imported immediately before this derived
-    # convenience key existed: the full authoritative compiler manifest was
-    # already retained in native_index_meta.
+    # Compatibility with caches written before later compiler-capture
+    # convenience fields existed: the full authoritative compiler manifest is
+    # retained independently in native_index_meta. Backfill only missing
+    # convenience keys from that manifest rather than treating a partial
+    # compiler_capture_stats_json row as complete.
     row = conn.execute(
         """SELECT value FROM native_index_meta
            WHERE key='compiler_manifest_json'"""
     ).fetchone()
     if row is None:
-        return {}
+        return value
     manifest = _json_value(row[0], {})
     if not isinstance(manifest, dict):
-        return {}
-    return {
+        return value
+    fallback = {
         "ruleset": str(manifest.get("ruleset", "") or ""),
         "parameter_owner_policy": str(
             manifest.get("parameter_owner_policy", "") or ""
         ),
         "call_owner_policy": str(
             manifest.get("call_owner_policy", "") or ""
+        ),
+        "call_target_materialization_policy": str(
+            manifest.get("call_target_materialization_policy", "") or ""
+        ),
+        "target_only_symbols": int(
+            (manifest.get("normalized_counts") or {}).get(
+                "target_only_symbols",
+                0,
+            )
+            or 0
         ),
         "parameter_owner_mismatches_rejected": int(
             manifest.get("parameter_owner_mismatches_rejected", 0) or 0
@@ -1038,6 +1103,9 @@ def _compiler_capture_stats_from_conn(
             manifest.get("nested_callable_calls_suppressed", 0) or 0
         ),
     }
+    for key, fallback_value in fallback.items():
+        value.setdefault(key, fallback_value)
+    return value
 
 
 def read_compiler_capture_stats(database: Path) -> dict:
@@ -1759,6 +1827,222 @@ def build_report(
     return result
 
 
+def _unmaterialized_call_target_identity_rows(
+    conn: sqlite3.Connection,
+) -> list[dict]:
+    rows = conn.execute(
+        """SELECT c.target_symbol_id,c.target_usr,c.target_kind,
+                  c.target_name,c.target_type_spelling,
+                  COUNT(*) AS call_count,
+                  COUNT(DISTINCT c.caller_symbol_id) AS caller_symbol_count,
+                  MIN(c.source_path) AS sample_source_path,
+                  MIN(c.line) AS sample_line
+           FROM native_compiler_calls c
+           WHERE c.target_symbol_id <> ''
+             AND NOT EXISTS(
+                 SELECT 1 FROM native_compiler_symbols s
+                 WHERE s.symbol_id=c.target_symbol_id
+             )
+             AND NOT EXISTS(
+                 SELECT 1 FROM native_compiler_symbols s
+                 WHERE c.target_usr<>'' AND s.clang_usr=c.target_usr
+             )
+           GROUP BY c.target_symbol_id,c.target_usr,c.target_kind,
+                    c.target_name,c.target_type_spelling
+           ORDER BY call_count DESC,c.target_name,c.target_symbol_id"""
+    ).fetchall()
+    return [_row_dict(row) for row in rows]
+
+
+def build_call_target_audit(
+    conn: sqlite3.Connection,
+    *,
+    limit: int = 100,
+) -> dict:
+    if limit < 0:
+        raise ValueError("limit must be >= 0")
+    if conn.row_factory is not sqlite3.Row:
+        conn.row_factory = sqlite3.Row
+    if not has_native_index(conn):
+        return {
+            "status": "no_native_index",
+            "message": "uat.db has no imported native semantic rows",
+        }
+
+    total_project_calls = int(
+        conn.execute(
+            """SELECT COUNT(*) FROM native_compiler_calls
+               WHERE target_symbol_id<>''"""
+        ).fetchone()[0]
+    )
+    materialized_by_symbol_id = int(
+        conn.execute(
+            """SELECT COUNT(*) FROM native_compiler_calls c
+               WHERE c.target_symbol_id<>''
+                 AND EXISTS(
+                     SELECT 1 FROM native_compiler_symbols s
+                     WHERE s.symbol_id=c.target_symbol_id
+                 )"""
+        ).fetchone()[0]
+    )
+    materialized_by_clang_usr = int(
+        conn.execute(
+            """SELECT COUNT(*) FROM native_compiler_calls c
+               WHERE c.target_symbol_id<>''
+                 AND NOT EXISTS(
+                     SELECT 1 FROM native_compiler_symbols s
+                     WHERE s.symbol_id=c.target_symbol_id
+                 )
+                 AND c.target_usr<>''
+                 AND EXISTS(
+                     SELECT 1 FROM native_compiler_symbols s
+                     WHERE s.clang_usr=c.target_usr
+                 )"""
+        ).fetchone()[0]
+    )
+
+    identities = _unmaterialized_call_target_identity_rows(conn)
+    for row in identities:
+        row["has_usr"] = bool(row.get("target_usr"))
+        row["materialization_eligible"] = (
+            str(row.get("target_kind", "") or "")
+            in CALL_TARGET_SYMBOL_CURSOR_KINDS
+        )
+
+    kinds: dict[str, dict] = {}
+    for row in identities:
+        kind = str(row.get("target_kind", "") or "<unknown>")
+        entry = kinds.setdefault(
+            kind,
+            {
+                "target_kind": kind,
+                "call_count": 0,
+                "identity_count": 0,
+                "identity_with_usr_count": 0,
+                "materialization_eligible": (
+                    kind in CALL_TARGET_SYMBOL_CURSOR_KINDS
+                ),
+            },
+        )
+        entry["call_count"] += int(row.get("call_count", 0) or 0)
+        entry["identity_count"] += 1
+        if row.get("has_usr"):
+            entry["identity_with_usr_count"] += 1
+
+    kind_rows = sorted(
+        kinds.values(),
+        key=lambda row: (
+            -int(row["call_count"]),
+            -int(row["identity_count"]),
+            str(row["target_kind"]),
+        ),
+    )
+
+    eligible = [
+        row for row in identities
+        if row.get("materialization_eligible")
+    ]
+    ineligible = [
+        row for row in identities
+        if not row.get("materialization_eligible")
+    ]
+    counts = {
+        "project_target_calls": total_project_calls,
+        "materialized_by_symbol_id": materialized_by_symbol_id,
+        "materialized_by_clang_usr": materialized_by_clang_usr,
+        "unmaterialized_project_target_calls": sum(
+            int(row.get("call_count", 0) or 0)
+            for row in identities
+        ),
+        "unmaterialized_project_target_identities": len(identities),
+        "eligible_target_calls": sum(
+            int(row.get("call_count", 0) or 0)
+            for row in eligible
+        ),
+        "eligible_target_identities": len(eligible),
+        "ineligible_target_calls": sum(
+            int(row.get("call_count", 0) or 0)
+            for row in ineligible
+        ),
+        "ineligible_target_identities": len(ineligible),
+        "unmaterialized_identities_with_usr": sum(
+            int(bool(row.get("has_usr")))
+            for row in identities
+        ),
+    }
+    return {
+        "status": "ok",
+        "limit": limit,
+        "counts": counts,
+        "kinds": kind_rows,
+        "targets": identities[:limit],
+    }
+
+
+def print_call_target_audit(report: dict) -> None:
+    print("=== NATIVE CALL TARGET AUDIT ===")
+    print(f"Status: {report.get('status', '')}")
+    if report.get("status") != "ok":
+        print(report.get("message", ""))
+        return
+
+    counts = report.get("counts", {})
+    print(
+        "Project call targets: "
+        f"total={counts.get('project_target_calls', 0)} "
+        f"symbol_id={counts.get('materialized_by_symbol_id', 0)} "
+        f"clang_usr={counts.get('materialized_by_clang_usr', 0)} "
+        "unmaterialized="
+        f"{counts.get('unmaterialized_project_target_calls', 0)}"
+    )
+    print(
+        "Unmaterialized identities: "
+        f"total={counts.get('unmaterialized_project_target_identities', 0)} "
+        f"with_usr={counts.get('unmaterialized_identities_with_usr', 0)} "
+        f"eligible={counts.get('eligible_target_identities', 0)} "
+        f"ineligible={counts.get('ineligible_target_identities', 0)}"
+    )
+    print(
+        "Potential exact target-only materialization: "
+        f"eligible_calls={counts.get('eligible_target_calls', 0)} "
+        f"ineligible_calls={counts.get('ineligible_target_calls', 0)}"
+    )
+
+    kinds = report.get("kinds", [])
+    print(f"Unmaterialized cursor kinds: {len(kinds)}")
+    for row in kinds:
+        print(
+            "  "
+            f"{row.get('target_kind', '')}: "
+            f"calls={row.get('call_count', 0)} "
+            f"identities={row.get('identity_count', 0)} "
+            f"with_usr={row.get('identity_with_usr_count', 0)} "
+            "eligible="
+            f"{str(bool(row.get('materialization_eligible'))).lower()}"
+        )
+
+    targets = report.get("targets", [])
+    print(
+        "Unmaterialized target identities: "
+        f"{counts.get('unmaterialized_project_target_identities', 0)} "
+        f"(showing {len(targets)})"
+    )
+    for row in targets:
+        print(
+            "  "
+            f"{row.get('target_name', '')} "
+            f"[{row.get('target_kind', '')}] "
+            f"id={row.get('target_symbol_id', '')} "
+            f"usr={row.get('target_usr', '') or '<none>'} "
+            f"calls={row.get('call_count', 0)} "
+            f"callers={row.get('caller_symbol_count', 0)} "
+            "eligible="
+            f"{str(bool(row.get('materialization_eligible'))).lower()} "
+            f"sample={row.get('sample_source_path', '')}:"
+            f"{row.get('sample_line', 0)}"
+        )
+
+
 def build_audit(
     conn: sqlite3.Connection,
     *,
@@ -1844,33 +2128,9 @@ def build_audit(
             "rows": [_row_dict(row) for row in rows],
         })
 
-    target_groups = conn.execute(
-        """SELECT c.target_symbol_id,c.target_usr,c.target_kind,
-                  c.target_name,c.target_type_spelling,
-                  COUNT(*) AS call_count,
-                  COUNT(DISTINCT c.caller_symbol_id) AS caller_symbol_count,
-                  MIN(c.source_path) AS sample_source_path,
-                  MIN(c.line) AS sample_line
-           FROM native_compiler_calls c
-           WHERE c.target_symbol_id <> ''
-             AND NOT EXISTS(
-                 SELECT 1 FROM native_compiler_symbols s
-                 WHERE s.symbol_id=c.target_symbol_id
-             )
-             AND NOT EXISTS(
-                 SELECT 1 FROM native_compiler_symbols s
-                 WHERE c.target_usr<>'' AND s.clang_usr=c.target_usr
-             )
-           GROUP BY c.target_symbol_id,c.target_usr,c.target_kind,
-                    c.target_name,c.target_type_spelling
-           ORDER BY call_count DESC,c.target_name,c.target_symbol_id
-           LIMIT ?""",
-        (limit,),
-    ).fetchall()
-    unmaterialized_project_targets = [
-        _row_dict(row)
-        for row in target_groups
-    ]
+    unmaterialized_project_targets = (
+        _unmaterialized_call_target_identity_rows(conn)[:limit]
+    )
 
     counts = {
         "joined_functions": int(
@@ -1956,7 +2216,9 @@ def print_audit(report: dict) -> None:
             "parameter_owner_mismatches_rejected="
             f"{capture.get('parameter_owner_mismatches_rejected', 0)} "
             "nested_callable_calls_suppressed="
-            f"{capture.get('nested_callable_calls_suppressed', 0)}"
+            f"{capture.get('nested_callable_calls_suppressed', 0)} "
+            "target_only_symbols="
+            f"{capture.get('target_only_symbols', 0)}"
         )
 
     print(

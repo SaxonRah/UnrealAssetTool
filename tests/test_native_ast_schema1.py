@@ -43,6 +43,24 @@ class NativeASTSchema1Test(unittest.TestCase):
             self.assertIn(ext.resolve().as_posix(), includes)
             self.assertEqual(forced, [])
 
+    def test_capture_manifest_paths_all_persist_target_materialization_policy(self) -> None:
+        source = (
+            SCRIPTS / "uatool_native_ast.py"
+        ).read_text(encoding="utf-8")
+        self.assertEqual(
+            source.count(
+                '"call_target_materialization_policy": '
+                "CALL_TARGET_MATERIALIZATION_POLICY"
+            ),
+            3,
+        )
+        self.assertEqual(
+            source.count(
+                '"call_owner_policy": CALL_OWNER_POLICY'
+            ),
+            3,
+        )
+
     def test_capture_manifest_paths_all_persist_freshness_provenance(self) -> None:
         source = (
             SCRIPTS / "uatool_native_ast.py"
@@ -778,12 +796,127 @@ class NativeASTSchema1Test(unittest.TestCase):
                 )
             )
 
+    def test_libclang_referenced_cxxconstructor_materializes_exact_target_symbol(self) -> None:
+        class FakeDLL:
+            def clang_getCursorSemanticParent(self, cursor):
+                return None
+
+            def clang_isCursorDefinition(self, cursor):
+                return 1
+
+        class FakeClang:
+            def __init__(self, root: Path):
+                self.root = root
+                self.dll = FakeDLL()
+                self.target = object()
+
+            def is_null(self, cursor):
+                return cursor is None
+
+            def kind(self, cursor):
+                return "CXXConstructor"
+
+            def location(self, cursor):
+                return (
+                    (self.root / "Source" / "FThing.h").as_posix(),
+                    7,
+                    3,
+                    70,
+                )
+
+            def usr(self, cursor):
+                return "c:@S@FThing@F@FThing#"
+
+            def spelling(self, cursor):
+                return "FThing"
+
+            def display_name(self, cursor):
+                return "FThing()"
+
+            def type_spelling(self, cursor):
+                return "void ()"
+
+            def mangling(self, cursor):
+                return ""
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "Source").mkdir()
+            clang = FakeClang(root)
+            capture = libclang_worker.Capture(
+                clang,
+                {
+                    "project_root": root.as_posix(),
+                    "translation_unit": "Source/Test.cpp",
+                    "language": "cpp",
+                    "compatibility_overrides": [],
+                },
+            )
+            expected_id, _, expected_kind, _ = (
+                capture.target_identity(clang.target)
+            )
+            row = capture.materialize_referenced_target(
+                clang.target
+            )
+            self.assertIsNotNone(row)
+            self.assertEqual(row["symbol_id"], expected_id)
+            self.assertEqual(expected_kind, "CXXConstructor")
+            self.assertEqual(row["kind"], "constructor")
+            self.assertEqual(
+                row["symbol_origin"],
+                "compiler_referenced_call_target",
+            )
+            self.assertEqual(
+                row["evidence"],
+                "libclang_referenced_target_cursor",
+            )
+            self.assertEqual(len(capture.symbols), 1)
+
+            capture.materialize_referenced_target(clang.target)
+            self.assertEqual(len(capture.symbols), 1)
+
+    def test_libclang_overloaded_decl_ref_remains_unmaterialized(self) -> None:
+        class FakeDLL:
+            pass
+
+        class FakeClang:
+            def __init__(self):
+                self.dll = FakeDLL()
+                self.target = object()
+
+            def is_null(self, cursor):
+                return cursor is None
+
+            def kind(self, cursor):
+                return "OverloadedDeclRef"
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            clang = FakeClang()
+            capture = libclang_worker.Capture(
+                clang,
+                {
+                    "project_root": root.as_posix(),
+                    "translation_unit": "Source/Test.cpp",
+                    "language": "cpp",
+                    "compatibility_overrides": [],
+                },
+            )
+            self.assertIsNone(
+                capture.materialize_referenced_target(clang.target)
+            )
+            self.assertEqual(capture.symbols, [])
+
     def test_native_ast_manifest_declares_parameter_owner_ruleset(self) -> None:
         source = (SCRIPTS / "uatool_native_ast.py").read_text(
             encoding="utf-8"
         )
         self.assertIn(
-            'RULESET = "libclang_semantic_callable_owner_v1"',
+            'RULESET = "libclang_semantic_callable_owner_target_v2"',
+            source,
+        )
+        self.assertIn(
+            "CALL_TARGET_MATERIALIZATION_POLICY",
             source,
         )
         self.assertIn(
@@ -896,7 +1029,15 @@ class NativeASTSchema1Test(unittest.TestCase):
             'f"occurrence|{self.language}|{source_path}|{kind}|{offset}|"',
             worker,
         )
-        self.assertIn("unique_symbols.setdefault", worker)
+        self.assertIn("unique_symbols.get", worker)
+        self.assertIn(
+            '"compiler_referenced_call_target"',
+            worker,
+        )
+        self.assertIn(
+            '"project_ast_traversal"',
+            worker,
+        )
 
     def test_libclang_outputs_are_unique_per_translation_unit(self) -> None:
         source = (

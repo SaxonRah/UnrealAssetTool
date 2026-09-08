@@ -274,6 +274,9 @@ def make_ast(root: Path) -> None:
         "ruleset": native_ast.RULESET,
         "parameter_owner_policy": native_ast.PARAMETER_OWNER_POLICY,
         "call_owner_policy": native_ast.CALL_OWNER_POLICY,
+        "call_target_materialization_policy": (
+            native_ast.CALL_TARGET_MATERIALIZATION_POLICY
+        ),
         "pass": "UnrealAssetToolNativeAST",
         "success": True,
         "error": "",
@@ -814,6 +817,157 @@ class NativeIndexSchema1Tests(unittest.TestCase):
             1,
         )
 
+    def test_call_target_audit_classifies_exact_materialization_candidates(self) -> None:
+        native_index.import_database(
+            self.db,
+            self.reflected,
+            self.compiler,
+            self.joins,
+        )
+        conn = sqlite3.connect(self.db)
+        conn.row_factory = sqlite3.Row
+        try:
+            extra_calls = [
+                (
+                    "call-target-fn-a",
+                    "do-symbol",
+                    "do-occurrence",
+                    "project-fn-target",
+                    "c:@F@ProjectThunk#",
+                    "FunctionDecl",
+                    "ProjectThunk",
+                    "void ()",
+                    "Plugins/HR_RAI/Source/HRRAI/Private/HRThing.cpp",
+                    "Plugins/HR_RAI/Source/HRRAI/Private/HRThing.cpp",
+                    "cpp",
+                    35,
+                    7,
+                    350,
+                    "compiler_resolved",
+                    "[]",
+                    "libclang_cursor_schema1",
+                    "{}",
+                ),
+                (
+                    "call-target-fn-b",
+                    "caller-symbol",
+                    "caller-occurrence",
+                    "project-fn-target",
+                    "c:@F@ProjectThunk#",
+                    "FunctionDecl",
+                    "ProjectThunk",
+                    "void ()",
+                    "Plugins/HR_RAI/Source/HRRAI/Private/HRThing.cpp",
+                    "Plugins/HR_RAI/Source/HRRAI/Private/HRThing.cpp",
+                    "cpp",
+                    45,
+                    7,
+                    450,
+                    "compiler_resolved",
+                    "[]",
+                    "libclang_cursor_schema1",
+                    "{}",
+                ),
+                (
+                    "call-target-ctor",
+                    "do-symbol",
+                    "do-occurrence",
+                    "project-ctor-target",
+                    "c:@S@FThing@F@FThing#",
+                    "CXXConstructor",
+                    "FThing",
+                    "void ()",
+                    "Plugins/HR_RAI/Source/HRRAI/Private/HRThing.cpp",
+                    "Plugins/HR_RAI/Source/HRRAI/Private/HRThing.cpp",
+                    "cpp",
+                    36,
+                    7,
+                    360,
+                    "compiler_resolved",
+                    "[]",
+                    "libclang_cursor_schema1",
+                    "{}",
+                ),
+                (
+                    "call-target-overload",
+                    "do-symbol",
+                    "do-occurrence",
+                    "project-overload-target",
+                    "",
+                    "OverloadedDeclRef",
+                    "FindComponentByClass",
+                    "",
+                    "Plugins/HR_RAI/Source/HRRAI/Private/HRThing.cpp",
+                    "Plugins/HR_RAI/Source/HRRAI/Private/HRThing.cpp",
+                    "cpp",
+                    37,
+                    7,
+                    370,
+                    "compiler_resolved",
+                    "[]",
+                    "libclang_cursor_schema1",
+                    "{}",
+                ),
+            ]
+            conn.executemany(
+                """INSERT INTO native_compiler_calls
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                extra_calls,
+            )
+            report = native_index.build_call_target_audit(
+                conn,
+                limit=100,
+            )
+        finally:
+            conn.close()
+
+        self.assertEqual(report["status"], "ok")
+        counts = report["counts"]
+        self.assertEqual(counts["project_target_calls"], 6)
+        self.assertEqual(counts["materialized_by_symbol_id"], 2)
+        self.assertEqual(counts["materialized_by_clang_usr"], 0)
+        self.assertEqual(
+            counts["unmaterialized_project_target_calls"],
+            4,
+        )
+        self.assertEqual(
+            counts["unmaterialized_project_target_identities"],
+            3,
+        )
+        self.assertEqual(counts["eligible_target_calls"], 3)
+        self.assertEqual(counts["eligible_target_identities"], 2)
+        self.assertEqual(counts["ineligible_target_calls"], 1)
+        self.assertEqual(counts["ineligible_target_identities"], 1)
+        self.assertEqual(
+            counts["unmaterialized_identities_with_usr"],
+            2,
+        )
+
+        kinds = {
+            row["target_kind"]: row
+            for row in report["kinds"]
+        }
+        self.assertTrue(
+            kinds["FunctionDecl"]["materialization_eligible"]
+        )
+        self.assertTrue(
+            kinds["CXXConstructor"]["materialization_eligible"]
+        )
+        self.assertFalse(
+            kinds["OverloadedDeclRef"]["materialization_eligible"]
+        )
+        self.assertEqual(kinds["FunctionDecl"]["call_count"], 2)
+
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            native_index.print_call_target_audit(report)
+        rendered = output.getvalue()
+        self.assertIn("eligible_calls=3", rendered)
+        self.assertIn(
+            "OverloadedDeclRef: calls=1 identities=1",
+            rendered,
+        )
+
     def test_audit_reports_join_parameter_and_target_anomalies(self) -> None:
         native_index.import_database(
             self.db,
@@ -894,6 +1048,16 @@ class NativeIndexSchema1Tests(unittest.TestCase):
             ],
             95,
         )
+        self.assertEqual(
+            report["compiler_capture"][
+                "call_target_materialization_policy"
+            ],
+            native_ast.CALL_TARGET_MATERIALIZATION_POLICY,
+        )
+        self.assertEqual(
+            report["compiler_capture"]["target_only_symbols"],
+            0,
+        )
         self.assertEqual(report["counts"]["joined_functions"], 1)
         self.assertEqual(report["counts"]["function_diagnostics"], 1)
         self.assertEqual(
@@ -925,6 +1089,61 @@ class NativeIndexSchema1Tests(unittest.TestCase):
             "ProjectThunk",
         )
 
+    def test_compiler_capture_stats_backfill_new_fields_from_manifest(self) -> None:
+        native_index.import_database(
+            self.db,
+            self.reflected,
+            self.compiler,
+            self.joins,
+        )
+        conn = sqlite3.connect(self.db)
+        conn.row_factory = sqlite3.Row
+        try:
+            manifest = json.loads(
+                conn.execute(
+                    """SELECT value FROM native_index_meta
+                       WHERE key='compiler_manifest_json'"""
+                ).fetchone()[0]
+            )
+            manifest["call_target_materialization_policy"] = (
+                "exact-target-policy-test"
+            )
+            manifest.setdefault("normalized_counts", {})[
+                "target_only_symbols"
+            ] = 9
+            conn.execute(
+                """UPDATE native_index_meta SET value=?
+                   WHERE key='compiler_manifest_json'""",
+                (json.dumps(manifest),),
+            )
+            conn.execute(
+                """UPDATE native_index_meta SET value=?
+                   WHERE key='compiler_capture_stats_json'""",
+                (
+                    json.dumps({
+                        "ruleset": native_ast.RULESET,
+                        "parameter_owner_policy": (
+                            native_ast.PARAMETER_OWNER_POLICY
+                        ),
+                        "call_owner_policy": native_ast.CALL_OWNER_POLICY,
+                        "parameter_owner_mismatches_rejected": 7,
+                        "nested_callable_calls_suppressed": 95,
+                    }),
+                ),
+            )
+            stats = native_index._compiler_capture_stats_from_conn(
+                conn
+            )
+        finally:
+            conn.close()
+
+        self.assertEqual(
+            stats["call_target_materialization_policy"],
+            "exact-target-policy-test",
+        )
+        self.assertEqual(stats["target_only_symbols"], 9)
+        self.assertEqual(stats["ruleset"], native_ast.RULESET)
+
     def test_source_only_report_labels_absent_reflected_join(self) -> None:
         native_index.import_database(
             self.db,
@@ -950,6 +1169,25 @@ class NativeIndexSchema1Tests(unittest.TestCase):
         self.assertIn(
             "Reflected join: <none; exact compiler symbol is source-only>",
             output.getvalue(),
+        )
+
+    def test_canonical_launcher_exposes_native_call_target_audit(self) -> None:
+        launcher = (SCRIPTS / "uatool.py").read_text(encoding="utf-8")
+        self.assertIn(
+            'prog="uatool native-call-target-audit"',
+            launcher,
+        )
+        self.assertIn(
+            'sys.argv[1] == "native-call-target-audit"',
+            launcher,
+        )
+        self.assertIn(
+            "native_index.build_call_target_audit(",
+            launcher,
+        )
+        self.assertIn(
+            "native_index.print_call_target_audit(report)",
+            launcher,
         )
 
     def test_canonical_launcher_exposes_native_index_audit(self) -> None:
