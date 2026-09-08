@@ -1,8 +1,8 @@
 """Single source of truth for the UnrealAssetTool public release contract."""
 from __future__ import annotations
 
-RELEASE_VERSION = "1.0.0-beta.1"
-PLUGIN_VERSION = 100001
+RELEASE_VERSION = "1.0.0-beta.2"
+PLUGIN_VERSION = 100002
 VALIDATED_ENGINE = "UE 5.8.2"
 ENGINE_TARGET = "UE 5.8+"
 

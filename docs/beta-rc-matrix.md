@@ -1,6 +1,6 @@
 # 1.0 beta release-candidate matrix
 
-This is the executable gate for issue #97. It turns the representative sample projects into one named `1.0.0-beta.1` release-candidate regression matrix.
+This is the executable gate for issue #149. It turns the representative sample projects into one named `1.0.0-beta.2` release-candidate regression matrix.
 
 ## Command
 
@@ -36,7 +36,7 @@ derived=40
 capabilities=1
 ```
 
-Every RC record also requires tool version `1.0.0-beta.1` and validated engine `UE 5.8.2` in `capabilities.json`.
+Every RC record also requires tool version `1.0.0-beta.2` and validated engine `UE 5.8.2` in `capabilities.json`.
 
 The table above is the **tool-current maximum/current schema contract**, not a
 claim that every representative project contains authored data for every
@@ -88,6 +88,8 @@ Requires representative first-class/depth-pending families plus non-empty LevelS
 Purpose: Mass, authored ZoneGraph, Smart Objects, world and project-graph regression.
 
 Requires non-empty MassEntityConfig, ZoneShape, SmartObjectDefinition, world-actor and project-edge streams.
+
+City Sample has one intentional composed-corpus step: its authored ZoneShapes are placed world actors, so an ordinary Asset Registry/systems scan legitimately emits zero `zonegraph_shapes.jsonl` rows. After a fresh current-schema scan, reuse or recapture the focused authored ZoneGraph world evidence and run `zonegraph-world-promote` before the final derive/RC check. Promotion validates the focused 61-shape/144-point capture against the fresh canonical world-owned ZoneShape set, overlays only the two ZoneGraph streams into the current systems schema, and does not launch Unreal or derive. A zero-shape ordinary systems pass must not be treated as proof that City Sample contains no authored ZoneShapes.
 
 ### `lyra`
 

@@ -6,7 +6,7 @@
 
 ## Current baseline
 
-- release: **1.0.0-beta.1**
+- release: **1.0.0-beta.2**
 - Unreal target: **UE 5.8+**
 - validated engine: **UE 5.8.2**
 - structural scanner schema: **13**
@@ -36,6 +36,7 @@ Three rules drive the design:
 UnrealAssetTool currently has dedicated extraction for:
 
 - project/source/config files and Asset Registry identity/dependencies;
+- optional project-owned native C/C++ semantics: reflected UE declarations, compiler-resolved AST symbols/parameters/calls, exact reflected↔compiler joins, portable staging/freshness, exact call-target materialization and bounded caller/callee traversal;
 - Blueprint/K2, Animation Blueprint graphs, UMG, Control Rig/RigVM;
 - Behavior Trees, Blackboards, EQS and StateTree;
 - PCG graphs;
@@ -277,9 +278,14 @@ python scripts\uatool.py native-program-report `
     "E:\Path\Project\.uatool" `
     "UHRRAIEntityComponent::BeginPlay" `
     --callees
+
+python scripts\uatool.py native-program-report `
+    "E:\Path\Project\.uatool" `
+    "/Script/HRRAI.HRRAIEntityComponent:ApplyJsonConfig" `
+    --callees --depth 3 --limit 120
 ```
 
-The report resolver is exact-only. It can start from an exact reflected function path, compiler symbol ID, Clang USR or qualified C/C++ name. An unresolved reflected function remains visible with its exact join diagnostic instead of being silently dropped or guessed. A compiler symbol without a reflected UFunction counterpart remains explicitly source-only. Compiler-resolved call targets that have a stable project target ID but no first-class canonical symbol row are retained and labeled unmaterialized; exact Clang USR is used to reach a canonical symbol when available.
+The report resolver is exact-only. It can start from an exact reflected function path, compiler symbol ID, Clang USR or qualified C/C++ name. An unresolved reflected function remains visible with its exact join diagnostic instead of being silently dropped or guessed. A compiler symbol without a reflected UFunction counterpart remains explicitly source-only. Compiler-resolved project call targets are materialized only from exact referenced libclang cursor evidence. Bounded multi-hop traversal crosses exact symbol IDs first and exact Clang USRs second; cycles/revisits are labeled, unresolved overload/template targets remain terminal boundaries, and high-fanout external calls cannot starve deeper exact project traversal.
 
 For live development, `native-stage-freshness` separates compiler freshness from join freshness. Unchanged source/build inputs plus unchanged reflection are `fresh`; reflection-only changes are `join_stale` and reuse the retained compiler graph; source/header/build/descriptors changes are `compiler_stale` and require a new AST capture. Stages created from older AST manifests without input fingerprints are reported as `unknown_legacy_stage` rather than guessed fresh. Portable `pack` / bundle rebuilds never consult the original absolute source tree.
 
@@ -363,6 +369,7 @@ A scanner family is not considered stable merely because it compiles. Corpus val
 
 ## Documentation
 
+- [1.0.0-beta.2 release notes](docs/release-notes-1.0.0-beta.2.md)
 - [Architecture](docs/architecture.md)
 - [Schema reference](docs/schema.md)
 - [Coverage matrix](docs/coverage.md)

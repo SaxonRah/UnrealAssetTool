@@ -3,7 +3,7 @@
 ## Release
 
 ```text
-version:          1.0.0-beta.1
+version:          1.0.0-beta.2
 engine target:    UE 5.8+
 validated engine: UE 5.8.2
 ```
@@ -16,7 +16,7 @@ python scripts\uatool.py version
 python scripts\uatool.py version --json
 ```
 
-`UnrealAssetTool.uplugin`, the CLI, `capabilities.json`, and current-facing documentation must agree on the release version.
+`UnrealAssetTool.uplugin`, the CLI, `capabilities.json`, and current-facing documentation must agree on the release version. The candidate release notes are [release-notes-1.0.0-beta.2.md](release-notes-1.0.0-beta.2.md).
 
 ## Current full-corpus schema baseline
 
@@ -50,6 +50,23 @@ Canonical scanner schemas and derived schemas are independent contracts.
 
 During the `1.0.0-beta.*` line, an individual schema may still advance when real-corpus evidence requires it. Breaking or ambiguous semantic changes must be evidence-driven, versioned, and validated before release. Derived schema 40 also distinguishes authored delegate Bind/Assign sites from resolved subscriptions: a zero-input site remains diagnostic evidence and does not manufacture a binding row.
 
+## Beta.2 native semantic milestone
+
+Beta.2 adds an independently versioned optional native semantic companion without changing the normal full-corpus scanner schema baseline. The accepted native stack combines:
+
+- reflected UE C++ declarations captured through Unreal/UHT-visible metadata;
+- project-owned compilation-database and response-file provenance;
+- compiler-resolved libclang AST symbols, parameters and call sites;
+- exact reflected-to-compiler function joins only when identity is proven;
+- SQLite/query/report projection;
+- portable staged native evidence with freshness classification;
+- exact compiler-referenced project call-target materialization;
+- bounded multi-hop caller/callee traversal with cycle/revisit and terminal-boundary labeling.
+
+Normal scans do not automatically run the expensive all-translation-unit compiler capture. Native evidence is staged explicitly and remains separately self-describing.
+
+The Hyperreality beta.2 acceptance corpus resolves 2,926 of 2,932 project-target call sites to first-class exact symbols. The remaining six sites are intentionally unresolved compiler cursor constructs (four overload-set references and two template-type-parameter references); beta.2 does not guess through them.
+
 ## Semantic guarantee
 
 The beta guarantee is **truthful authored semantics**, not exhaustive Unreal runtime simulation.
@@ -70,13 +87,14 @@ Important global non-claims include:
 - no runtime animation pose/search evaluation;
 - no runtime AI/StateTree/BehaviorTree execution state;
 - no generated PCG spatial output;
-- no dynamically spawned world state unless authored/captured by a canonical pass.
+- no dynamically spawned world state unless authored/captured by a canonical pass;
+- no guessed native call resolution through unresolved overload sets, template parameters, or other unsupported compiler cursor constructs.
 
 `capabilities.json` is the machine-readable source for family-by-family coverage and boundaries.
 
 ## 1.0 beta acceptance bar
 
-`1.0.0-beta.1` is ready when all of these gates are satisfied:
+`1.0.0-beta.2` is ready when all of these gates are satisfied:
 
 1. release/version/schema contract synchronized;
 2. representative multi-corpus release-candidate matrix accepted;
