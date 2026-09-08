@@ -773,6 +773,32 @@ class NativeIndexSchema1Tests(unittest.TestCase):
                 ],
             )
 
+            for index in range(8):
+                conn.execute(
+                    """INSERT INTO native_compiler_calls
+                       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (
+                        f"call-noise-{index}",
+                        "do-symbol",
+                        "do-occurrence",
+                        f"missing-noise-{index}",
+                        "",
+                        "OverloadedDeclRef",
+                        f"Noise{index}",
+                        "",
+                        "Plugins/HR_RAI/Source/HRRAI/Private/HRThing.cpp",
+                        "Plugins/HR_RAI/Source/HRRAI/Private/HRThing.cpp",
+                        "cpp",
+                        50 + index,
+                        5,
+                        500 + index,
+                        "compiler_resolved",
+                        "[]",
+                        "libclang_cursor_schema1",
+                        "{}",
+                    ),
+                )
+
             report = native_index.build_report(
                 conn,
                 "/Script/HRRAI.HRThing.DoThing",
@@ -780,6 +806,13 @@ class NativeIndexSchema1Tests(unittest.TestCase):
                 include_callees=True,
                 limit=20,
                 depth=3,
+            )
+            anti_starvation = native_index.build_call_graph(
+                conn,
+                "do-symbol",
+                direction="callee",
+                depth=3,
+                limit=3,
             )
             truncated = native_index.build_call_graph(
                 conn,
@@ -848,7 +881,25 @@ class NativeIndexSchema1Tests(unittest.TestCase):
             "cycle",
         )
 
+        self.assertTrue(anti_starvation["truncated"])
+        anti_depths = {
+            node["symbol_id"]: node["depth"]
+            for node in anti_starvation["nodes"]
+        }
+        self.assertEqual(anti_depths["leaf-symbol"], 2)
+        anti_calls = {
+            edge["call_id"]
+            for edge in anti_starvation["edges"]
+        }
+        self.assertIn("call-out", anti_calls)
+        self.assertIn("call-do-caller", anti_calls)
+        self.assertIn("call-helper-leaf-usr", anti_calls)
+        self.assertFalse(
+            any(call_id.startswith("call-noise-") for call_id in anti_calls)
+        )
+
         self.assertTrue(truncated["truncated"])
+        self.assertTrue(truncated["node_truncated"])
         self.assertEqual(truncated["edge_count"], 1)
         self.assertLessEqual(truncated["node_count"], 2)
 
