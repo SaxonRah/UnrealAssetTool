@@ -1561,6 +1561,244 @@ def _diagnostics_for_function(
     ]
 
 
+def _resolved_call_target(
+    conn: sqlite3.Connection,
+    row: sqlite3.Row,
+) -> tuple[dict, str]:
+    target_symbol_id = str(row["target_symbol_id"] or "")
+    target_usr = str(row["target_usr"] or "")
+    target = (
+        _symbol_brief(conn, target_symbol_id)
+        if target_symbol_id
+        else {}
+    )
+    if target:
+        return target, "symbol_id"
+    if target_usr:
+        target = _symbol_brief_by_usr(conn, target_usr)
+        if target:
+            return target, "clang_usr"
+    return {}, ""
+
+
+def _call_rows_for_symbol(
+    conn: sqlite3.Connection,
+    symbol_id: str,
+    *,
+    direction: str,
+) -> list[sqlite3.Row]:
+    if direction == "callee":
+        return conn.execute(
+            """SELECT * FROM native_compiler_calls
+               WHERE caller_symbol_id=?
+               ORDER BY source_path,line,column,call_id""",
+            (symbol_id,),
+        ).fetchall()
+
+    source = _symbol_brief(conn, symbol_id)
+    source_usr = str(source.get("clang_usr", "") or "")
+    return conn.execute(
+        """SELECT * FROM native_compiler_calls
+           WHERE target_symbol_id=?
+              OR (?<>'' AND target_usr=?)
+           ORDER BY source_path,line,column,call_id""",
+        (symbol_id, source_usr, source_usr),
+    ).fetchall()
+
+
+def _graph_node(
+    conn: sqlite3.Connection,
+    symbol_id: str,
+    *,
+    depth: int,
+) -> dict:
+    symbol = _symbol_brief(conn, symbol_id)
+    if not symbol:
+        return {}
+    node = dict(symbol)
+    node["depth"] = depth
+    return node
+
+
+def _path_contains(
+    parent_by_symbol: dict[str, str],
+    current_symbol_id: str,
+    candidate_symbol_id: str,
+) -> bool:
+    cursor = current_symbol_id
+    for _ in range(len(parent_by_symbol) + 1):
+        if cursor == candidate_symbol_id:
+            return True
+        cursor = parent_by_symbol.get(cursor, "")
+        if not cursor:
+            return False
+    return False
+
+
+def build_call_graph(
+    conn: sqlite3.Connection,
+    start_symbol_id: str,
+    *,
+    direction: str,
+    depth: int,
+    limit: int,
+) -> dict:
+    if direction not in {"callee", "caller"}:
+        raise ValueError("direction must be 'callee' or 'caller'")
+    if depth < 1:
+        raise ValueError("depth must be >= 1")
+    if limit < 0:
+        raise ValueError("limit must be >= 0")
+
+    root = _graph_node(conn, start_symbol_id, depth=0)
+    if not root:
+        return {
+            "direction": direction,
+            "depth_limit": depth,
+            "edge_limit": limit,
+            "root_symbol_id": start_symbol_id,
+            "nodes": [],
+            "edges": [],
+            "truncated": False,
+        }
+
+    nodes_by_symbol: dict[str, dict] = {
+        start_symbol_id: root,
+    }
+    discovered_depth: dict[str, int] = {
+        start_symbol_id: 0,
+    }
+    parent_by_symbol: dict[str, str] = {
+        start_symbol_id: "",
+    }
+    queue: list[tuple[str, int]] = [(start_symbol_id, 0)]
+    edges: list[dict] = []
+    truncated = False
+    queue_index = 0
+
+    while queue_index < len(queue):
+        current_symbol_id, current_depth = queue[queue_index]
+        queue_index += 1
+        if current_depth >= depth:
+            continue
+
+        rows = _call_rows_for_symbol(
+            conn,
+            current_symbol_id,
+            direction=direction,
+        )
+        for row in rows:
+            if len(edges) >= limit:
+                truncated = True
+                break
+
+            next_depth = current_depth + 1
+            if direction == "callee":
+                call = _call_edge(conn, row, "callee")
+                target, resolution_basis = _resolved_call_target(
+                    conn,
+                    row,
+                )
+                next_symbol_id = str(
+                    target.get("symbol_id", "") or ""
+                )
+                edge = dict(call)
+                edge.update({
+                    "from_symbol_id": current_symbol_id,
+                    "to_symbol_id": next_symbol_id,
+                    "traversal_depth": next_depth,
+                })
+                if next_symbol_id:
+                    edge["target_resolution_basis"] = resolution_basis
+            else:
+                call = _call_edge(conn, row, "caller")
+                next_symbol_id = str(
+                    call.get("caller_symbol_id", "") or ""
+                )
+                edge = dict(call)
+                edge.update({
+                    "from_symbol_id": next_symbol_id,
+                    "to_symbol_id": current_symbol_id,
+                    "traversal_depth": next_depth,
+                })
+
+            materialized = bool(next_symbol_id)
+            cycle = (
+                materialized
+                and _path_contains(
+                    parent_by_symbol,
+                    current_symbol_id,
+                    next_symbol_id,
+                )
+            )
+            revisit = (
+                materialized
+                and next_symbol_id in discovered_depth
+            )
+            at_depth_limit = materialized and next_depth >= depth
+
+            terminal_reason = ""
+            if not materialized:
+                terminal_reason = (
+                    call.get("target_resolution_basis", "")
+                    if direction == "callee"
+                    else "unmaterialized_caller"
+                )
+            elif cycle:
+                terminal_reason = "cycle"
+            elif revisit:
+                terminal_reason = "revisit"
+            elif at_depth_limit:
+                terminal_reason = "depth_limit"
+
+            edge.update({
+                "materialized_traversal_target": materialized,
+                "cycle": bool(cycle),
+                "revisit": bool(revisit),
+                "terminal": bool(terminal_reason),
+                "terminal_reason": terminal_reason,
+            })
+            edges.append(edge)
+
+            if not materialized or revisit:
+                continue
+
+            discovered_depth[next_symbol_id] = next_depth
+            parent_by_symbol[next_symbol_id] = current_symbol_id
+            node = _graph_node(
+                conn,
+                next_symbol_id,
+                depth=next_depth,
+            )
+            if node:
+                nodes_by_symbol[next_symbol_id] = node
+            if next_depth < depth:
+                queue.append((next_symbol_id, next_depth))
+
+        if truncated:
+            break
+
+    nodes = sorted(
+        nodes_by_symbol.values(),
+        key=lambda row: (
+            int(row.get("depth", 0) or 0),
+            str(row.get("qualified_name", "") or ""),
+            str(row.get("symbol_id", "") or ""),
+        ),
+    )
+    return {
+        "direction": direction,
+        "depth_limit": depth,
+        "edge_limit": limit,
+        "root_symbol_id": start_symbol_id,
+        "node_count": len(nodes),
+        "edge_count": len(edges),
+        "nodes": nodes,
+        "edges": edges,
+        "truncated": truncated,
+    }
+
+
 def _call_edge(
     conn: sqlite3.Connection,
     row: sqlite3.Row,
@@ -1580,16 +1818,10 @@ def _call_edge(
     if direction == "callee":
         target_symbol_id = str(row["target_symbol_id"] or "")
         target_usr = str(row["target_usr"] or "")
-        target = (
-            _symbol_brief(conn, target_symbol_id)
-            if target_symbol_id
-            else {}
+        target, target_resolution_basis = _resolved_call_target(
+            conn,
+            row,
         )
-        target_resolution_basis = "symbol_id" if target else ""
-        if not target and target_usr:
-            target = _symbol_brief_by_usr(conn, target_usr)
-            if target:
-                target_resolution_basis = "clang_usr"
         if not target_resolution_basis and target_symbol_id:
             target_resolution_basis = "unmaterialized_project_cursor"
         elif not target_resolution_basis:
@@ -1633,9 +1865,12 @@ def build_report(
     include_callers: bool = True,
     include_callees: bool = True,
     limit: int = 80,
+    depth: int = 1,
 ) -> dict:
     if limit < 0:
         raise ValueError("limit must be >= 0")
+    if depth < 1:
+        raise ValueError("depth must be >= 1")
     if conn.row_factory is not sqlite3.Row:
         conn.row_factory = sqlite3.Row
     if not has_native_index(conn):
@@ -1823,6 +2058,29 @@ def build_report(
             _call_edge(conn, row, "caller")
             for row in call_rows
         ]
+
+    if depth > 1:
+        call_graph = {
+            "depth": depth,
+            "edge_limit_per_direction": limit,
+        }
+        if include_callees:
+            call_graph["callees"] = build_call_graph(
+                conn,
+                symbol_id,
+                direction="callee",
+                depth=depth,
+                limit=limit,
+            )
+        if include_callers:
+            call_graph["callers"] = build_call_graph(
+                conn,
+                symbol_id,
+                direction="caller",
+                depth=depth,
+                limit=limit,
+            )
+        result["call_graph"] = call_graph
 
     return result
 
@@ -2427,4 +2685,44 @@ def print_report(report: dict) -> None:
                 f"{edge.get('source_path', '')}:"
                 f"{edge.get('line', 0)} <- "
                 f"{edge.get('caller_name', '')}"
+            )
+
+
+    graph = report.get("call_graph", {})
+    for label in ("callees", "callers"):
+        section = graph.get(label)
+        if not section:
+            continue
+        print(
+            f"Multi-hop {label}: "
+            f"depth={section.get('depth_limit', 1)} "
+            f"nodes={section.get('node_count', 0)} "
+            f"edges={section.get('edge_count', 0)} "
+            f"truncated={str(bool(section.get('truncated'))).lower()}"
+        )
+        for edge in section.get("edges", []):
+            if label == "callees":
+                target = (
+                    edge.get("target_name", "")
+                    or edge.get("to_symbol_id", "")
+                )
+                arrow = "->"
+            else:
+                target = (
+                    edge.get("caller_name", "")
+                    or edge.get("from_symbol_id", "")
+                )
+                arrow = "<-"
+            suffix = ""
+            if edge.get("terminal"):
+                suffix = (
+                    " [terminal:"
+                    f"{edge.get('terminal_reason', '')}]"
+                )
+            print(
+                "  "
+                f"d{edge.get('traversal_depth', 0)} "
+                f"{edge.get('source_path', '')}:"
+                f"{edge.get('line', 0)} "
+                f"{arrow} {target}{suffix}"
             )
