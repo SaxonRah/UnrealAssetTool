@@ -650,6 +650,207 @@ class NativeIndexSchema1Tests(unittest.TestCase):
             report["callers"][0]["caller_name"],
             "UHRThing::Caller",
         )
+        self.assertNotIn("call_graph", report)
+
+    def test_multihop_call_graph_is_exact_cycle_safe_and_boundary_preserving(self) -> None:
+        native_index.import_database(
+            self.db,
+            self.reflected,
+            self.compiler,
+            self.joins,
+        )
+        conn = sqlite3.connect(self.db)
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.execute(
+                """INSERT INTO native_compiler_symbols
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    "leaf-occurrence",
+                    "leaf-symbol",
+                    "c:@F@leaf#",
+                    "FunctionDecl",
+                    "function",
+                    "leaf",
+                    "leaf",
+                    "void ()",
+                    "Plugins/HR_RAI/Source/HRRAI/Private/hrsim_test.c",
+                    "Plugins/HR_RAI/Source/HRRAI/Private/hrsim_test.c",
+                    "c",
+                    12,
+                    1,
+                    120,
+                    1,
+                    "[]",
+                    "libclang_cursor_schema1",
+                    "{}",
+                ),
+            )
+            conn.executemany(
+                """INSERT INTO native_compiler_calls
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                [
+                    (
+                        "call-do-boundary",
+                        "do-symbol",
+                        "do-occurrence",
+                        "missing-project-target",
+                        "c:@F@Missing#",
+                        "FunctionDecl",
+                        "Missing",
+                        "void ()",
+                        "Plugins/HR_RAI/Source/HRRAI/Private/HRThing.cpp",
+                        "Plugins/HR_RAI/Source/HRRAI/Private/HRThing.cpp",
+                        "cpp",
+                        32,
+                        5,
+                        320,
+                        "compiler_resolved",
+                        "[]",
+                        "libclang_cursor_schema1",
+                        "{}",
+                    ),
+                    (
+                        "call-do-caller",
+                        "do-symbol",
+                        "do-occurrence",
+                        "caller-symbol",
+                        "c:@S@UHRThing@F@Caller#",
+                        "CXXMethod",
+                        "Caller",
+                        "void ()",
+                        "Plugins/HR_RAI/Source/HRRAI/Private/HRThing.cpp",
+                        "Plugins/HR_RAI/Source/HRRAI/Private/HRThing.cpp",
+                        "cpp",
+                        34,
+                        5,
+                        340,
+                        "compiler_resolved",
+                        "[]",
+                        "libclang_cursor_schema1",
+                        "{}",
+                    ),
+                    (
+                        "call-helper-cycle",
+                        "helper-symbol",
+                        "helper-occurrence",
+                        "do-symbol",
+                        "c:@S@UHRThing@F@DoThing#I#",
+                        "CXXMethod",
+                        "DoThing",
+                        "void (int32)",
+                        "Plugins/HR_RAI/Source/HRRAI/Private/hrsim_test.c",
+                        "Plugins/HR_RAI/Source/HRRAI/Private/hrsim_test.c",
+                        "c",
+                        9,
+                        3,
+                        90,
+                        "compiler_resolved",
+                        "[]",
+                        "libclang_cursor_schema1",
+                        "{}",
+                    ),
+                    (
+                        "call-helper-leaf-usr",
+                        "helper-symbol",
+                        "helper-occurrence",
+                        "different-leaf-cursor-id",
+                        "c:@F@leaf#",
+                        "FunctionDecl",
+                        "leaf",
+                        "void ()",
+                        "Plugins/HR_RAI/Source/HRRAI/Private/hrsim_test.c",
+                        "Plugins/HR_RAI/Source/HRRAI/Private/hrsim_test.c",
+                        "c",
+                        10,
+                        3,
+                        100,
+                        "compiler_resolved",
+                        "[]",
+                        "libclang_cursor_schema1",
+                        "{}",
+                    ),
+                ],
+            )
+
+            report = native_index.build_report(
+                conn,
+                "/Script/HRRAI.HRThing.DoThing",
+                include_callers=True,
+                include_callees=True,
+                limit=20,
+                depth=3,
+            )
+            truncated = native_index.build_call_graph(
+                conn,
+                "do-symbol",
+                direction="callee",
+                depth=3,
+                limit=1,
+            )
+        finally:
+            conn.close()
+
+        self.assertEqual(report["status"], "joined")
+        graph = report["call_graph"]
+        self.assertEqual(graph["depth"], 3)
+
+        callees = graph["callees"]
+        self.assertFalse(callees["truncated"])
+        by_call = {
+            edge["call_id"]: edge
+            for edge in callees["edges"]
+        }
+        self.assertEqual(
+            by_call["call-helper-leaf-usr"][
+                "target_resolution_basis"
+            ],
+            "clang_usr",
+        )
+        self.assertEqual(
+            by_call["call-helper-leaf-usr"]["to_symbol_id"],
+            "leaf-symbol",
+        )
+        self.assertEqual(
+            by_call["call-do-boundary"]["terminal_reason"],
+            "unmaterialized_project_cursor",
+        )
+        self.assertFalse(
+            by_call["call-do-boundary"][
+                "materialized_traversal_target"
+            ]
+        )
+        self.assertTrue(by_call["call-helper-cycle"]["cycle"])
+        self.assertEqual(
+            by_call["call-helper-cycle"]["terminal_reason"],
+            "cycle",
+        )
+
+        node_depths = {
+            node["symbol_id"]: node["depth"]
+            for node in callees["nodes"]
+        }
+        self.assertEqual(node_depths["do-symbol"], 0)
+        self.assertEqual(node_depths["helper-symbol"], 1)
+        self.assertEqual(node_depths["caller-symbol"], 1)
+        self.assertEqual(node_depths["leaf-symbol"], 2)
+
+        callers = graph["callers"]
+        caller_edges = {
+            edge["call_id"]: edge
+            for edge in callers["edges"]
+        }
+        self.assertTrue(
+            caller_edges["call-do-caller"]["cycle"]
+        )
+        self.assertEqual(
+            caller_edges["call-do-caller"]["terminal_reason"],
+            "cycle",
+        )
+
+        self.assertTrue(truncated["truncated"])
+        self.assertEqual(truncated["edge_count"], 1)
+        self.assertLessEqual(truncated["node_count"], 2)
 
     def test_project_target_without_materialized_symbol_is_preserved(self) -> None:
         calls_path = self.compiler / native_ast.CALLS
@@ -1170,6 +1371,12 @@ class NativeIndexSchema1Tests(unittest.TestCase):
             "Reflected join: <none; exact compiler symbol is source-only>",
             output.getvalue(),
         )
+
+    def test_canonical_launcher_exposes_native_program_depth(self) -> None:
+        launcher = (SCRIPTS / "uatool.py").read_text(encoding="utf-8")
+        self.assertIn('prog="uatool native-program-report"', launcher)
+        self.assertIn('"--depth"', launcher)
+        self.assertIn("depth=args.depth", launcher)
 
     def test_canonical_launcher_exposes_native_call_target_audit(self) -> None:
         launcher = (SCRIPTS / "uatool.py").read_text(encoding="utf-8")
