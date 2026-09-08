@@ -38,7 +38,7 @@ capabilities=1
 
 | Family | Coverage | What is understood | Important boundary |
 | --- | --- | --- | --- |
-| Files/source/config | `first_class` | Physical files, kinds, bounded text chunks | Not a C++ semantic compiler/indexer |
+| Files/source/config | `first_class` | Physical files, kinds, bounded text chunks | Lexical/file coverage is distinct from the optional compiler-resolved native semantic companion described below |
 | Asset Registry | `first_class` fallback | Asset identity/class/package/tags/dependencies | Package dependency is not semantic object linkage |
 | Blueprint/K2 | `first_class` | Graphs, nodes, pins, links, state, refs, functions/events/calls/data provenance/execution blocks plus generic semantic statements/control flow; structural-schema-13 delegate member/scope provenance; exact project-authored macro graph/interface bindings, schema-33 cross-graph macro execution edges, schema-34 joined macro data-provenance routes, schema-35 direct-internal Blueprint function call/return topology, schema-36 function data provenance, and schema-38 exact authored delegate bindings | Static authored topology only: macro/function bodies are not inlined/simulated, cross-graph expressions are not executed/substituted, split call-site struct projections do not claim uncaptured callee member identity, interface dispatch implementations and latent scheduling are not guessed, engine StandardMacros remain external unless captured, and runtime Blueprint VM state is not executed |
 | Blueprint user-defined enums | `first_class` | Enum identity, entries, raw/authored/display names and conservative readable enum decoration | Ambiguous enum typing is left raw rather than guessed |
@@ -92,6 +92,22 @@ capabilities=1
 | Gameplay Framework | `first_class` | Exact/transitive Blueprint framework identity, explicit GameMode class selectors, per-world `DefaultGameMode`, project `GameMapsSettings`, Pawn/Character -> AIController class joins and exact schema-28 graph semantics | No runtime possession/spawn/GameMode simulation; inherited native selector values absent from authored rows are not invented; systems stays independently versioned |
 | Typed project graph | `first_class` | Typed nodes/edges, provenance, coverage and quality classes | It reflects extractor depth; it must not imply unsupported subsystem semantics |
 | Capability contract | `first_class` | Corpus schema versions, tool/corpus coverage, canonical streams, derived relations, runtime boundaries, partial-corpus state and acceptance provenance | It describes evidence available to the corpus; it does not manufacture new semantic facts |
+
+---
+
+# Optional native C/C++ semantic companion
+
+Beta.2 includes a separately captured/staged native semantic index for project-owned C/C++. It is **not** run automatically by ordinary Unreal scans because compiler AST capture resolves every project-owned translation unit and is materially more expensive.
+
+| Surface | Coverage | What is understood | Important boundary |
+| --- | --- | --- | --- |
+| Reflected native UE declarations | `first_class` | Project/project-plugin reflected classes/structs/functions/parameters/properties/enums with UHT/UE identity and exact C++ type information | Only reflected declarations visible to the project scope; Engine-owned definitions are excluded unless explicitly in scope |
+| Compiler native AST | `first_class` | Project-owned compiler symbols, parameters, exact source locations, compiler-resolved call sites and referenced-target identity from libclang | Does not claim runtime dispatch; unsupported compiler cursor forms remain explicit terminal evidence |
+| Reflected↔compiler joins | `first_class` | Exact function joins using proven owner/type identity, exact qualified name and reflection-projected parameter matching | Ambiguous/unproven delegate signatures remain diagnostics rather than guessed joins |
+| Native call graph | `first_class` | Exact materialized project call targets plus bounded multi-hop caller/callee traversal with provenance, cycle/revisit labeling and anti-starvation budgeting | Four `OverloadedDeclRef` and two `TemplateTypeParameter` call targets remain intentionally unresolved in the accepted Hyperreality corpus |
+| Native staging/freshness | `first_class` | Portable staged reflected/compiler/join evidence; compiler-vs-join freshness classification; deterministic SQLite/query rebuild | Normal scans never silently recapture all compiler TUs; stale/legacy evidence is surfaced explicitly |
+
+Accepted Hyperreality beta.2 evidence uses compiler ruleset `libclang_semantic_callable_owner_target_v2`: 48/48 translation units, 5,322 symbols, 2,569 parameters, 6,997 calls, 41 target-only symbol occurrences, and 2,926/2,932 project-target calls materialized to exact first-class symbols.
 
 ---
 
