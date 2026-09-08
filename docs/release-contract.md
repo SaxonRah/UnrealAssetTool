@@ -3,7 +3,7 @@
 ## Release
 
 ```text
-version:          1.0.0-beta.1
+version:          1.0.0-beta.2
 engine target:    UE 5.8+
 validated engine: UE 5.8.2
 ```
@@ -76,7 +76,7 @@ Important global non-claims include:
 
 ## 1.0 beta acceptance bar
 
-`1.0.0-beta.1` is ready when all of these gates are satisfied:
+`1.0.0-beta.2` is ready when all of these gates are satisfied:
 
 1. release/version/schema contract synchronized;
 2. representative multi-corpus release-candidate matrix accepted;
