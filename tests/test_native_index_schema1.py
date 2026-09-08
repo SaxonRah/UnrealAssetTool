@@ -1048,6 +1048,16 @@ class NativeIndexSchema1Tests(unittest.TestCase):
             ],
             95,
         )
+        self.assertEqual(
+            report["compiler_capture"][
+                "call_target_materialization_policy"
+            ],
+            native_ast.CALL_TARGET_MATERIALIZATION_POLICY,
+        )
+        self.assertEqual(
+            report["compiler_capture"]["target_only_symbols"],
+            0,
+        )
         self.assertEqual(report["counts"]["joined_functions"], 1)
         self.assertEqual(report["counts"]["function_diagnostics"], 1)
         self.assertEqual(
@@ -1078,6 +1088,61 @@ class NativeIndexSchema1Tests(unittest.TestCase):
             report["unmaterialized_project_targets"][0]["target_name"],
             "ProjectThunk",
         )
+
+    def test_compiler_capture_stats_backfill_new_fields_from_manifest(self) -> None:
+        native_index.import_database(
+            self.db,
+            self.reflected,
+            self.compiler,
+            self.joins,
+        )
+        conn = sqlite3.connect(self.db)
+        conn.row_factory = sqlite3.Row
+        try:
+            manifest = json.loads(
+                conn.execute(
+                    """SELECT value FROM native_index_meta
+                       WHERE key='compiler_manifest_json'"""
+                ).fetchone()[0]
+            )
+            manifest["call_target_materialization_policy"] = (
+                "exact-target-policy-test"
+            )
+            manifest.setdefault("normalized_counts", {})[
+                "target_only_symbols"
+            ] = 9
+            conn.execute(
+                """UPDATE native_index_meta SET value=?
+                   WHERE key='compiler_manifest_json'""",
+                (json.dumps(manifest),),
+            )
+            conn.execute(
+                """UPDATE native_index_meta SET value=?
+                   WHERE key='compiler_capture_stats_json'""",
+                (
+                    json.dumps({
+                        "ruleset": native_ast.RULESET,
+                        "parameter_owner_policy": (
+                            native_ast.PARAMETER_OWNER_POLICY
+                        ),
+                        "call_owner_policy": native_ast.CALL_OWNER_POLICY,
+                        "parameter_owner_mismatches_rejected": 7,
+                        "nested_callable_calls_suppressed": 95,
+                    }),
+                ),
+            )
+            stats = native_index._compiler_capture_stats_from_conn(
+                conn
+            )
+        finally:
+            conn.close()
+
+        self.assertEqual(
+            stats["call_target_materialization_policy"],
+            "exact-target-policy-test",
+        )
+        self.assertEqual(stats["target_only_symbols"], 9)
+        self.assertEqual(stats["ruleset"], native_ast.RULESET)
 
     def test_source_only_report_labels_absent_reflected_join(self) -> None:
         native_index.import_database(
