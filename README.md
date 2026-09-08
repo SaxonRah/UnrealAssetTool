@@ -369,6 +369,7 @@ A scanner family is not considered stable merely because it compiles. Corpus val
 
 ## Documentation
 
+- [1.0.0-beta.2 release notes](docs/release-notes-1.0.0-beta.2.md)
 - [Architecture](docs/architecture.md)
 - [Schema reference](docs/schema.md)
 - [Coverage matrix](docs/coverage.md)
