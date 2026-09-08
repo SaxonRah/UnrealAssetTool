@@ -1190,8 +1190,6 @@ def capture(
                 "ruleset": RULESET,
                 "parameter_owner_policy": PARAMETER_OWNER_POLICY,
                 "call_owner_policy": CALL_OWNER_POLICY,
-        "call_target_materialization_policy": CALL_TARGET_MATERIALIZATION_POLICY,
-            "call_target_materialization_policy": CALL_TARGET_MATERIALIZATION_POLICY,
                 "call_target_materialization_policy": CALL_TARGET_MATERIALIZATION_POLICY,
                 "pass": "UnrealAssetToolNativeAST",
                 "success": False,
@@ -1284,6 +1282,7 @@ def capture(
             "ruleset": RULESET,
             "parameter_owner_policy": PARAMETER_OWNER_POLICY,
             "call_owner_policy": CALL_OWNER_POLICY,
+            "call_target_materialization_policy": CALL_TARGET_MATERIALIZATION_POLICY,
             "pass": "UnrealAssetToolNativeAST",
             "success": probe_success,
             "error": (
@@ -1391,6 +1390,7 @@ def capture(
         "ruleset": RULESET,
         "parameter_owner_policy": PARAMETER_OWNER_POLICY,
         "call_owner_policy": CALL_OWNER_POLICY,
+        "call_target_materialization_policy": CALL_TARGET_MATERIALIZATION_POLICY,
         "pass": "UnrealAssetToolNativeAST",
         "success": success,
         "error": (
