@@ -951,7 +951,7 @@ class NativeIndexSchema1Tests(unittest.TestCase):
             kinds["FunctionDecl"]["materialization_eligible"]
         )
         self.assertTrue(
-            kinds["Constructor"]["materialization_eligible"]
+            kinds["CXXConstructor"]["materialization_eligible"]
         )
         self.assertFalse(
             kinds["OverloadedDeclRef"]["materialization_eligible"]
