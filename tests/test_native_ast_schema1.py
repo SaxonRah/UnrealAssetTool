@@ -783,7 +783,11 @@ class NativeASTSchema1Test(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn(
-            'RULESET = "libclang_semantic_callable_owner_v1"',
+            'RULESET = "libclang_semantic_callable_owner_target_v2"',
+            source,
+        )
+        self.assertIn(
+            "CALL_TARGET_MATERIALIZATION_POLICY",
             source,
         )
         self.assertIn(
