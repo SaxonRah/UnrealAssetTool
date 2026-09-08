@@ -6,11 +6,13 @@ UnrealAssetTool is an AI-facing indexer for Unreal Engine projects. It prioritiz
 
 Current release contract: **1.0.0-beta.2** ([release-contract.md](release-contract.md)).
 
-The architecture has three layers:
+The normal authored-content architecture has three layers:
 
 1. **canonical Unreal extraction** — facts Unreal can state exactly;
 2. **deterministic derivation** — joins, normalization and bounded traversal that can be regenerated;
 3. **retrieval** — SQLite queries and compact upload bundles.
+
+Beta.2 also has an **optional native compiler semantic companion**. It captures reflected UE declarations plus project-owned compiler AST evidence independently, joins them only where identity is exact, and can stage that validated evidence into the same SQLite/query/bundle lifecycle. The expensive all-translation-unit compiler capture is not part of an ordinary scan.
 
 A generic package dependency is useful fallback evidence, but it is never promoted to the same confidence as an exact authored object reference.
 
