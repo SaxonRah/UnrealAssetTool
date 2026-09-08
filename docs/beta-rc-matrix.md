@@ -1,6 +1,6 @@
 # 1.0 beta release-candidate matrix
 
-This is the executable gate for issue #97. It turns the representative sample projects into one named `1.0.0-beta.1` release-candidate regression matrix.
+This is the executable gate for issue #149. It turns the representative sample projects into one named `1.0.0-beta.2` release-candidate regression matrix.
 
 ## Command
 
@@ -36,7 +36,7 @@ derived=40
 capabilities=1
 ```
 
-Every RC record also requires tool version `1.0.0-beta.1` and validated engine `UE 5.8.2` in `capabilities.json`.
+Every RC record also requires tool version `1.0.0-beta.2` and validated engine `UE 5.8.2` in `capabilities.json`.
 
 The table above is the **tool-current maximum/current schema contract**, not a
 claim that every representative project contains authored data for every
