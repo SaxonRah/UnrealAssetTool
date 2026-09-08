@@ -56,7 +56,7 @@ When parsing JSONL, split on physical `\n` records. Do not use Unicode `str.spli
 
 `uat.db` is a regenerable retrieval cache; canonical/derived JSON and their manifests are authoritative.
 
-Native schema 1 follows the same authority rule. Reflected native JSONL, compiler-resolved AST JSONL and exact join JSONL remain authoritative; the `native_*` SQLite tables are only indexed projections. During validation they are populated explicitly with `uatool native-index` and are intentionally not part of the automatic scan/bundle pipeline. See [native-semantics-schema1.md](native-semantics-schema1.md).
+Native schema 1 follows the same authority rule. Reflected native JSONL, compiler-resolved AST JSONL and exact join JSONL remain authoritative; the `native_*` SQLite tables are only indexed projections. Native compiler capture remains explicit rather than part of normal scans, but validated native evidence can be staged portably under `.uatool/native_semantics`; ordinary `pack`/bundle rebuilds can then restore the same native SQLite/query surfaces while freshness distinguishes compiler changes from reflection-only join changes. See [native-semantics-schema1.md](native-semantics-schema1.md).
 
 ---
 
